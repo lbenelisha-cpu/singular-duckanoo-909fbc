@@ -107,7 +107,7 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
-  const [selectedFacility, setSelectedFacility] = useState('')
+  const [selectedFacilities, setSelectedFacilities] = useState([])
   const [activeTab, setActiveTab] = useState('production')
 
   useEffect(() => {
@@ -170,7 +170,7 @@ export default function App() {
       date: finish,
       qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
       order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
-      batch: normalize(getField(r, ['Batch'])),
+      batch: normalize(getField(r, ['Batch', 'Batch Number'])),
       material: normalize(getField(r, ['Material'])),
       desc: normalize(getField(r, ['Material description', 'Material Description'])),
       orderType: normalize(getField(r, ['Order Type'])),
@@ -179,12 +179,12 @@ export default function App() {
   }).filter(r => r.facility), [production])
 
   const qualityRows = useMemo(() => quality.map(r => ({
-    facility: normalize(getField(r, ['Production Line', 'Facility', 'Storage Location'])),
-    batch: normalize(getField(r, ['Batch'])),
-    material: normalize(getField(r, ['Material'])),
+    facility: normalize(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
+    batch: normalize(getField(r, ['Batch', 'Batch Number'])),
+    material: normalize(getField(r, ['Material', 'Material #'])),
     order: normalize(getField(r, ['Process Order', 'Order'])),
     status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
-    inspectionLot: normalize(getField(r, ['Inspection Lot'])),
+    inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
   })), [quality])
 
   const deviationRows = useMemo(() => deviations.map(r => ({
@@ -201,38 +201,60 @@ export default function App() {
     return { min: iso(ds[0]), max: iso(ds.at(-1)) }
   }, [prod])
 
-  const filtered = useMemo(() => {
+  const baseFiltered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return prod.filter(r => {
       const d = iso(r.date)
       const okDate = (!from || d >= from) && (!to || d <= to)
-      const okFacility = !selectedFacility || r.facility === selectedFacility
       const okQ = !q || [r.facility, r.order, r.batch, r.material, r.desc].some(v => v.toLowerCase().includes(q))
-      return okDate && okFacility && okQ
+      return okDate && okQ
     })
-  }, [prod, from, to, query, selectedFacility])
+  }, [prod, from, to, query])
 
-  const days = useMemo(() => new Set(filtered.map(r => iso(r.date)).filter(Boolean)).size || 1, [filtered])
+  const filtered = useMemo(() => baseFiltered.filter(r =>
+    !selectedFacilities.length || selectedFacilities.includes(r.facility)
+  ), [baseFiltered, selectedFacilities])
+
+  const baseDays = useMemo(() => new Set(baseFiltered.map(r => iso(r.date)).filter(Boolean)).size || 1, [baseFiltered])
   const facilityStats = useMemo(() => FACILITIES.map(id => {
-    let rows = filtered.filter(r => r.facility === id)
+    let rows = baseFiltered.filter(r => r.facility === id)
     if (id === '1542') rows = rows.filter(r => r.orderType.toUpperCase().includes('ZFIN'))
     const actual = rows.reduce((s, r) => s + r.qty, 0)
-    const target = TARGETS[id] * days
+    const target = TARGETS[id] * baseDays
     return { id, actual, target, pct: target ? Math.round(actual / target * 100) : 0, orders: new Set(rows.map(r => r.order).filter(Boolean)).size }
-  }), [filtered, days])
+  }), [baseFiltered, baseDays])
+
+  const toggleFacility = (id) => setSelectedFacilities(current =>
+    current.includes(id) ? current.filter(x => x !== id) : [...current, id]
+  )
 
   const total = facilityStats.reduce((s, x) => s + x.actual, 0)
   const activeFacilities = facilityStats.filter(x => x.actual > 0).length
   const morningQty = filtered.filter(r => r.hour !== null && r.hour >= 7 && r.hour < 19).reduce((s, r) => s + r.qty, 0)
   const nightQty = filtered.filter(r => r.hour !== null && (r.hour >= 19 || r.hour < 7)).reduce((s, r) => s + r.qty, 0)
-  const qualityBad = qualityRows.filter(r => {
+  const allQualityBad = qualityRows.filter(r => {
     const st = r.status.toLowerCase()
     return st && !['accepted', 'תקין', 'pass', 'approved', 'מאושר'].some(x => st.includes(x))
   })
-  const openDeviations = deviationRows.filter(r => {
+  const allOpenDeviations = deviationRows.filter(r => {
     const st = r.status.toLowerCase()
     return !st || !['approved', 'closed', 'מאושר', 'סגור'].some(x => st.includes(x))
   })
+
+  const qualityBad = useMemo(() => allQualityBad.filter(r =>
+    !selectedFacilities.length || selectedFacilities.includes(r.facility)
+  ), [allQualityBad, selectedFacilities])
+
+  const openDeviations = useMemo(() => allOpenDeviations.filter(r => {
+    if (!selectedFacilities.length) return true
+    if (selectedFacilities.includes(r.facility)) return true
+    const aliases = {
+      '1519': ['19', '19-F-01', '19-F-02'], '1521': ['21'], '1523': ['43', '43-P-A', '43-P-B'],
+      '1524': ['24'], '1525': ['25'], '1528': ['28'], '1540': ['40'], '1541': ['41'],
+      '1542': ['42', '42-P-01', 'T42A', 'T42B'], '1543': ['42', '42-P-03', 'T42A', 'T42B']
+    }
+    return selectedFacilities.some(id => (aliases[id] || []).includes(r.facility))
+  }), [allOpenDeviations, selectedFacilities])
 
   const exportWorkbook = () => {
     const wb = XLSX.utils.book_new()
@@ -255,7 +277,7 @@ export default function App() {
     setProduction([]); setQuality([]); setDeviations([])
     localStorage.removeItem(STORAGE_KEY)
     setStatus('כל הנתונים נמחקו')
-    setFrom(''); setTo(''); setQuery(''); setSelectedFacility('')
+    setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([])
   }
 
   const dailyTrend = useMemo(() => {
@@ -305,10 +327,10 @@ export default function App() {
         <button onClick={() => setQuickRange(1)}>יום אחרון</button>
         <button onClick={() => setQuickRange(2)}>יומיים</button>
         <button onClick={() => setQuickRange(30)}>30 יום</button>
-        <button onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacility('') }}>נקה</button>
+        <button onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]) }}>נקה</button>
       </section>
 
-      {selectedFacility && <div className="selection"><span>מסנן לפי מתקן <b>{selectedFacility}</b></span><button onClick={() => setSelectedFacility('')}><X size={16}/> הסר סינון</button></div>}
+      {selectedFacilities.length > 0 && <div className="selection"><div className="selection-info"><span>מתקנים נבחרים:</span><div className="selection-chips">{selectedFacilities.map(id => <button className="selection-chip" key={id} onClick={() => toggleFacility(id)}>{id}<X size={14}/></button>)}</div></div><button className="clear-selection" onClick={() => setSelectedFacilities([])}><X size={16}/> הסר הכול</button></div>}
 
       <section className="summary-grid">
         <Summary title="סה״כ תפוקה" value={fmt(total)} sub="ליטר / ק״ג לפי הקובץ"/>
@@ -333,7 +355,7 @@ export default function App() {
 
       <div className="section-title"><Factory/><div><h2>ביצועים לפי מתקן</h2><p>לחיצה על כרטיס מסננת את כל הנתונים למתקן הנבחר</p></div></div>
       <section className="facility-grid">
-        {facilityStats.map(x => <Facility key={x.id} {...x} onClick={() => setSelectedFacility(x.id)}/>) }
+        {facilityStats.map(x => <Facility key={x.id} {...x} selected={selectedFacilities.includes(x.id)} onClick={() => toggleFacility(x.id)}/>) }
       </section>
 
       <section className="tabs">
@@ -361,10 +383,10 @@ export default function App() {
 }
 
 function Summary({ title, value, sub, warn }) { return <div className={`summary ${warn ? 'warn' : ''}`}><span>{title}</span><b>{value}</b><small>{sub}</small></div> }
-function Facility({ id, actual, target, pct, orders, onClick }) {
+function Facility({ id, actual, target, pct, orders, selected, onClick }) {
   const capped = Math.min(pct, 100)
   const state = pct >= 100 ? 'good' : pct >= 75 ? 'mid' : 'bad'
-  return <article className={`facility ${state}`} onClick={onClick} role="button" tabIndex="0">
+  return <article className={`facility ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0">
     <div className="facility-top"><div><small>מתקן</small><h3>{id}</h3></div><b>{pct}%</b></div>
     <div className="bar"><i style={{ width: `${capped}%` }}/></div>
     <div className="facility-numbers"><span>בפועל<strong>{fmt(actual)}</strong></span><span>יעד<strong>{fmt(target)}</strong></span><span>הזמנות<strong>{orders}</strong></span></div>
