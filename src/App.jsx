@@ -27,6 +27,47 @@ const FACILITY_ALIASES = {
 const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1528', '1524', '1542', '1543']
 const DEFAULT_FACILITIES = PRIMARY_FACILITIES
 const STORAGE_KEY = 'iml-control-center-sprint7'
+const DB_NAME = 'iml-control-center-db'
+const DB_STORE = 'dashboard-state'
+const DB_KEY = 'sprint7'
+
+const openDashboardDb = () => new Promise((resolve, reject) => {
+  const request = indexedDB.open(DB_NAME, 1)
+  request.onupgradeneeded = () => {
+    const db = request.result
+    if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE)
+  }
+  request.onsuccess = () => resolve(request.result)
+  request.onerror = () => reject(request.error)
+})
+const idbGet = async () => {
+  const db = await openDashboardDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, 'readonly')
+    const req = tx.objectStore(DB_STORE).get(DB_KEY)
+    req.onsuccess = () => resolve(req.result || null)
+    req.onerror = () => reject(req.error)
+    tx.oncomplete = () => db.close()
+  })
+}
+const idbSet = async (value) => {
+  const db = await openDashboardDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, 'readwrite')
+    tx.objectStore(DB_STORE).put(value, DB_KEY)
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
+}
+const idbClear = async () => {
+  const db = await openDashboardDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, 'readwrite')
+    tx.objectStore(DB_STORE).delete(DB_KEY)
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
+}
 
 const normalize = (v) => String(v ?? '').trim()
 const normKey = (v) => normalize(v).toLowerCase().replace(/[\s_\-./()]+/g, '')
@@ -125,7 +166,7 @@ const parseMonth = (value, fallbackDate = null) => {
 
 async function readWorkbook(file) {
   const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, { type: 'array', cellDates: true })
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true, dense: true })
   let rows = []
   for (const sheetName of wb.SheetNames) {
     const sheetRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '', raw: true })
@@ -182,21 +223,35 @@ export default function App() {
   const [periodQuarter, setPeriodQuarter] = useState('')
 
   useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
-      if (saved) {
+    let active = true
+    ;(async () => {
+      try {
+        const saved = await idbGet()
+        if (!active || !saved) return
         setProduction(saved.production || []); setQuality(saved.quality || [])
         setDeviations(saved.deviations || []); setTargets(saved.targets || [])
-        setStatus('הנתונים האחרונים שוחזרו מהדפדפן')
+        setStatus('הנתונים האחרונים שוחזרו ממסד הנתונים בדפדפן')
+      } catch (e) {
+        console.warn('Could not restore IndexedDB data', e)
+        try {
+          const legacy = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+          if (active && legacy) {
+            setProduction(legacy.production || []); setQuality(legacy.quality || [])
+            setDeviations(legacy.deviations || []); setTargets(legacy.targets || [])
+          }
+        } catch (_) {}
       }
-    } catch (e) { console.warn('Could not restore saved data', e) }
+    })()
+    return () => { active = false }
   }, [])
 
   useEffect(() => {
     if (!production.length && !quality.length && !deviations.length && !targets.length) return
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ production, quality, deviations, targets, savedAt: new Date().toISOString() }))
-    } catch (e) { setStatus('הנתונים נטענו, אך לא ניתן היה לשמור אותם בדפדפן') }
+    const timer = setTimeout(() => {
+      idbSet({ production, quality, deviations, targets, savedAt: new Date().toISOString() })
+        .catch(e => { console.error(e); setStatus('הנתונים נטענו, אך שמירתם בדפדפן נכשלה') })
+    }, 800)
+    return () => clearTimeout(timer)
   }, [production, quality, deviations, targets])
 
   const handleFiles = async (files) => {
@@ -209,7 +264,28 @@ export default function App() {
         const rows = await readWorkbook(file)
         const kind = classifyFile(rows)
         if (kind === 'production') setProduction(rows)
-        if (kind === 'quality') setQuality(rows)
+        if (kind === 'quality') {
+          const compact = rows.map(r => ({
+            __compactQuality: true,
+            facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
+            date: excelDate(getField(r, ['Date of Lot Creation', 'Start Date of Inspection', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date'])),
+            batch: normalize(getField(r, ['Batch', 'Batch Number'])),
+            material: normalize(getField(r, ['Material', 'Material #'])),
+            order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])),
+            status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
+            approval: normalize(getField(r, ['QA Approval'])),
+            inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
+            characteristic: normalize(getField(r, ['Master Insp Charactristic', 'Master Inspection Characteristic'])),
+            value: normalize(getField(r, ['Arithmetic Mean of Valid Measured Values'])),
+            lower: normalize(getField(r, ['Lower Specif Limit', 'Lower Spec Limit'])),
+            upper: normalize(getField(r, ['Upper Specif Limit', 'Upper Spec Limit'])),
+            unit: normalize(getField(r, ['Unit of Measurement'])),
+            line: normalize(getField(r, ['Production Line'])),
+            remarks: normalize(getField(r, ['Charactristic Remarks', 'Characteristic Remarks', 'Batch Remarks'])),
+            qualitative: normalize(getField(r, ['Qualitative'])),
+          })).filter(r => r.batch || r.inspectionLot)
+          setQuality(compact)
+        }
         if (kind === 'deviations') setDeviations(rows)
         if (kind === 'targets') {
           const fallbackMonth = parseMonth(file.name, new Date())
@@ -251,7 +327,7 @@ export default function App() {
     }
   }).filter(r => r.facility), [production])
 
-  const qualityRows = useMemo(() => quality.map(r => ({
+  const qualityRows = useMemo(() => quality.map(r => r.__compactQuality ? r : ({
     facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
     date: excelDate(getField(r, ['Date of Lot Creation', 'Start Date of Inspection', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date'])),
     batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, ['Material', 'Material #'])),
@@ -378,7 +454,7 @@ export default function App() {
   }
   const clearAllData = () => {
     if (!window.confirm('למחוק את כל הנתונים והיעדים השמורים בדפדפן?')) return
-    setProduction([]); setQuality([]); setDeviations([]); setTargets([]); localStorage.removeItem(STORAGE_KEY)
+    setProduction([]); setQuality([]); setDeviations([]); setTargets([]); localStorage.removeItem(STORAGE_KEY); idbClear().catch(console.warn)
     setStatus('כל הנתונים נמחקו'); setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPlanningMonth(''); setAdditionalFacilities([]); setFacilityToAdd(''); setPeriodYear(''); setPeriodQuarter('')
   }
   const dailyTrend = useMemo(() => {
