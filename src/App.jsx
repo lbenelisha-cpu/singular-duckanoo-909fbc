@@ -329,7 +329,7 @@ export default function App() {
   const qualityBad = useMemo(() => allQualityBad.filter(r => (!selectedFacilities.length || selectedFacilities.includes(r.facility)) && matchesDateRange(r.date, from, to)), [allQualityBad, selectedFacilities, from, to])
   const openDeviations = useMemo(() => allOpenDeviations.filter(r => (!selectedFacilities.length || selectedFacilities.includes(r.facility)) && matchesDateRange(r.date, from, to)), [allOpenDeviations, selectedFacilities, from, to])
 
-  const alerts = useMemo(() => planningRows.filter(r => ['risk', 'warning'].includes(r.state)).sort((a,b) => ({risk:0, warning:1}[a.state] - ({risk:0, warning:1}[b.state])), [planningRows])
+  const alerts = useMemo(() => planningRows.filter(r => ['risk', 'warning'].includes(r.state)).sort((a,b) => ({ risk:0, warning:1 }[a.state] - { risk:0, warning:1 }[b.state])), [planningRows])
   const achievedCount = planningRows.filter(r => ['achieved', 'good'].includes(r.state)).length
   const riskCount = planningRows.filter(r => r.state === 'risk').length
   const warningCount = planningRows.filter(r => r.state === 'warning').length
