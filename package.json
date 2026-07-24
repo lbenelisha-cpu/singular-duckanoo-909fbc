@@ -1,7 +1,7 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "5.1.0-multi-facility",
+  "version": "7.0.0-planning-forecast",
   "type": "module",
   "scripts": {
     "dev": "vite",
