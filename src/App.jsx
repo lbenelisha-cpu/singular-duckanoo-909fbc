@@ -24,7 +24,8 @@ const FACILITY_ALIASES = {
   '1542': ['1542', '42-P-01', 'T42A'],
   '1543': ['1543', '42-P-03', 'T42B'],
 }
-const DEFAULT_FACILITIES = Object.keys(FACILITY_ALIASES)
+const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1528', '1524', '1542', '1543']
+const DEFAULT_FACILITIES = PRIMARY_FACILITIES
 const STORAGE_KEY = 'iml-control-center-sprint7'
 
 const normalize = (v) => String(v ?? '').trim()
@@ -156,6 +157,10 @@ export default function App() {
   const [selectedFacilities, setSelectedFacilities] = useState([])
   const [activeTab, setActiveTab] = useState('production')
   const [planningMonth, setPlanningMonth] = useState('')
+  const [additionalFacilities, setAdditionalFacilities] = useState([])
+  const [facilityToAdd, setFacilityToAdd] = useState('')
+  const [periodYear, setPeriodYear] = useState('')
+  const [periodQuarter, setPeriodQuarter] = useState('')
 
   useEffect(() => {
     try {
@@ -259,7 +264,10 @@ export default function App() {
   }, [prod, from, to, query])
   const filtered = useMemo(() => baseFiltered.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility)), [baseFiltered, selectedFacilities])
 
-  const facilities = useMemo(() => [...new Set([...DEFAULT_FACILITIES, ...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
+  const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
+  const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
+  const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
+  const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
 
   const planningRows = useMemo(() => {
     if (!planningMonth) return []
@@ -274,7 +282,7 @@ export default function App() {
     const totalWorkdays = workdayCount(planningMonth)
     const remainingWorkdays = Math.max(0, totalWorkdays - elapsedWorkdays)
     const monthTargets = targets.filter(t => t.month === planningMonth)
-    const ids = monthTargets.length ? [...new Set(monthTargets.map(t => t.facility))] : facilities
+    const ids = facilities
     return ids.map(id => {
       let rows = monthRows.filter(r => r.facility === id)
       if (id === '1542') rows = rows.filter(r => r.orderType.toUpperCase().includes('ZFIN'))
@@ -352,7 +360,7 @@ export default function App() {
   const clearAllData = () => {
     if (!window.confirm('למחוק את כל הנתונים והיעדים השמורים בדפדפן?')) return
     setProduction([]); setQuality([]); setDeviations([]); setTargets([]); localStorage.removeItem(STORAGE_KEY)
-    setStatus('כל הנתונים נמחקו'); setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPlanningMonth('')
+    setStatus('כל הנתונים נמחקו'); setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPlanningMonth(''); setAdditionalFacilities([]); setFacilityToAdd(''); setPeriodYear(''); setPeriodQuarter('')
   }
   const dailyTrend = useMemo(() => {
     const map = new Map(); filtered.forEach(r => { const d = iso(r.date); if (d) map.set(d, (map.get(d) || 0) + r.qty) })
@@ -362,7 +370,28 @@ export default function App() {
   const setQuickRange = (daysBack) => {
     if (!dateBounds.max) return
     const end = new Date(`${dateBounds.max}T12:00:00`), start = new Date(end); start.setDate(end.getDate() - daysBack + 1)
-    setFrom(iso(start)); setTo(dateBounds.max)
+    setFrom(iso(start)); setTo(dateBounds.max); setPeriodYear(''); setPeriodQuarter('')
+  }
+  const applyYearFilter = (yearValue) => {
+    setPeriodYear(yearValue); setPeriodQuarter('')
+    if (!yearValue) { setFrom(''); setTo(''); return }
+    setFrom(`${yearValue}-01-01`); setTo(`${yearValue}-12-31`)
+  }
+  const applyQuarterFilter = (quarterValue) => {
+    setPeriodQuarter(quarterValue)
+    if (!periodYear || !quarterValue) return
+    const q = Number(quarterValue), startMonth = (q - 1) * 3 + 1, endMonth = startMonth + 2
+    const lastDay = new Date(Number(periodYear), endMonth, 0).getDate()
+    setFrom(`${periodYear}-${String(startMonth).padStart(2,'0')}-01`)
+    setTo(`${periodYear}-${String(endMonth).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`)
+  }
+  const addFacility = () => {
+    if (!facilityToAdd || additionalFacilities.includes(facilityToAdd)) return
+    setAdditionalFacilities(current => [...current, facilityToAdd]); setFacilityToAdd('')
+  }
+  const removeAdditionalFacility = (id) => {
+    setAdditionalFacilities(current => current.filter(x => x !== id))
+    setSelectedFacilities(current => current.filter(x => x !== id))
   }
 
   return <div className="dashboard" dir="rtl">
@@ -402,10 +431,18 @@ export default function App() {
 
       <section className="filters">
         <label><Search size={17}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="חיפוש מתקן, Order, Batch או חומר"/></label>
-        <label><CalendarDays size={17}/>מתאריך<input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => setFrom(e.target.value)}/></label>
-        <label><CalendarDays size={17}/>עד תאריך<input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => setTo(e.target.value)}/></label>
+        <label><CalendarDays size={17}/>שנה<select value={periodYear} onChange={e => applyYearFilter(e.target.value)}><option value="">כל השנים</option>{availableYears.map(y => <option key={y} value={y}>{y}</option>)}</select></label>
+        <label><CalendarDays size={17}/>רבעון<select value={periodQuarter} disabled={!periodYear} onChange={e => applyQuarterFilter(e.target.value)}><option value="">כל השנה</option><option value="1">רבעון 1</option><option value="2">רבעון 2</option><option value="3">רבעון 3</option><option value="4">רבעון 4</option></select></label>
+        <label><CalendarDays size={17}/>מתאריך<input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => { setFrom(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+        <label><CalendarDays size={17}/>עד תאריך<input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => { setTo(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
         <button onClick={() => setQuickRange(1)}>יום אחרון</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button>
-        <button onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]) }}>נקה</button>
+        <button onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}>נקה</button>
+      </section>
+
+      <section className="extra-facilities">
+        <div><Factory size={18}/><strong>מתקנים נוספים</strong><span>ברירת המחדל מציגה רק את מתקני הליבה.</span></div>
+        <div className="extra-facility-actions"><select value={facilityToAdd} onChange={e => setFacilityToAdd(e.target.value)}><option value="">בחר מתקן נוסף</option>{optionalFacilities.map(id => <option key={id} value={id}>{id}</option>)}</select><button onClick={addFacility} disabled={!facilityToAdd}>הוסף מתקן</button></div>
+        {!!additionalFacilities.length && <div className="extra-facility-chips">{additionalFacilities.map(id => <button key={id} onClick={() => removeAdditionalFacility(id)}>{id}<X size={14}/></button>)}</div>}
       </section>
 
       {selectedFacilities.length > 0 && <div className="selection"><div className="selection-info"><span>מתקנים נבחרים:</span><div className="selection-chips">{selectedFacilities.map(id => <button className="selection-chip" key={id} onClick={() => toggleFacility(id)}>{id}<X size={14}/></button>)}</div></div><button className="clear-selection" onClick={() => setSelectedFacilities([])}><X size={16}/> הסר הכול</button></div>}
