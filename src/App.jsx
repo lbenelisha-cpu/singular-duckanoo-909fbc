@@ -134,13 +134,32 @@ async function readWorkbook(file) {
   return rows
 }
 function classifyFile(rows) {
-  const keys = Object.keys(rows[0] || {}).map(normKey)
-  const has = (...terms) => terms.some(term => keys.some(k => k.includes(normKey(term))))
-  const targetLike = has('monthly target', 'monthly plan', 'יעד חודשי', 'תוכנית חודשית', 'plan') && has('facility', 'מתקן')
+  // Some workbooks start with a title/summary sheet. Inspect headers across
+  // a sample of rows instead of relying only on the first row.
+  const keys = [...new Set(rows.slice(0, 250).flatMap(row => Object.keys(row || {}).map(normKey)))]
+  const hasAny = (...terms) => terms.some(term => keys.some(k => k.includes(normKey(term))))
+  const hasAll = (...groups) => groups.every(group => group.some(term => hasAny(term)))
+
+  const targetLike = hasAll(
+    ['monthly target', 'monthly plan', 'יעד חודשי', 'תוכנית חודשית', 'target', 'plan'],
+    ['facility', 'מתקן', 'resource', 'משאב']
+  )
   if (targetLike) return 'targets'
-  if (has('actual finish time', 'delivered quantity', 'storage location')) return 'production'
-  if (has('rejected characteristics', 'qa status', 'ud remarks')) return 'deviations'
-  if (has('master insp charactristic', 'result status', 'inspection lot')) return 'quality'
+
+  const productionLike = hasAny('actual finish time', 'delivered quantity', 'confirmed yield quantity') &&
+    hasAny('storage location', 'order', 'batch')
+  if (productionLike) return 'production'
+
+  const deviationLike = hasAny('rejected characteristics', 'qa status', 'ud remarks', 'restricted - recycling')
+  if (deviationLike) return 'deviations'
+
+  const qualityLike = hasAny(
+    'inspection lot', 'inspection lot #', 'inspection lot storage location',
+    'master insp characteristic', 'master insp charactristic',
+    'result status', 'qa approval', 'start date of inspection', 'end date of inspection'
+  )
+  if (qualityLike) return 'quality'
+
   return 'unknown'
 }
 
