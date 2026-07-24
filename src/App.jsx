@@ -18,16 +18,55 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0
 }
 const excelDate = (v) => {
-  if (!v) return null
-  if (v instanceof Date && !Number.isNaN(v.getTime())) return v
+  if (v === '' || v === null || v === undefined) return null
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    // Excel time-only cells are often returned as 1899-12-30.
+    return v.getFullYear() <= 1900 ? null : new Date(v)
+  }
   if (typeof v === 'number') {
+    // Values below 1 are time fractions, not calendar dates.
+    if (v < 1) return null
     const d = XLSX.SSF.parse_date_code(v)
     return d ? new Date(d.y, d.m - 1, d.d, d.H || 0, d.M || 0, d.S || 0) : null
   }
-  const d = new Date(v)
-  return Number.isNaN(d.getTime()) ? null : d
+  const text = normalize(v)
+  const dotDate = text.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/)
+  if (dotDate) {
+    const [, day, month, year, hour = '0', minute = '0', second = '0'] = dotDate
+    return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second))
+  }
+  const d = new Date(text)
+  return Number.isNaN(d.getTime()) || d.getFullYear() <= 1900 ? null : d
 }
-const iso = (d) => d ? new Date(d).toISOString().slice(0, 10) : ''
+const excelTime = (v) => {
+  if (v === '' || v === null || v === undefined) return null
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    return { h: v.getHours(), m: v.getMinutes(), s: v.getSeconds() }
+  }
+  if (typeof v === 'number') {
+    const seconds = Math.round((v % 1) * 86400) % 86400
+    return { h: Math.floor(seconds / 3600), m: Math.floor((seconds % 3600) / 60), s: seconds % 60 }
+  }
+  const match = normalize(v).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/)
+  return match ? { h: Number(match[1]), m: Number(match[2]), s: Number(match[3] || 0) } : null
+}
+const combineExcelDateTime = (dateValue, timeValue, fallbackValue = '') => {
+  const date = excelDate(dateValue) || excelDate(fallbackValue)
+  if (!date) return null
+  const time = excelTime(timeValue)
+  const result = new Date(date)
+  if (time) result.setHours(time.h, time.m, time.s, 0)
+  return result
+}
+const iso = (d) => {
+  if (!d) return ''
+  const value = new Date(d)
+  if (Number.isNaN(value.getTime()) || value.getFullYear() <= 1900) return ''
+  const y = value.getFullYear()
+  const m = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 const fmt = (n) => Math.round(n || 0).toLocaleString('he-IL')
 const getField = (row, names) => {
   const map = new Map(Object.keys(row || {}).map(k => [normKey(k), row[k]]))
@@ -121,7 +160,11 @@ export default function App() {
   }
 
   const prod = useMemo(() => production.map(r => {
-    const finish = excelDate(getField(r, ['Actual Finish Time', 'Actual finish date', 'Release date (actual)']))
+    const finish = combineExcelDateTime(
+      getField(r, ['Actual finish date', 'Actual Finish Date']),
+      getField(r, ['Actual Finish Time', 'Actual finish time']),
+      getField(r, ['Release date (actual)', 'Time Stamp'])
+    )
     return {
       facility: normalize(getField(r, ['Storage Location', 'Storage location'])),
       date: finish,
