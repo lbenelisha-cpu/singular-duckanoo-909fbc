@@ -9,6 +9,18 @@ const TARGETS = {
   '1542': 60000, '1543': 60000,
 }
 const FACILITIES = Object.keys(TARGETS)
+const FACILITY_ALIASES = {
+  '1519': ['1519', '19', '19-F-01', '19-F-02'],
+  '1521': ['1521', '21'],
+  '1523': ['1523', '43', '43-P-A', '43-P-B'],
+  '1524': ['1524', '24'],
+  '1525': ['1525', '25'],
+  '1528': ['1528', '28'],
+  '1540': ['1540', '40'],
+  '1541': ['1541', '41'],
+  '1542': ['1542', '42-P-01', 'T42A'],
+  '1543': ['1543', '42-P-03', 'T42B'],
+}
 const STORAGE_KEY = 'iml-control-center-sprint4'
 
 const normalize = (v) => String(v ?? '').trim()
@@ -75,6 +87,17 @@ const getField = (row, names) => {
     if (value !== undefined) return value
   }
   return ''
+}
+const matchesFacilitySelection = (facility, selectedFacilities) => {
+  if (!selectedFacilities.length) return true
+  const value = normalize(facility).toUpperCase()
+  return selectedFacilities.some(id => (FACILITY_ALIASES[id] || [id]).some(alias => normalize(alias).toUpperCase() === value))
+}
+const matchesDateRange = (date, from, to) => {
+  const value = iso(date)
+  if (!from && !to) return true
+  if (!value) return false
+  return (!from || value >= from) && (!to || value <= to)
 }
 
 async function readWorkbook(file) {
@@ -180,16 +203,18 @@ export default function App() {
 
   const qualityRows = useMemo(() => quality.map(r => ({
     facility: normalize(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
+    date: excelDate(getField(r, ['Date of Lot Creation', 'Start Date of Inspection', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date'])),
     batch: normalize(getField(r, ['Batch', 'Batch Number'])),
     material: normalize(getField(r, ['Material', 'Material #'])),
-    order: normalize(getField(r, ['Process Order', 'Order'])),
+    order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])),
     status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
     inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
   })), [quality])
 
   const deviationRows = useMemo(() => deviations.map(r => ({
     facility: normalize(getField(r, ['Facility', 'Production Line', 'Storage Location'])),
-    batch: normalize(getField(r, ['Batch'])),
+    date: excelDate(getField(r, ['Date of Lot Creation', 'Inspection Lot UD Date', 'Process Order Delivered Date', 'Start Date of Inspection'])),
+    batch: normalize(getField(r, ['Batch', 'Batch Number'])),
     material: normalize(getField(r, ['Material'])),
     status: normalize(getField(r, ['QA Status', 'Status'])),
     rejected: normalize(getField(r, ['Rejected characteristics', 'Rejected characteristics '])),
@@ -227,6 +252,8 @@ export default function App() {
   const toggleFacility = (id) => setSelectedFacilities(current =>
     current.includes(id) ? current.filter(x => x !== id) : [...current, id]
   )
+  const allFacilitiesSelected = selectedFacilities.length === FACILITIES.length
+  const toggleAllFacilities = () => setSelectedFacilities(allFacilitiesSelected ? [] : [...FACILITIES])
 
   const total = facilityStats.reduce((s, x) => s + x.actual, 0)
   const activeFacilities = facilityStats.filter(x => x.actual > 0).length
@@ -242,19 +269,12 @@ export default function App() {
   })
 
   const qualityBad = useMemo(() => allQualityBad.filter(r =>
-    !selectedFacilities.length || selectedFacilities.includes(r.facility)
-  ), [allQualityBad, selectedFacilities])
+    matchesFacilitySelection(r.facility, selectedFacilities) && matchesDateRange(r.date, from, to)
+  ), [allQualityBad, selectedFacilities, from, to])
 
-  const openDeviations = useMemo(() => allOpenDeviations.filter(r => {
-    if (!selectedFacilities.length) return true
-    if (selectedFacilities.includes(r.facility)) return true
-    const aliases = {
-      '1519': ['19', '19-F-01', '19-F-02'], '1521': ['21'], '1523': ['43', '43-P-A', '43-P-B'],
-      '1524': ['24'], '1525': ['25'], '1528': ['28'], '1540': ['40'], '1541': ['41'],
-      '1542': ['42', '42-P-01', 'T42A', 'T42B'], '1543': ['42', '42-P-03', 'T42A', 'T42B']
-    }
-    return selectedFacilities.some(id => (aliases[id] || []).includes(r.facility))
-  }), [allOpenDeviations, selectedFacilities])
+  const openDeviations = useMemo(() => allOpenDeviations.filter(r =>
+    matchesFacilitySelection(r.facility, selectedFacilities) && matchesDateRange(r.date, from, to)
+  ), [allOpenDeviations, selectedFacilities, from, to])
 
   const exportWorkbook = () => {
     const wb = XLSX.utils.book_new()
@@ -264,8 +284,8 @@ export default function App() {
       Facility: r.facility, Order: r.order, Batch: r.batch, Material: r.material,
       Description: r.desc, Quantity: r.qty, Shift: r.hour === null ? '' : (r.hour >= 7 && r.hour < 19 ? 'Morning' : 'Night')
     }))
-    const qualityExport = qualityBad.map(r => ({ Facility: r.facility, InspectionLot: r.inspectionLot, Order: r.order, Batch: r.batch, Material: r.material, Status: r.status }))
-    const deviationsExport = openDeviations.map(r => ({ Facility: r.facility, Batch: r.batch, Material: r.material, Status: r.status, Rejected: r.rejected, Remarks: r.remarks }))
+    const qualityExport = qualityBad.map(r => ({ Date: iso(r.date), Facility: r.facility, InspectionLot: r.inspectionLot, Order: r.order, Batch: r.batch, Material: r.material, Status: r.status }))
+    const deviationsExport = openDeviations.map(r => ({ Date: iso(r.date), Facility: r.facility, Batch: r.batch, Material: r.material, Status: r.status, Rejected: r.rejected, Remarks: r.remarks }))
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(prodExport), 'Production')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(qualityExport), 'Quality')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(deviationsExport), 'Deviations')
@@ -353,7 +373,7 @@ export default function App() {
         </div>
       </section>
 
-      <div className="section-title"><Factory/><div><h2>ביצועים לפי מתקן</h2><p>לחיצה על כרטיס מסננת את כל הנתונים למתקן הנבחר</p></div></div>
+      <div className="section-title facility-title"><div className="section-title-text"><Factory/><div><h2>ביצועים לפי מתקן</h2><p>לחיצה על כרטיס מסננת את התפוקה, האיכות והחריגות לפי המתקנים והתאריכים שנבחרו</p></div></div><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת כל המתקנים' : 'בחירת כל המתקנים'}</button></div>
       <section className="facility-grid">
         {facilityStats.map(x => <Facility key={x.id} {...x} selected={selectedFacilities.includes(x.id)} onClick={() => toggleFacility(x.id)}/>) }
       </section>
@@ -369,14 +389,14 @@ export default function App() {
         {!filtered.length && <tr><td colSpan="7" className="empty">טען את קובץ התפוקות כדי להציג נתונים</td></tr>}
       </tbody></table></div></section>}
 
-      {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>Material</th><th>סטטוס</th></tr></thead><tbody>
-        {qualityBad.slice(0, 300).map((r, i) => <tr key={i}><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}
-        {!qualityBad.length && <tr><td colSpan="6" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}
+      {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>Material</th><th>סטטוס</th></tr></thead><tbody>
+        {qualityBad.slice(0, 300).map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}
+        {!qualityBad.length && <tr><td colSpan="7" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}
       </tbody></table></div></section>}
 
-      {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><div className="table-wrap"><table><thead><tr><th>מתקן</th><th>Batch</th><th>Material</th><th>סטטוס</th><th>מאפיינים שנדחו</th><th>הערות</th></tr></thead><tbody>
-        {openDeviations.slice(0, 300).map((r, i) => <tr key={i}><td>{r.facility}</td><td>{r.batch}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span></td><td>{r.rejected}</td><td>{r.remarks}</td></tr>)}
-        {!openDeviations.length && <tr><td colSpan="6" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}
+      {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מתקן</th><th>Batch</th><th>Material</th><th>סטטוס</th><th>מאפיינים שנדחו</th><th>הערות</th></tr></thead><tbody>
+        {openDeviations.slice(0, 300).map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.facility}</td><td>{r.batch}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span></td><td>{r.rejected}</td><td>{r.remarks}</td></tr>)}
+        {!openDeviations.length && <tr><td colSpan="7" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}
       </tbody></table></div></section>}
     </main>
   </div>
