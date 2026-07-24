@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
-import { Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2, AlertTriangle, Clock3, X, BarChart3 } from 'lucide-react'
+import { Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2, AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save } from 'lucide-react'
 import './styles.css'
 
 const TARGETS = {
@@ -9,6 +9,7 @@ const TARGETS = {
   '1542': 60000, '1543': 60000,
 }
 const FACILITIES = Object.keys(TARGETS)
+const STORAGE_KEY = 'iml-control-center-sprint4'
 
 const normalize = (v) => String(v ?? '').trim()
 const normKey = (v) => normalize(v).toLowerCase().replace(/\s+/g, ' ')
@@ -69,6 +70,30 @@ export default function App() {
   const [to, setTo] = useState('')
   const [selectedFacility, setSelectedFacility] = useState('')
   const [activeTab, setActiveTab] = useState('production')
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+      if (saved) {
+        setProduction(saved.production || [])
+        setQuality(saved.quality || [])
+        setDeviations(saved.deviations || [])
+        setStatus('הנתונים האחרונים שוחזרו מהדפדפן')
+      }
+    } catch (e) {
+      console.warn('Could not restore saved data', e)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!production.length && !quality.length && !deviations.length) return
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ production, quality, deviations, savedAt: new Date().toISOString() }))
+    } catch (e) {
+      console.warn('Could not save data locally', e)
+      setStatus('הנתונים נטענו, אך לא ניתן היה לשמור אותם בדפדפן')
+    }
+  }, [production, quality, deviations])
 
   const handleFiles = async (files) => {
     if (!files.length) return
@@ -166,6 +191,41 @@ export default function App() {
     return !st || !['approved', 'closed', 'מאושר', 'סגור'].some(x => st.includes(x))
   })
 
+  const exportWorkbook = () => {
+    const wb = XLSX.utils.book_new()
+    const prodExport = filtered.map(r => ({
+      Date: iso(r.date),
+      Time: r.date ? r.date.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : '',
+      Facility: r.facility, Order: r.order, Batch: r.batch, Material: r.material,
+      Description: r.desc, Quantity: r.qty, Shift: r.hour === null ? '' : (r.hour >= 7 && r.hour < 19 ? 'Morning' : 'Night')
+    }))
+    const qualityExport = qualityBad.map(r => ({ Facility: r.facility, InspectionLot: r.inspectionLot, Order: r.order, Batch: r.batch, Material: r.material, Status: r.status }))
+    const deviationsExport = openDeviations.map(r => ({ Facility: r.facility, Batch: r.batch, Material: r.material, Status: r.status, Rejected: r.rejected, Remarks: r.remarks }))
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(prodExport), 'Production')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(qualityExport), 'Quality')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(deviationsExport), 'Deviations')
+    XLSX.writeFile(wb, `IML_Report_${new Date().toISOString().slice(0,10)}.xlsx`)
+  }
+
+  const clearAllData = () => {
+    if (!window.confirm('למחוק את כל הנתונים השמורים בדפדפן?')) return
+    setProduction([]); setQuality([]); setDeviations([])
+    localStorage.removeItem(STORAGE_KEY)
+    setStatus('כל הנתונים נמחקו')
+    setFrom(''); setTo(''); setQuery(''); setSelectedFacility('')
+  }
+
+  const dailyTrend = useMemo(() => {
+    const map = new Map()
+    filtered.forEach(r => {
+      const d = iso(r.date)
+      if (!d) return
+      map.set(d, (map.get(d) || 0) + r.qty)
+    })
+    return [...map.entries()].sort((a,b) => a[0].localeCompare(b[0])).slice(-14)
+  }, [filtered])
+  const maxDaily = Math.max(1, ...dailyTrend.map(([,v]) => v))
+
   const setQuickRange = (daysBack) => {
     if (!dateBounds.max) return
     const end = new Date(`${dateBounds.max}T12:00:00`)
@@ -186,7 +246,11 @@ export default function App() {
     <main className="main">
       <header className="header">
         <div><h1>מרכז שליטה למתקני אריזה</h1><p>טעינת Excel, KPI, איכות והשוואת משמרות</p></div>
-        <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת קובצי Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label>
+        <div className="header-actions">
+          <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
+          <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length}><Trash2 size={18}/> מחיקת נתונים</button>
+          <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת קובצי Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label>
+        </div>
       </header>
 
       <div className="load-status"><CheckCircle2 size={18}/>{status}</div>
@@ -210,6 +274,18 @@ export default function App() {
         <Summary title="משמרת לילה" value={fmt(nightQty)} sub="19:00–07:00"/>
         <Summary title="חריגות פתוחות" value={openDeviations.length} sub="לפי קובץ המנות החריגות" warn/>
         <Summary title="תוצאות איכות לא תקינות" value={qualityBad.length} sub="לפי קובץ האיכות" warn/>
+      </section>
+
+      <section className="trend-card">
+        <div className="trend-head"><div><h2>מגמת תפוקה יומית</h2><p>14 הימים האחרונים בטווח הנבחר</p></div><Save size={20}/></div>
+        <div className="trend-bars">
+          {dailyTrend.map(([date, value]) => <div className="trend-item" key={date} title={`${date}: ${fmt(value)}`}>
+            <div className="trend-value">{fmt(value)}</div>
+            <div className="trend-track"><i style={{height: `${Math.max(5, value / maxDaily * 100)}%`}}/></div>
+            <small>{date.slice(5)}</small>
+          </div>)}
+          {!dailyTrend.length && <div className="empty trend-empty">טען קובץ תפוקות להצגת מגמה</div>}
+        </div>
       </section>
 
       <div className="section-title"><Factory/><div><h2>ביצועים לפי מתקן</h2><p>לחיצה על כרטיס מסננת את כל הנתונים למתקן הנבחר</p></div></div>
