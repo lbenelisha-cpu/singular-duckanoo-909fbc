@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { LockKeyhole, Mail, ShieldCheck, AlertCircle, Cloud, Eye, EyeOff } from 'lucide-react'
+import { LockKeyhole, Mail, ShieldCheck, AlertCircle, Cloud, Eye, EyeOff, UserRoundCheck } from 'lucide-react'
 import DashboardApp from './DashboardApp'
 import { cloudConfigured, configurationError, supabase, supabaseUrl, testSupabaseConnection, urlWasNormalized } from './supabase'
 import './styles.css'
@@ -24,6 +24,14 @@ export default function App() {
 
   useEffect(() => {
     if (!session?.user || !cloudConfigured) { setProfile(null); return }
+
+    // Anonymous Supabase users are always treated as read-only guests.
+    if (session.user.is_anonymous) {
+      setProfile({ email: '', full_name: 'אורח', role: 'viewer', is_active: true, is_guest: true })
+      setMessage('')
+      return
+    }
+
     supabase.from('profiles').select('id,email,full_name,role,is_active').eq('id', session.user.id).maybeSingle()
       .then(({ data, error }) => {
         if (error) setMessage('המשתמש התחבר, אך פרופיל ההרשאה עדיין לא הוגדר.')
@@ -43,7 +51,26 @@ export default function App() {
     }
   }
 
-  const signOut = async () => { if (supabase) await supabase.auth.signOut() }
+  const signInAsGuest = async () => {
+    setBusy(true); setMessage('')
+    try {
+      const { error } = await supabase.auth.signInAnonymously({
+        options: { data: { display_name: 'אורח צפייה', access_mode: 'viewer' } }
+      })
+      if (error) {
+        const disabled = /anonymous|disabled|not enabled/i.test(error.message || '')
+        setMessage(disabled
+          ? 'כניסת אורחים עדיין לא הופעלה ב-Supabase. יש להפעיל Anonymous Sign-Ins בהגדרות Authentication.'
+          : error.message)
+      }
+    } catch (error) {
+      setMessage(connectionStatus?.message || 'לא ניתן להתחבר כרגע במצב אורח.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const signOut = async () => { if (supabase) await supabase.auth.signOut({ scope: 'local' }) }
 
   if (!cloudConfigured || configurationError) return <SetupRequired error={configurationError} />
   if (!session) return <div className="auth-page" dir="rtl"><form className="auth-card" onSubmit={signIn}>
@@ -54,11 +81,16 @@ export default function App() {
     {urlWasNormalized && <div className="auth-info">כתובת Supabase נוקתה אוטומטית מתוספת /rest/v1/.</div>}
     {connectionStatus && !connectionStatus.ok && <div className="auth-error"><AlertCircle size={18}/>{connectionStatus.message}</div>}
     {message && <div className="auth-error"><AlertCircle size={18}/>{message}</div>}
-    <button className="auth-submit" disabled={busy}>{busy?'מתחבר...':'כניסה'}</button>
-    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד. · Build 9.2.1.2</small>
+    <button className="auth-submit" disabled={busy}>{busy?'מתחבר...':'כניסת מנהל'}</button>
+    <div className="auth-divider"><span>או</span></div>
+    <button className="auth-guest" type="button" disabled={busy || (connectionStatus && !connectionStatus.ok)} onClick={signInAsGuest}>
+      <UserRoundCheck size={19}/>{busy?'מתחבר...':'כניסה כאורח — צפייה בלבד'}
+    </button>
+    <div className="guest-note"><ShieldCheck size={16}/> אורח יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
+    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד. · Sprint 11.1.1</small>
   </form></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
-  return <DashboardApp currentUser={session.user} userRole={profile?.role || 'viewer'} onSignOut={signOut}/>
+  return <DashboardApp currentUser={session.user} userRole={profile?.role || 'viewer'} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>
 }
 
 function SetupRequired({ error }){ return <div className="auth-page" dir="rtl"><div className="auth-card setup-card"><div className="auth-icon"><Cloud/></div><h1>נדרש חיבור לענן</h1><p>{error || 'חסרים משתני החיבור של Supabase.'}</p><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_ANON_KEY</code><small>נתמך גם: VITE_SUPABASE_PUBLISHABLE_KEY</small><div className="setup-note">העתק את Project URL ישירות מ־Supabase, ללא /rest/v1/, ושמור ב־Netlify. לאחר מכן בצע Clear cache and deploy site.</div></div></div> }

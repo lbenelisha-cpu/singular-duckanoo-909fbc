@@ -226,7 +226,7 @@ function classifyFile(rows) {
   return 'unknown'
 }
 
-export default function DashboardApp({ currentUser, userRole = 'viewer', onSignOut }) {
+export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut }) {
   const canManageData = userRole === 'admin'
 
   const [production, setProduction] = useState([])
@@ -836,14 +836,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
-      <div className="side-note">Sprint 11.1: חדר בקרה ניהולי, תחזית חודשית, Health Score והתראות לפי מתקן.</div>
+      <div className="side-note">Sprint 11.1.1: חדר בקרה ניהולי, תחזית חודשית וכניסה מאובטחת כאורח לצפייה בלבד.</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.1 — Packaging Control Tower</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.1.1 — Guest View & Packaging Control Tower</p></div>
         <div className="header-actions">
-          <div className="user-session"><UserCircle size={18}/><span><b>{currentUser?.email || 'משתמש'}</b><small>{userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
+          <div className="user-session"><UserCircle size={18}/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
           {canManageData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
