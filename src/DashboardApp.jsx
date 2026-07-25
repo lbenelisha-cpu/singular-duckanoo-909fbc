@@ -415,7 +415,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
         const facilitiesFound = new Set(rows.slice(0, 5000).map(r => canonicalFacility(getField(r, ['Storage Location','Inspection Lot Storage Location','Process Order Storage Location','Facility','Production Line','מתקן']))).filter(Boolean)).size
         const nextMeta = { fileName:file.name, rows:storedCount, rawRows:rows.length, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
         setStatus(`מעלה את ${file.name} למסד המשותף...`)
-        const savedMeta = await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser)
+        const savedMeta = await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progress => {
+          const pct = progress.totalChunks ? Math.round(progress.uploadedChunks / progress.totalChunks * 100) : 0
+          setStatus(`מעלה את ${file.name} לענן — ${pct}% (${progress.uploadedChunks}/${progress.totalChunks})`)
+        })
         setDataMeta(current => ({ ...current, [kind]: savedMeta }))
         setCloudState({ mode:'cloud', lastSync:savedMeta.loadedAt, message:'מחובר ומסונכרן עם Supabase', latencyMs:cloudState.latencyMs, live:true })
         loaded.push(`${file.name}: ${fmt(storedCount)} רשומות בענן`)
@@ -792,12 +795,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
-      <div className="side-note">Sprint 9.2.1: Cloud First + Live Sync. הנתונים נשמרים ב־Supabase ומשותפים לכל המשתמשים.</div>
+      <div className="side-note">Sprint 9.2.2: העלאה בטוחה לענן. גרסה חדשה נכנסת לשימוש רק לאחר שכל הרשומות נשמרו.</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 9.2.1 — ענן משותף ועדכון חי</p></div>
+        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 9.2.2 — ענן יציב והעלאות גדולות</p></div>
         <div className="header-actions">
           <div className="user-session"><UserCircle size={18}/><span><b>{currentUser?.email || 'משתמש'}</b><small>{userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>

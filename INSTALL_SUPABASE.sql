@@ -157,3 +157,59 @@ exception when duplicate_object then null;
 end $$;
 
 commit;
+
+-- ---------- Sprint 9.2.2: versioned uploads for large files ----------
+begin;
+create extension if not exists pgcrypto;
+
+alter table public.iml_data_sources add column if not exists upload_id uuid;
+update public.iml_data_sources set upload_id = gen_random_uuid() where upload_id is null;
+alter table public.iml_data_sources alter column upload_id set default gen_random_uuid();
+
+alter table public.iml_data_chunks add column if not exists upload_id uuid;
+update public.iml_data_chunks c
+set upload_id = s.upload_id
+from public.iml_data_sources s
+where c.kind = s.kind and c.upload_id is null;
+alter table public.iml_data_chunks alter column upload_id set default gen_random_uuid();
+
+-- Remove the old two-column primary key and replace it with a versioned key.
+do $$
+declare pk_name text;
+begin
+  select conname into pk_name
+  from pg_constraint
+  where conrelid = 'public.iml_data_chunks'::regclass and contype = 'p';
+  if pk_name is not null then
+    execute format('alter table public.iml_data_chunks drop constraint %I', pk_name);
+  end if;
+exception when undefined_table then null;
+end $$;
+
+alter table public.iml_data_chunks alter column upload_id set not null;
+do $$
+begin
+  alter table public.iml_data_chunks
+    add constraint iml_data_chunks_pkey primary key (kind, upload_id, chunk_index);
+exception when duplicate_object then null;
+end $$;
+
+create index if not exists iml_data_chunks_version_idx
+  on public.iml_data_chunks(kind, upload_id, chunk_index);
+
+create or replace function public.iml_cleanup_old_chunks(p_kind text, p_keep_upload_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.iml_is_admin() then
+    raise exception 'not authorized';
+  end if;
+  delete from public.iml_data_chunks
+  where kind = p_kind and upload_id <> p_keep_upload_id;
+end;
+$$;
+grant execute on function public.iml_cleanup_old_chunks(text, uuid) to authenticated;
+commit;

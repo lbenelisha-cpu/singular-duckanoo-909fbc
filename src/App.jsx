@@ -55,7 +55,7 @@ export default function App() {
     {connectionStatus && !connectionStatus.ok && <div className="auth-error"><AlertCircle size={18}/>{connectionStatus.message}</div>}
     {message && <div className="auth-error"><AlertCircle size={18}/>{message}</div>}
     <button className="auth-submit" disabled={busy}>{busy?'מתחבר...':'כניסה'}</button>
-    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד. · Build 9.2.1.2</small>
+    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד.</small>
   </form></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   return <DashboardApp currentUser={session.user} userRole={profile?.role || 'viewer'} onSignOut={signOut}/>
