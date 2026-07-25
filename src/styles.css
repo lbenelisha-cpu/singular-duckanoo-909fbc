@@ -21,3 +21,14 @@
 .source-upload{margin-top:auto;border:1px solid #0f8f78;color:#08705f;background:#e9f8f4;border-radius:9px;padding:9px 10px;display:flex;align-items:center;justify-content:center;gap:7px;font-weight:700;font-size:12px;cursor:pointer}.source-upload input{display:none}.source-upload.disabled{opacity:.5;pointer-events:none}
 @media(max-width:1400px){.data-source-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:700px){.data-source-grid{grid-template-columns:1fr}}
+
+/* Sprint 8.1 Build 2 — deviation characteristic details */
+.details-note{margin:-8px 0 14px;color:#64748b;font-size:.9rem}
+.deviation-characteristics{min-width:360px;white-space:normal!important}
+.deviation-characteristic{display:grid;grid-template-columns:minmax(180px,1fr) auto auto;gap:8px 14px;align-items:center;padding:8px 10px;margin:5px 0;border:1px solid #fecaca;border-radius:10px;background:#fff7f7;font-size:.82rem}
+.deviation-characteristic strong{color:#991b1b;text-align:right}
+.deviation-characteristic span{white-space:nowrap;color:#475569}
+.deviation-characteristic small{grid-column:1/-1;color:#7f1d1d}
+.no-characteristics{display:block;color:#94a3b8;font-size:.82rem;max-width:360px}
+.ud-code{display:block;margin-top:5px;color:#64748b;font-size:.72rem;max-width:170px;white-space:normal}
+@media (max-width:900px){.deviation-characteristic{grid-template-columns:1fr}.deviation-characteristic small{grid-column:auto}}
