@@ -51,20 +51,19 @@ export default function App() {
     }
   }
 
-  const signInAsGuest = async () => {
+  const signInAsViewer = async () => {
+    const viewerEmail = import.meta.env.VITE_VIEWER_EMAIL
+    const viewerPassword = import.meta.env.VITE_VIEWER_PASSWORD
+    if (!viewerEmail || !viewerPassword) {
+      setMessage('כניסת צפייה עדיין לא הוגדרה. יש להוסיף VITE_VIEWER_EMAIL ו־VITE_VIEWER_PASSWORD ב־Netlify.')
+      return
+    }
     setBusy(true); setMessage('')
     try {
-      const { error } = await supabase.auth.signInAnonymously({
-        options: { data: { display_name: 'אורח צפייה', access_mode: 'viewer' } }
-      })
-      if (error) {
-        const disabled = /anonymous|disabled|not enabled/i.test(error.message || '')
-        setMessage(disabled
-          ? 'כניסת אורחים עדיין לא הופעלה ב-Supabase. יש להפעיל Anonymous Sign-Ins בהגדרות Authentication.'
-          : error.message)
-      }
+      const { error } = await supabase.auth.signInWithPassword({ email: viewerEmail, password: viewerPassword })
+      if (error) setMessage(error.message === 'Invalid login credentials' ? 'חשבון הצפייה אינו מוגדר נכון ב־Supabase.' : error.message)
     } catch (error) {
-      setMessage(connectionStatus?.message || 'לא ניתן להתחבר כרגע במצב אורח.')
+      setMessage(connectionStatus?.message || 'לא ניתן להתחבר כרגע במצב צפייה בלבד.')
     } finally {
       setBusy(false)
     }
@@ -83,11 +82,11 @@ export default function App() {
     {message && <div className="auth-error"><AlertCircle size={18}/>{message}</div>}
     <button className="auth-submit" disabled={busy}>{busy?'מתחבר...':'כניסת מנהל'}</button>
     <div className="auth-divider"><span>או</span></div>
-    <button className="auth-guest" type="button" disabled={busy || (connectionStatus && !connectionStatus.ok)} onClick={signInAsGuest}>
-      <UserRoundCheck size={19}/>{busy?'מתחבר...':'כניסה כאורח — צפייה בלבד'}
+    <button className="auth-guest" type="button" disabled={busy || (connectionStatus && !connectionStatus.ok)} onClick={signInAsViewer}>
+      <UserRoundCheck size={19}/>{busy?'מתחבר...':'צפייה בלבד'}
     </button>
-    <div className="guest-note"><ShieldCheck size={16}/> אורח יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
-    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד. · Sprint 11.1.2</small>
+    <div className="guest-note"><ShieldCheck size={16}/> משתמש צפייה יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
+    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד. · Sprint 11.2.1</small>
   </form></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   return <DashboardApp currentUser={session.user} userRole={profile?.role || 'viewer'} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>
