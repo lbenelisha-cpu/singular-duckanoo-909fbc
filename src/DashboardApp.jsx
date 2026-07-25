@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse
 } from 'lucide-react'
 import { loadAllCloudDatasets, uploadCloudDataset, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
@@ -729,6 +729,41 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
     return insights.slice(0,4)
   }, [planningRows, openDeviations.length])
 
+
+  const controlTowerFacilities = useMemo(() => {
+    const deviationByFacility = new Map()
+    openDeviations.forEach(row => {
+      const facility = canonicalFacility(row.facility)
+      if (facility) deviationByFacility.set(facility, (deviationByFacility.get(facility) || 0) + 1)
+    })
+    return facilities.map(facility => {
+      const rows = planningRows.filter(row => row.facility === facility)
+      const target = rows.reduce((sum, row) => sum + row.target, 0)
+      const actual = rows.reduce((sum, row) => sum + row.actual, 0)
+      const forecast = rows.reduce((sum, row) => sum + row.forecast, 0)
+      const requiredDaily = rows.reduce((sum, row) => sum + row.requiredDaily, 0)
+      const orders = rows.reduce((sum, row) => sum + row.orders, 0)
+      const deviationsCount = deviationByFacility.get(facility) || 0
+      const forecastPct = target ? forecast / target * 100 : 0
+      const actualPct = target ? actual / target * 100 : 0
+      const planScore = target ? Math.min(100, forecastPct) : 70
+      const qualityScore = Math.max(0, 100 - deviationsCount * 8)
+      const healthScore = Math.max(0, Math.min(100, Math.round(planScore * 0.72 + qualityScore * 0.28)))
+      const state = !target ? 'no-target' : forecastPct >= 100 ? 'good' : forecastPct >= 90 ? 'warning' : 'risk'
+      return { facility, target, actual, forecast, requiredDaily, orders, deviationsCount, forecastPct, actualPct, healthScore, state, gap: forecast - target }
+    }).filter(row => row.target > 0 || row.actual > 0 || row.deviationsCount > 0)
+      .sort((a,b) => ({risk:0,warning:1,good:2,'no-target':3}[a.state] - {risk:0,warning:1,good:2,'no-target':3}[b.state]) || a.facility.localeCompare(b.facility))
+  }, [facilities, planningRows, openDeviations])
+
+  const controlTowerTrend = useMemo(() => {
+    const byDay = new Map()
+    prod.filter(row => monthKey(row.date) === planningMonth).forEach(row => {
+      const key = iso(row.date)
+      if (key) byDay.set(key, (byDay.get(key) || 0) + row.qty)
+    })
+    return [...byDay.entries()].sort((a,b) => a[0].localeCompare(b[0])).slice(-7)
+  }, [prod, planningMonth])
+
   const jumpToDetails = (tab) => {
     setActiveTab(tab)
     window.setTimeout(() => document.getElementById('details-section')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50)
@@ -746,11 +781,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
     const month = planningMonth || monthKey(new Date())
     const rows = DEFAULT_FACILITIES.flatMap(facility => facility === '1542'
       ? [
-          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-1', 'תחנה': 'P-02', 'סוג אריזה': '1 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' },
-          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-5', 'תחנה': 'P-03', 'סוג אריזה': '5 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' },
-          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-10', 'תחנה': 'P-04', 'סוג אריזה': '10/20 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' },
+          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-1', 'תחנה': 'P-02', 'סוג אריזה': '1 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'שיטת תחזית': 'ממוצע 7 ימי עבודה אחרונים', 'ימי עבודה בחודש': '', 'הערות': '' },
+          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-5', 'תחנה': 'P-03', 'סוג אריזה': '5 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'שיטת תחזית': 'ממוצע 7 ימי עבודה אחרונים', 'ימי עבודה בחודש': '', 'הערות': '' },
+          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-10', 'תחנה': 'P-04', 'סוג אריזה': '10/20 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'שיטת תחזית': 'ממוצע 7 ימי עבודה אחרונים', 'ימי עבודה בחודש': '', 'הערות': '' },
         ]
-      : [{ 'חודש': month, 'Storage Location': facility, 'Routing group': '', 'תחנה': '', 'סוג אריזה': '', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' }])
+      : [{ 'חודש': month, 'Storage Location': facility, 'Routing group': '', 'תחנה': '', 'סוג אריזה': '', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'שיטת תחזית': 'ממוצע 7 ימי עבודה אחרונים', 'ימי עבודה בחודש': '', 'הערות': '' }])
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'יעדים חודשיים'); XLSX.writeFile(wb, 'IML_Monthly_Targets_Template.xlsx')
   }
   const clearAllData = async () => {
@@ -801,12 +836,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
-      <div className="side-note">Sprint 10.2: טעינה וקריאה מדורגות, ניסיונות חוזרים אוטומטיים ואימות בצד השרת ללא שאילתות כבדות.</div>
+      <div className="side-note">Sprint 11.1: חדר בקרה ניהולי, תחזית חודשית, Health Score והתראות לפי מתקן.</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 10.2 — Stable Pagination Data Engine</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.1 — Packaging Control Tower</p></div>
         <div className="header-actions">
           <div className="user-session"><UserCircle size={18}/><span><b>{currentUser?.email || 'משתמש'}</b><small>{userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -824,6 +859,37 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
         <div className="cloud-status-icon">{cloudState.mode === 'offline' ? <WifiOff/> : <Cloud/>}</div>
         <div><strong>{cloudState.mode === 'cloud' ? 'מערכת פעילה בענן' : cloudState.mode === 'connecting' ? 'מתחבר לענן' : cloudState.mode === 'offline' ? 'מצב מקומי זמני' : 'שגיאת סנכרון'}</strong><span>{cloudState.message}</span></div>
         <div className="cloud-status-meta"><small>מקור נתונים</small><b>{cloudState.mode === 'cloud' ? 'Supabase' : 'Browser Cache'}</b><small>{cloudState.live ? '● עדכון חי פעיל' : '○ עדכון חי לא פעיל'}</small>{cloudState.latencyMs != null && <small>זמן תגובה: {cloudState.latencyMs}ms</small>}{cloudState.lastSync && <small>סנכרון: {new Date(cloudState.lastSync).toLocaleString('he-IL')}</small>}</div>
+      </section>
+
+
+      <section className="control-tower-hero">
+        <div className="control-tower-title"><div><span className="tower-kicker">PACKAGING CONTROL TOWER</span><h2>תמונת מצב ניהולית בזמן אמת</h2><p>יעדים, תחזית חודשית, איכות והזמנות — במבט אחד</p></div><div className={`tower-online ${cloudState.mode === 'cloud' ? 'online' : ''}`}><span></span>{cloudState.mode === 'cloud' ? 'ONLINE' : 'OFFLINE'}</div></div>
+        <div className="tower-kpis">
+          <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><Target/><span>יעד חודשי כולל</span><b>{fmt(targetTotal)}</b><small>{planningMonth || 'ללא חודש נבחר'}</small></button>
+          <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><Database/><span>בוצע החודש</span><b>{fmt(targetActual)}</b><small>{targetTotal ? pctFmt(targetActual / targetTotal * 100) : '—'} מהיעד</small></button>
+          <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><TrendingUp/><span>תחזית סוף חודש</span><b>{fmt(targetForecast)}</b><small>{targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} מהיעד</small></button>
+          <button onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><Gauge/><span>קצב יומי נדרש</span><b>{fmt(planningRows.reduce((sum,row)=>sum+row.requiredDaily,0))}</b><small>לכל המתקנים</small></button>
+          <button className={targetForecast >= targetTotal && targetTotal ? 'good' : 'bad'} onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><AlertTriangle/><span>פער צפוי</span><b>{targetTotal ? fmt(targetForecast-targetTotal) : '—'}</b><small>{targetForecast >= targetTotal ? 'מעל היעד' : 'נדרש להגביר קצב'}</small></button>
+        </div>
+      </section>
+
+      <section className="tower-facility-section">
+        <div className="panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><span>{controlTowerFacilities.length} מתקנים במעקב</span></div>
+        <div className="tower-facility-grid">
+          {controlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => { setSelectedFacilities([row.facility]); document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'}) }}>
+            <div className="tower-facility-head"><div><i></i><strong>{row.facility}</strong></div><span>{row.state === 'good' ? 'תקין' : row.state === 'warning' ? 'דורש תשומת לב' : row.state === 'risk' ? 'בסיכון' : 'ללא יעד'}</span></div>
+            <div className="tower-health"><div><HeartPulse/><span>Health Score</span></div><b>{row.healthScore}<small>/100</small></b></div>
+            <div className="tower-progress"><i style={{width:`${Math.min(100,row.actualPct)}%`}}/></div>
+            <dl><div><dt>יעד חודשי</dt><dd>{fmt(row.target)}</dd></div><div><dt>בוצע</dt><dd>{fmt(row.actual)}</dd></div><div><dt>תחזית</dt><dd>{fmt(row.forecast)}</dd></div><div><dt>פער צפוי</dt><dd className={row.gap >= 0 ? 'positive' : 'negative'}>{row.gap >= 0 ? '+' : ''}{fmt(row.gap)}</dd></div><div><dt>קצב נדרש</dt><dd>{fmt(row.requiredDaily)}</dd></div><div><dt>חריגות פתוחות</dt><dd>{row.deviationsCount}</dd></div></dl>
+            <span className="tower-enter">לפרטים מלאים <ArrowLeft size={16}/></span>
+          </button>)}
+          {!controlTowerFacilities.length && <div className="empty wide-empty">טען יעדים חודשיים ונתוני תפוקה כדי להפעיל את חדר הבקרה.</div>}
+        </div>
+      </section>
+
+      <section className="tower-lower-grid">
+        <article className="tower-alerts-card"><div className="panel-head"><div><BellRing/><h2>התראות אחרונות</h2></div><button onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}>הצג הכול</button></div><div className="tower-alert-list">{managerInsights.map((item,index)=><button key={index} className={item.state} onClick={() => item.title.includes('חריגות') ? jumpToDetails('deviations') : document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><i>{item.state==='risk'?'!':item.state==='warning'?'⚠':'✓'}</i><div><strong>{item.title}</strong><span>{item.text}</span></div></button>)}</div></article>
+        <article className="tower-chart-card"><div className="panel-head"><div><BarChart3/><h2>ביצוע יומי — 7 ימים אחרונים</h2></div><span>{planningMonth}</span></div><div className="tower-mini-chart">{controlTowerTrend.map(([day,value])=>{const max=Math.max(1,...controlTowerTrend.map(x=>x[1])); return <div key={day}><b>{fmt(value)}</b><span><i style={{height:`${Math.max(8,value/max*100)}%`}}/></span><small>{day.slice(5)}</small></div>})}{!controlTowerTrend.length&&<div className="empty">אין נתונים להצגת מגמה</div>}</div></article>
       </section>
 
       <section className="data-center">
