@@ -2,8 +2,15 @@ import { supabase } from './supabase'
 
 export const CLOUD_KINDS = ['production', 'quality', 'deviations', 'targets']
 export const FUTURE_CLOUD_KINDS = [...CLOUD_KINDS, 'packaging_plan']
-const ROWS_PER_CHUNK = 350
-const CHUNKS_PER_REQUEST = 8
+
+// Keep every request deliberately small. A quality file can contain hundreds of
+// thousands of rows, and large JSONB responses are what caused the database
+// statement timeouts in the previous build.
+const ROWS_PER_CHUNK = 150
+const CHUNKS_PER_UPLOAD_REQUEST = 3
+const CHUNKS_PER_DOWNLOAD_PAGE = 12
+const MAX_RETRIES = 4
+const RETRY_BASE_MS = 700
 
 let schemaCapability = null
 
@@ -11,9 +18,37 @@ function requireClient() {
   if (!supabase) throw new Error('Supabase client is not configured')
 }
 
-function emit(onProgress, phase, completed, total, message) {
+function emit(onProgress, phase, completed, total, message, extra = {}) {
   const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
-  onProgress?.({ phase, completed, total, percent, message })
+  onProgress?.({ phase, completed, total, percent, message, ...extra })
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+function retryable(error) {
+  const text = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase()
+  return text.includes('statement timeout') ||
+    text.includes('canceling statement') ||
+    text.includes('failed to fetch') ||
+    text.includes('network') ||
+    text.includes('timeout') ||
+    text.includes('502') ||
+    text.includes('503') ||
+    text.includes('504')
+}
+
+async function withRetry(operation, label = 'פעולת ענן') {
+  let lastError
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    try {
+      return await operation(attempt)
+    } catch (error) {
+      lastError = error
+      if (!retryable(error) || attempt === MAX_RETRIES) throw error
+      await sleep(RETRY_BASE_MS * (2 ** attempt))
+    }
+  }
+  throw new Error(`${label} נכשלה: ${lastError?.message || 'שגיאה לא ידועה'}`)
 }
 
 function isMissingSchema(error, names = []) {
@@ -40,7 +75,7 @@ export async function detectCloudSchema(force = false) {
     schemaCapability = {
       legacy: true,
       versioned: !versionError,
-      message: versionError ? 'טבלת גרסאות הנתונים עדיין אינה מותקנת' : 'סכמת Sprint 10.1.1 פעילה',
+      message: versionError ? 'טבלת גרסאות הנתונים עדיין אינה מותקנת' : 'סכמת Sprint 10.2 פעילה',
       error: versionError || null,
     }
     return schemaCapability
@@ -52,7 +87,7 @@ export async function detectCloudSchema(force = false) {
       schemaCapability = {
         legacy: true,
         versioned: false,
-        message: 'מבנה הענן הישן פעיל; יש להריץ את קובץ ההגירה של Sprint 10.1.1',
+        message: 'מבנה הענן הישן פעיל; יש להריץ את קובץ ההגירה',
         error: sourceError,
       }
       return schemaCapability
@@ -62,39 +97,45 @@ export async function detectCloudSchema(force = false) {
   throw sourceError
 }
 
-async function readVersionChunks(versionId, expectedChunks = 0, onProgress) {
-  const chunks = []
-  const pageSize = 500
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from('iml_dataset_chunks')
-      .select('chunk_index,payload')
-      .eq('version_id', versionId)
-      .order('chunk_index', { ascending: true })
-      .range(from, from + pageSize - 1)
-    if (error) throw error
-    chunks.push(...(data || []))
-    emit(onProgress, 'download', chunks.length, expectedChunks || Math.max(chunks.length, 1), 'מוריד נתונים מהענן')
-    if (!data || data.length < pageSize) break
-  }
-  return chunks
-}
+async function readChunkPages({ table, filterColumn, filterValue, expectedChunks = 0, onProgress, kind }) {
+  const rows = []
+  let from = 0
 
-async function readLegacyChunks(kind) {
-  const chunks = []
-  const pageSize = 500
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from('iml_data_chunks')
-      .select('chunk_index,payload')
-      .eq('kind', kind)
-      .order('chunk_index', { ascending: true })
-      .range(from, from + pageSize - 1)
-    if (error) throw error
-    chunks.push(...(data || []))
-    if (!data || data.length < pageSize) break
+  while (true) {
+    const to = from + CHUNKS_PER_DOWNLOAD_PAGE - 1
+    const page = await withRetry(async attempt => {
+      const { data, error } = await supabase
+        .from(table)
+        .select('chunk_index,payload')
+        .eq(filterColumn, filterValue)
+        .order('chunk_index', { ascending: true })
+        .range(from, to)
+      if (error) throw error
+      return data || []
+    }, `קריאת ${kind || 'נתונים'} מהענן`)
+
+    for (const chunk of page) {
+      if (Array.isArray(chunk.payload)) rows.push(...chunk.payload)
+    }
+
+    const completedChunks = Math.min(from + page.length, expectedChunks || from + page.length)
+    emit(
+      onProgress,
+      'download',
+      completedChunks,
+      expectedChunks || Math.max(completedChunks, 1),
+      `מוריד ${kind || 'נתונים'} מהענן`,
+      { downloadedRows: rows.length }
+    )
+
+    if (page.length < CHUNKS_PER_DOWNLOAD_PAGE) break
+    from += CHUNKS_PER_DOWNLOAD_PAGE
+
+    // Yield to the browser between pages so the UI remains responsive.
+    await sleep(0)
   }
-  return chunks
+
+  return rows
 }
 
 export async function loadCloudDataset(kind, onProgress) {
@@ -104,27 +145,43 @@ export async function loadCloudDataset(kind, onProgress) {
     ? 'kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at,active_version_id'
     : 'kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at'
 
-  const { data: source, error: sourceError } = await supabase
-    .from('iml_data_sources')
-    .select(sourceFields)
-    .eq('kind', kind)
-    .maybeSingle()
-  if (sourceError) throw sourceError
+  const source = await withRetry(async () => {
+    const { data, error } = await supabase
+      .from('iml_data_sources')
+      .select(sourceFields)
+      .eq('kind', kind)
+      .maybeSingle()
+    if (error) throw error
+    return data
+  }, `קריאת מקור ${kind}`)
+
   if (!source) return { rows: [], meta: null }
 
   if (capability.versioned && source.active_version_id) {
-    const { data: version, error: versionError } = await supabase
-      .from('iml_dataset_versions')
-      .select('id,version_no,chunk_count,status,created_at,activated_at')
-      .eq('id', source.active_version_id)
-      .single()
-    if (versionError) throw versionError
-    const chunks = await readVersionChunks(version.id, version.chunk_count, onProgress)
+    const version = await withRetry(async () => {
+      const { data, error } = await supabase
+        .from('iml_dataset_versions')
+        .select('id,version_no,chunk_count,status,created_at,activated_at')
+        .eq('id', source.active_version_id)
+        .single()
+      if (error) throw error
+      return data
+    }, `קריאת גרסת ${kind}`)
+
+    const rows = await readChunkPages({
+      table: 'iml_dataset_chunks',
+      filterColumn: 'version_id',
+      filterValue: version.id,
+      expectedChunks: Number(version.chunk_count || 0),
+      onProgress,
+      kind,
+    })
+
     return {
-      rows: chunks.flatMap(chunk => Array.isArray(chunk.payload) ? chunk.payload : []),
+      rows,
       meta: {
         fileName: source.file_name,
-        rows: Number(source.row_count || 0),
+        rows: Number(source.row_count || rows.length),
         rawRows: Number(source.raw_row_count || 0),
         facilities: source.facilities,
         loadedAt: source.loaded_at || source.updated_at,
@@ -137,12 +194,19 @@ export async function loadCloudDataset(kind, onProgress) {
     }
   }
 
-  const chunks = await readLegacyChunks(kind)
+  const rows = await readChunkPages({
+    table: 'iml_data_chunks',
+    filterColumn: 'kind',
+    filterValue: kind,
+    onProgress,
+    kind,
+  })
+
   return {
-    rows: chunks.flatMap(chunk => Array.isArray(chunk.payload) ? chunk.payload : []),
+    rows,
     meta: {
       fileName: source.file_name,
-      rows: Number(source.row_count || 0),
+      rows: Number(source.row_count || rows.length),
       rawRows: Number(source.raw_row_count || 0),
       facilities: source.facilities,
       loadedAt: source.loaded_at || source.updated_at,
@@ -160,7 +224,7 @@ export async function loadAllCloudDatasets(onProgress) {
   for (let index = 0; index < CLOUD_KINDS.length; index += 1) {
     const kind = CLOUD_KINDS[index]
     onProgress?.({ kind, phase: 'dataset', percent: Math.round((index / CLOUD_KINDS.length) * 100) })
-    result[kind] = await loadCloudDataset(kind)
+    result[kind] = await loadCloudDataset(kind, progress => onProgress?.({ kind, ...progress }))
   }
   onProgress?.({ kind: '', phase: 'complete', percent: 100 })
   return result
@@ -173,58 +237,65 @@ export async function uploadCloudDataset(kind, rows, meta, user, onProgress) {
 
   const capability = await detectCloudSchema(true)
   if (!capability.versioned) {
-    throw new Error('מנוע הגרסאות עדיין לא מותקן ב־Supabase. יש להריץ את SPRINT_10_1_1_MIGRATION.sql ולאחר מכן לרענן את האתר.')
+    throw new Error('מנוע הגרסאות עדיין לא מותקן ב־Supabase. יש להריץ את קובץ ההגירה ולאחר מכן לרענן את האתר.')
   }
 
   const startedAt = Date.now()
   const chunks = []
   for (let index = 0; index < rows.length; index += ROWS_PER_CHUNK) chunks.push(rows.slice(index, index + ROWS_PER_CHUNK))
-  emit(onProgress, 'prepare', 1, 1, `הוכנו ${chunks.length} מקטעים`)
+  emit(onProgress, 'prepare', 1, 1, `הוכנו ${chunks.length} מקטעים קטנים ובטוחים`)
 
-  const { data: version, error: versionError } = await supabase
-    .from('iml_dataset_versions')
-    .insert({
-      kind,
-      file_name: meta.fileName || '',
-      row_count: rows.length,
-      raw_row_count: meta.rawRows ?? rows.length,
-      facilities: meta.facilities || 0,
-      chunk_count: chunks.length,
-      uploaded_by: user?.id || null,
-      uploaded_by_email: user?.email || '',
-      status: 'uploading',
-    })
-    .select('id,version_no')
-    .single()
-  if (versionError) throw versionError
+  const version = await withRetry(async () => {
+    const { data, error } = await supabase
+      .from('iml_dataset_versions')
+      .insert({
+        kind,
+        file_name: meta.fileName || '',
+        row_count: rows.length,
+        raw_row_count: meta.rawRows ?? rows.length,
+        facilities: meta.facilities || 0,
+        chunk_count: chunks.length,
+        uploaded_by: user?.id || null,
+        uploaded_by_email: user?.email || '',
+        status: 'uploading',
+      })
+      .select('id,version_no')
+      .single()
+    if (error) throw error
+    return data
+  }, 'יצירת גרסת נתונים')
 
   try {
-    for (let offset = 0; offset < chunks.length; offset += CHUNKS_PER_REQUEST) {
-      const batch = chunks.slice(offset, offset + CHUNKS_PER_REQUEST).map((payload, batchIndex) => ({
+    for (let offset = 0; offset < chunks.length; offset += CHUNKS_PER_UPLOAD_REQUEST) {
+      const batch = chunks.slice(offset, offset + CHUNKS_PER_UPLOAD_REQUEST).map((payload, batchIndex) => ({
         version_id: version.id,
         chunk_index: offset + batchIndex,
         payload,
         row_count: payload.length,
       }))
-      const { error } = await supabase.from('iml_dataset_chunks').insert(batch)
+
+      await withRetry(async () => {
+        // Upsert makes a retried request idempotent if the network response was
+        // lost after Supabase had already committed the batch.
+        const { error } = await supabase
+          .from('iml_dataset_chunks')
+          .upsert(batch, { onConflict: 'version_id,chunk_index' })
+        if (error) throw error
+      }, `העלאת מקטעים ${offset + 1}-${offset + batch.length}`)
+
+      emit(onProgress, 'upload', Math.min(offset + batch.length, chunks.length), chunks.length || 1, 'מעלה מקטעים קטנים ל־Supabase')
+      await sleep(0)
+    }
+
+    emit(onProgress, 'verify', 0, 1, 'Supabase מאמת את הגרסה בצד השרת')
+    await withRetry(async () => {
+      // The activation function performs count/sum verification entirely in
+      // PostgreSQL. We intentionally do not download thousands of row_count
+      // records to the browser anymore.
+      const { error } = await supabase.rpc('iml_activate_dataset_version', { p_version_id: version.id })
       if (error) throw error
-      emit(onProgress, 'upload', Math.min(offset + batch.length, chunks.length), chunks.length || 1, 'מעלה מקטעים ל־Supabase')
-    }
-
-    emit(onProgress, 'verify', 0, 1, 'מאמת את הטעינה לפני הפעלה')
-    const { data: verification, error: verifyError } = await supabase
-      .from('iml_dataset_chunks')
-      .select('row_count')
-      .eq('version_id', version.id)
-    if (verifyError) throw verifyError
-    const verifiedRows = (verification || []).reduce((sum, item) => sum + Number(item.row_count || 0), 0)
-    if (verifiedRows !== rows.length || (verification || []).length !== chunks.length) {
-      throw new Error(`אימות הטעינה נכשל: נשמרו ${verifiedRows} מתוך ${rows.length} רשומות`)
-    }
+    }, 'אימות והפעלת הגרסה')
     emit(onProgress, 'verify', 1, 1, 'האימות הסתיים בהצלחה')
-
-    const { error: activateError } = await supabase.rpc('iml_activate_dataset_version', { p_version_id: version.id })
-    if (activateError) throw activateError
 
     await supabase.from('iml_upload_history').insert({
       kind,
@@ -237,8 +308,8 @@ export async function uploadCloudDataset(kind, rows, meta, user, onProgress) {
       version_id: version.id,
       duration_ms: Date.now() - startedAt,
     })
-    emit(onProgress, 'complete', 1, 1, 'הגרסה הופעלה וזמינה לכל המשתמשים')
 
+    emit(onProgress, 'complete', 1, 1, 'הגרסה הופעלה וזמינה לכל המשתמשים')
     return { ...meta, rows: rows.length, loadedAt: new Date().toISOString(), loadedBy: user?.email || '', source: 'cloud', version: version.version_no, versionId: version.id }
   } catch (error) {
     await supabase.from('iml_dataset_versions').update({ status: 'failed', error_message: error.message }).eq('id', version.id)

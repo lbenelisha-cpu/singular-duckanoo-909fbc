@@ -801,12 +801,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
-      <div className="side-note">Sprint 10.1.1: מנוע נתונים גרסאי עם בדיקת תאימות לסכמת הענן. גרסה חדשה מופעלת רק לאחר העלאה ואימות מלאים.</div>
+      <div className="side-note">Sprint 10.2: טעינה וקריאה מדורגות, ניסיונות חוזרים אוטומטיים ואימות בצד השרת ללא שאילתות כבדות.</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 10.1.1 — Schema Recovery & Data Engine</p></div>
+        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 10.2 — Stable Pagination Data Engine</p></div>
         <div className="header-actions">
           <div className="user-session"><UserCircle size={18}/><span><b>{currentUser?.email || 'משתמש'}</b><small>{userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
