@@ -1,7 +1,7 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "8.3.0-shift-intelligence",
+  "version": "9.1.0-auth-roles",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,7 +14,8 @@
     "react": "latest",
     "react-dom": "latest",
     "lucide-react": "latest",
-    "xlsx": "latest"
+    "xlsx": "latest",
+    "@supabase/supabase-js": "latest"
   },
   "devDependencies": {}
 }
