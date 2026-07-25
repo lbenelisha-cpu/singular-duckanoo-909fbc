@@ -49,3 +49,10 @@
 @media(max-width:1500px){.executive-six{grid-template-columns:repeat(3,1fr)}.manager-insights{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:700px){.executive-six,.manager-insights{grid-template-columns:1fr}}
 .forecast-resource{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:5px}.forecast-resource>b{background:#e8f6f2;color:#08705f;border-radius:999px;padding:4px 8px;font-size:12px}.forecast-resource>span{font-size:12px;font-weight:800;color:#42515c}.forecast-resource>small{width:100%;color:#7a8790;font-size:10px}.forecast-card .forecast-head{align-items:flex-start}
+
+/* Sprint 8.1 Build 5 — valid characteristics next to deviations */
+.valid-characteristics { min-width: 260px; }
+.valid-characteristic { border-right: 3px solid #16a34a; background: rgba(22, 163, 74, .06); }
+.characteristics-count { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+.bad-count { background: rgba(220, 38, 38, .1); color: #b91c1c; }
+.good-count { background: rgba(22, 163, 74, .1); color: #15803d; }
