@@ -32,3 +32,19 @@
 .no-characteristics{display:block;color:#94a3b8;font-size:.82rem;max-width:360px}
 .ud-code{display:block;margin-top:5px;color:#64748b;font-size:.72rem;max-width:170px;white-space:normal}
 @media (max-width:900px){.deviation-characteristic{grid-template-columns:1fr}.deviation-characteristic small{grid-column:auto}}
+
+/* Sprint 8.1 Build 3 — Executive dashboard and drill down */
+.executive-six{grid-template-columns:repeat(6,1fr)}
+.executive{border-left:0;border-right:0;border-top:0;text-align:right;font:inherit;width:100%}
+.executive.clickable{cursor:pointer;transition:.16s}
+.executive.clickable:hover{transform:translateY(-2px);box-shadow:0 8px 20px #11223318}
+.executive.clickable:focus-visible{outline:3px solid #0f8f78;outline-offset:2px}
+.manager-brief{background:#fff;border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:0 2px 10px #1122330d}
+.manager-insights{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-top:14px}
+.manager-insight{border:1px solid #dfe6eb;border-right:5px solid #557f99;background:#f8fafb;border-radius:11px;padding:14px;text-align:right;cursor:pointer;font:inherit;min-height:96px}
+.manager-insight strong,.manager-insight span{display:block}.manager-insight strong{font-size:14px;margin-bottom:7px}.manager-insight span{font-size:12px;color:#687683;line-height:1.55}
+.manager-insight.good{border-right-color:#1da37f;background:#f2fbf8}.manager-insight.warning{border-right-color:#e39a2c;background:#fffaf0}.manager-insight.risk{border-right-color:#d64b4b;background:#fff5f5}
+.manager-insight:hover{box-shadow:0 5px 14px #11223315}
+#planning-section,#alerts-section,#details-section{scroll-margin-top:18px}
+@media(max-width:1500px){.executive-six{grid-template-columns:repeat(3,1fr)}.manager-insights{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.executive-six,.manager-insights{grid-template-columns:1fr}}

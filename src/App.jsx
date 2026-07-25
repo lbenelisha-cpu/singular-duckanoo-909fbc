@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity
 } from 'lucide-react'
 import './styles.css'
 
@@ -498,6 +498,25 @@ export default function App() {
   const targetTotal = planningRows.reduce((s,r) => s + r.target, 0)
   const targetActual = planningRows.reduce((s,r) => s + r.actual, 0)
   const targetForecast = planningRows.reduce((s,r) => s + r.forecast, 0)
+  const uniqueOrders = useMemo(() => new Set(filtered.map(r => r.order).filter(Boolean)).size, [filtered])
+  const uniqueBatches = useMemo(() => new Set(filtered.map(r => r.batch).filter(Boolean)).size, [filtered])
+  const managerInsights = useMemo(() => {
+    const insights = []
+    const highestRisk = planningRows.filter(r => r.state === 'risk').sort((a,b) => (b.requiredDaily - b.provenMax) - (a.requiredDaily - a.provenMax))[0]
+    const warning = planningRows.filter(r => r.state === 'warning').sort((a,b) => a.forecast / Math.max(1,a.target) - b.forecast / Math.max(1,b.target))[0]
+    const best = planningRows.filter(r => r.target > 0).sort((a,b) => (b.forecast / b.target) - (a.forecast / a.target))[0]
+    if (highestRisk) insights.push({ state:'risk', title:`מתקן ${highestRisk.id} דורש פעולה`, text:`הקצב הנדרש הוא ${fmt(highestRisk.requiredDaily)} ליום לעומת שיא מוכח של ${fmt(highestRisk.provenMax)}.` })
+    if (warning) insights.push({ state:'warning', title:`מתקן ${warning.id} נמצא בסיכון`, text:`התחזית היא ${fmt(warning.forecast)} מול יעד של ${fmt(warning.target)}. נדרש שיפור בקצב היומי.` })
+    if (best && ['good','achieved'].includes(best.state)) insights.push({ state:'good', title:`מתקן ${best.id} מוביל`, text:`התחזית הנוכחית היא ${pctFmt(best.forecast / best.target * 100)} מהיעד החודשי.` })
+    if (openDeviations.length) insights.push({ state:'risk', title:`${openDeviations.length} חריגות איכות פתוחות`, text:'לחיצה על הכרטיס תפתח את פירוט המנות ומאפייני החריגה.' })
+    if (!insights.length) insights.push({ state:'good', title:'אין מוקדים חריגים', text:'לפי הנתונים הטעונים, המתקנים נמצאים במסלול תקין ואין חריגות פתוחות.' })
+    return insights.slice(0,4)
+  }, [planningRows, openDeviations.length])
+
+  const jumpToDetails = (tab) => {
+    setActiveTab(tab)
+    window.setTimeout(() => document.getElementById('details-section')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50)
+  }
 
   const exportWorkbook = () => {
     const wb = XLSX.utils.book_new()
@@ -554,12 +573,12 @@ export default function App() {
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
-      <div className="side-note">Sprint 8.1 Build 1: מרכז נתונים, אימות קבצים ומנוע נתונים אחיד. הנתונים נשמרים בדפדפן בלבד.</div>
+      <div className="side-note">Sprint 8.1 Build 3: תמונת מצב ניהולית, תובנות ו־Drill Down מכל KPI. הנתונים נשמרים בדפדפן בלבד.</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 8.1 — מנוע נתונים, בקרה על מקורות ותחזית סוף חודש</p></div>
+        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 8.1 Build 3 — Executive Dashboard ו־Drill Down ניהולי</p></div>
         <div className="header-actions">
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
@@ -586,12 +605,18 @@ export default function App() {
         <small>היעד היומי אינו מוזן: הוא מחושב מחדש בכל יום לפי יתרת היעד וימי העבודה שנותרו.</small>
       </section>
 
-      <section className="executive-strip">
-        <Executive icon={<Target/>} title="ביצוע מול יעד" value={targetTotal ? pctFmt(targetActual / targetTotal * 100) : '—'} sub={`${fmt(targetActual)} מתוך ${fmt(targetTotal)}`}/>
-        <Executive icon={<TrendingUp/>} title="תחזית סוף חודש" value={targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} sub={fmt(targetForecast)}/>
-        <Executive icon={<CheckCircle2/>} title="במסלול / הושג" value={achievedCount} sub="מתקנים" good/>
-        <Executive icon={<AlertTriangle/>} title="בסיכון" value={warningCount} sub="נדרש שיפור" warn/>
-        <Executive icon={<BellRing/>} title="לא בר־השגה" value={riskCount} sub="דורש פעולה" bad/>
+      <section className="executive-strip executive-six">
+        <Executive icon={<Target/>} title="ביצוע מול יעד" value={targetTotal ? pctFmt(targetActual / targetTotal * 100) : '—'} sub={`${fmt(targetActual)} מתוך ${fmt(targetTotal)}`} onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+        <Executive icon={<TrendingUp/>} title="תחזית סוף חודש" value={targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} sub={fmt(targetForecast)} onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+        <Executive icon={<CheckCircle2/>} title="במסלול / הושג" value={achievedCount} sub="מתקנים" good onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+        <Executive icon={<AlertTriangle/>} title="בסיכון" value={warningCount} sub="נדרש שיפור" warn onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}/>
+        <Executive icon={<BellRing/>} title="חריגות פתוחות" value={openDeviations.length} sub="מנות איכות" bad onClick={() => jumpToDetails('deviations')}/>
+        <Executive icon={<ClipboardList/>} title="Orders בטווח" value={uniqueOrders} sub={`${uniqueBatches} מנות`} onClick={() => jumpToDetails('production')}/>
+      </section>
+
+      <section className="manager-brief">
+        <div className="panel-head"><div><Activity/><h2>תמונת מצב ניהולית</h2></div><span>מבוסס על הנתונים הטעונים</span></div>
+        <div className="manager-insights">{managerInsights.map((item,i) => <button key={i} className={`manager-insight ${item.state}`} onClick={() => item.title.includes('חריגות') ? jumpToDetails('deviations') : document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><strong>{item.title}</strong><span>{item.text}</span></button>)}</div>
       </section>
 
       <section className="filters">
@@ -622,12 +647,12 @@ export default function App() {
       </section>
 
       <div className="section-title facility-title"><div className="section-title-text"><Gauge/><div><h2>תחזית חודשית לפי מתקן</h2><p>יעד חודשי, קצב נדרש, קצב אחרון, שיא מוכח ותחזית</p></div></div><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת הכול' : 'בחירת כל המתקנים'}</button></div>
-      <section className="forecast-grid">
+      <section className="forecast-grid" id="planning-section">
         {planningRows.map(row => <ForecastCard key={row.id} {...row} selected={selectedFacilities.includes(row.id)} onClick={() => toggleFacility(row.id)}/>) }
         {!planningRows.length && <div className="empty wide-empty">טען קובץ יעדים חודשי כדי להציג תחזית.</div>}
       </section>
 
-      <section className="alert-panel">
+      <section className="alert-panel" id="alerts-section">
         <div className="panel-head"><div><BellRing/><h2>מה דורש תשומת לב היום?</h2></div><span>{alerts.length} התראות</span></div>
         <div className="alert-list">
           {alerts.map(r => <div className={`alert-item ${r.state}`} key={r.id}><div className="alert-symbol">{r.state === 'risk' ? '!' : '⚠'}</div><div><strong>מתקן {r.id} — {r.label}</strong><p>{r.state === 'risk' ? `נדרש ${fmt(r.requiredDaily)} ליום, אך השיא המוכח הוא ${fmt(r.provenMax)}.` : `התחזית היא ${fmt(r.forecast)} מול יעד ${fmt(r.target)}. נדרש קצב של ${fmt(r.requiredDaily)} ליום.`}</p></div></div>)}
@@ -651,7 +676,7 @@ export default function App() {
       <div className="section-title facility-title"><div className="section-title-text"><Factory/><div><h2>ביצועים לפי מתקן בטווח המסונן</h2><p>לחיצה על כרטיס מסננת תפוקה, איכות וחריגות</p></div></div></div>
       <section className="facility-grid">{facilityStats.map(x => <Facility key={x.id} {...x} selected={selectedFacilities.includes(x.id)} onClick={() => toggleFacility(x.id)}/>)}</section>
 
-      <section className="tabs">
+      <section className="tabs" id="details-section">
         <button className={activeTab === 'production' ? 'active' : ''} onClick={() => setActiveTab('production')}><BarChart3 size={16}/> תפוקה</button>
         <button className={activeTab === 'quality' ? 'active' : ''} onClick={() => setActiveTab('quality')}><FlaskConical size={16}/> איכות ({qualityBad.length})</button>
         <button className={activeTab === 'deviations' ? 'active' : ''} onClick={() => setActiveTab('deviations')}><AlertTriangle size={16}/> מנות חריגות ({openDeviations.length})</button>
@@ -675,7 +700,7 @@ function DataSource({ title, icon, meta, count, acceptLabel, busy, onFiles }) {
 }
 
 function Summary({ title, value, sub, warn }) { return <div className={`summary ${warn ? 'warn' : ''}`}><span>{title}</span><b>{value}</b><small>{sub}</small></div> }
-function Executive({ icon, title, value, sub, good, warn, bad }) { return <div className={`executive ${good?'good':''} ${warn?'warn':''} ${bad?'bad':''}`}><div className="executive-icon">{icon}</div><div><span>{title}</span><b>{value}</b><small>{sub}</small></div></div> }
+function Executive({ icon, title, value, sub, good, warn, bad, onClick }) { return <button type="button" className={`executive ${good?'good':''} ${warn?'warn':''} ${bad?'bad':''} ${onClick?'clickable':''}`} onClick={onClick}><div className="executive-icon">{icon}</div><div><span>{title}</span><b>{value}</b><small>{sub}</small></div></button> }
 function StatusBadge({ state, label }) { return <span className={`status-pill ${state}`}>{label}</span> }
 function ForecastCard({ id, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
   return <article className={`forecast-card ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0">
