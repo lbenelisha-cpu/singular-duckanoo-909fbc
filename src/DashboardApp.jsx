@@ -273,7 +273,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
         setDataMeta(meta)
         const lastSync = [meta.production,meta.quality,meta.deviations,meta.targets].map(x=>x?.loadedAt).filter(Boolean).sort().at(-1) || new Date().toISOString()
         const health = await getCloudHealth().catch(() => null)
-        setCloudState({ mode:'cloud', lastSync, message:'מחובר למסד הנתונים המשותף', latencyMs:health?.latencyMs ?? null, live:true })
+        setCloudState({ mode:'cloud', lastSync, message:health?.versioned ? 'מחובר למסד הנתונים המשותף — מנוע גרסאות פעיל' : (health?.schemaMessage || 'מחובר לענן במצב תאימות'), latencyMs:health?.latencyMs ?? null, live:true })
         setStatus('הנתונים נטענו מ־Supabase וזמינים לכל המשתמשים')
       } catch (cloudError) {
         console.warn('Cloud restore failed; using browser cache', cloudError)
@@ -801,12 +801,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
-      <div className="side-note">Sprint 10.1: מנוע נתונים גרסאי. גרסה חדשה מופעלת רק לאחר העלאה ואימות מלאים.</div>
+      <div className="side-note">Sprint 10.1.1: מנוע נתונים גרסאי עם בדיקת תאימות לסכמת הענן. גרסה חדשה מופעלת רק לאחר העלאה ואימות מלאים.</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 10.1 — Enterprise Data Engine</p></div>
+        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 10.1.1 — Schema Recovery & Data Engine</p></div>
         <div className="header-actions">
           <div className="user-session"><UserCircle size={18}/><span><b>{currentUser?.email || 'משתמש'}</b><small>{userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>

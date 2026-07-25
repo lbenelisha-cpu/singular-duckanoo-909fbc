@@ -1,7 +1,7 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "10.1.0-enterprise-data-engine",
+  "version": "10.1.1-schema-recovery",
   "type": "module",
   "scripts": {
     "dev": "vite",
