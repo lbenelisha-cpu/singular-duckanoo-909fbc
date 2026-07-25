@@ -74,7 +74,7 @@ export default function App() {
 
   if (!cloudConfigured || configurationError) return <SetupRequired error={configurationError} />
   if (!session) return <div className="auth-page" dir="rtl"><form className="auth-card" onSubmit={signIn}>
-    <div className="auth-logo">IML<span>CONTROL</span></div>
+    <div className="auth-brand"><img src="/icons/icon-192.png" alt="IML Control"/><div className="auth-logo">IML<span>CONTROL</span></div></div>
     <div className="auth-icon"><LockKeyhole/></div><h1>כניסה למערכת</h1><p>התחבר כדי לצפות בנתוני המתקנים המשותפים.</p>
     <label><span>דוא״ל</span><div><Mail size={18}/><input type="email" value={email} onChange={e=>setEmail(e.target.value)} required autoComplete="email"/></div></label>
     <label><span>סיסמה</span><div><LockKeyhole size={18}/><input type={showPassword?'text':'password'} value={password} onChange={e=>setPassword(e.target.value)} required autoComplete="current-password"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword?<EyeOff size={18}/>:<Eye size={18}/>}</button></div></label>
@@ -87,7 +87,7 @@ export default function App() {
       <UserRoundCheck size={19}/>{busy?'מתחבר...':'כניסה כאורח — צפייה בלבד'}
     </button>
     <div className="guest-note"><ShieldCheck size={16}/> אורח יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
-    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד. · Sprint 11.1.1</small>
+    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד. · Sprint 11.1.2</small>
   </form></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   return <DashboardApp currentUser={session.user} userRole={profile?.role || 'viewer'} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>

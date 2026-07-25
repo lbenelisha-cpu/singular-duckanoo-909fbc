@@ -832,7 +832,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   return <div className="dashboard" dir="rtl">
     <aside className="side">
-      <div className="brand">IML<span>CONTROL</span></div>
+      <div className="brand branded"><img src="/icons/mark-128.png" alt="IML"/><div>IML<span>CONTROL</span></div></div>
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
@@ -843,7 +843,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <header className="header">
         <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.1.1 — Guest View & Packaging Control Tower</p></div>
         <div className="header-actions">
-          <div className="user-session"><UserCircle size={18}/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
+          <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
           {canManageData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
