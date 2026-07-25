@@ -26,6 +26,11 @@ const FACILITY_ALIASES = {
 }
 const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1528', '1524', '1542', '1543']
 const DEFAULT_FACILITIES = PRIMARY_FACILITIES
+const RESOURCE_LABELS = {
+  '1542|LQ-P-1': { station: 'P-02', line: '1 ליטר' },
+  '1542|LQ-P-5': { station: 'P-03', line: '5 ליטר' },
+  '1542|LQ-P-10': { station: 'P-04', line: '10/20 ליטר' },
+}
 const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
@@ -70,6 +75,9 @@ const idbClear = async () => {
 }
 
 const normalize = (v) => String(v ?? '').trim()
+const normalizeRouting = (v) => normalize(v).toUpperCase()
+const resourceMeta = (facility, routingGroup) => RESOURCE_LABELS[`${facility}|${normalizeRouting(routingGroup)}`] || {}
+const planningName = (row) => row.routingGroup ? `מתקן ${row.facility} · ${row.station || row.routingGroup}${row.lineName ? ` · ${row.lineName}` : ''}` : `מתקן ${row.facility}`
 const normKey = (v) => normalize(v).toLowerCase().replace(/[\s_\-./()]+/g, '')
 const num = (v) => {
   const n = Number(String(v ?? '').replace(/,/g, '').replace(/\s/g, ''))
@@ -274,7 +282,7 @@ export default function App() {
         ['סטטוס / מאפיין חריג', present('QA Status', 'Rejected characteristics', 'UD Remarks')],
       ],
       targets: [
-        ['מתקן', present('Facility', 'מתקן', 'Storage Location', 'Resource', 'משאב')],
+        ['מתקן / Storage Location', present('Storage Location', 'Facility', 'מתקן')],
         ['יעד חודשי', present('Monthly Target', 'Monthly Plan', 'Plan', 'יעד חודשי', 'תוכנית חודשית', 'Target')],
       ],
     }
@@ -313,13 +321,22 @@ export default function App() {
         } else if (kind === 'deviations') setDeviations(rows)
         else if (kind === 'targets') {
           const fallbackMonth = parseMonth(file.name, new Date())
-          const parsed = rows.map(r => ({
-            facility: canonicalFacility(getField(r, ['Facility', 'מתקן', 'Storage Location', 'Resource', 'משאב'])),
-            month: parseMonth(getField(r, ['Month', 'חודש', 'Target Month', 'Plan Month']), fallbackMonth),
-            activity: normalize(getField(r, ['Activity', 'Type', 'סוג פעילות', 'סוג', 'Production/Packaging'])) || 'אריזה',
-            target: num(getField(r, ['Monthly Target', 'Monthly Plan', 'Plan', 'יעד חודשי', 'תוכנית חודשית', 'Target'])),
-            capacity: num(getField(r, ['Capacity', 'קיבולת', 'Monthly Capacity', 'קיבולת חודשית'])), notes: normalize(getField(r, ['Notes', 'Remarks', 'הערות'])),
-          })).filter(r => r.facility && r.target > 0)
+          const parsed = rows.map(r => {
+            const facility = canonicalFacility(getField(r, ['Storage Location', 'Facility', 'מתקן']))
+            const routingGroup = normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup', 'קבוצת ניתוב', 'משאב']))
+            const mapped = resourceMeta(facility, routingGroup)
+            return {
+              facility,
+              routingGroup,
+              station: normalize(getField(r, ['Station', 'Resource', 'Work Center', 'תחנה'])) || mapped.station || '',
+              lineName: normalize(getField(r, ['Line', 'Line Description', 'Packaging Type', 'סוג אריזה', 'קו'])) || mapped.line || '',
+              month: parseMonth(getField(r, ['Month', 'חודש', 'Target Month', 'Plan Month']), fallbackMonth),
+              activity: normalize(getField(r, ['Activity', 'Type', 'סוג פעילות', 'סוג', 'Production/Packaging'])) || 'אריזה',
+              target: num(getField(r, ['Monthly Target', 'Monthly Plan', 'Plan', 'יעד חודשי', 'תוכנית חודשית', 'Target'])),
+              capacity: num(getField(r, ['Capacity', 'קיבולת', 'Monthly Capacity', 'קיבולת חודשית'])),
+              notes: normalize(getField(r, ['Notes', 'Remarks', 'הערות'])),
+            }
+          }).filter(r => r.facility && r.target > 0)
           if (!parsed.length) throw new Error(`${file.name}: לא נמצאו יעדים חודשיים תקינים`)
           storedCount = parsed.length; setTargets(parsed); if (parsed[0]?.month) setPlanningMonth(parsed[0].month)
         } else throw new Error(`${file.name}: סוג הקובץ לא זוהה. השתמש באזור הטעינה המתאים במרכז הנתונים.`)
@@ -350,6 +367,8 @@ export default function App() {
       material: normalize(getField(r, ['Material'])),
       desc: normalize(getField(r, ['Material description', 'Material Description'])),
       orderType: normalize(getField(r, ['Order Type'])),
+      routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group'])),
+      routingDescription: normalize(getField(r, ['Description', 'Routing Description'])),
       hour: finish ? finish.getHours() : null,
     }
   }).filter(r => r.facility), [production])
@@ -436,47 +455,64 @@ export default function App() {
     const totalWorkdays = workdayCount(planningMonth)
     const remainingWorkdays = Math.max(0, totalWorkdays - elapsedWorkdays)
     const monthTargets = targets.filter(t => t.month === planningMonth)
-    const ids = facilities
-    return ids.map(id => {
-      let rows = monthRows.filter(r => r.facility === id)
-      if (id === '1542') rows = rows.filter(r => r.orderType.toUpperCase().includes('ZFIN'))
-      const actual = rows.reduce((s, r) => s + r.qty, 0)
-      const targetRow = monthTargets.find(t => t.facility === id)
-      const target = targetRow?.target || 0
-      const dailyMap = new Map()
-      rows.forEach(r => { const d = iso(r.date); if (d) dailyMap.set(d, (dailyMap.get(d) || 0) + r.qty) })
-      const dailyValues = [...dailyMap.values()]
-      const actualDays = dailyValues.length
-      const average = actualDays ? actual / actualDays : 0
-      const recent = [...dailyMap.entries()].sort((a,b) => a[0].localeCompare(b[0])).slice(-7).map(([,v]) => v)
-      const recentAverage = recent.length ? recent.reduce((a,b) => a+b, 0) / recent.length : average
-      const provenMax = dailyValues.length ? Math.max(...dailyValues) : (targetRow?.capacity ? targetRow.capacity / Math.max(1, totalWorkdays) : LEGACY_DAILY_TARGETS[id] || 0)
-      const remaining = Math.max(0, target - actual)
-      const requiredDaily = remainingWorkdays ? remaining / remainingWorkdays : remaining
-      const forecast = actual + recentAverage * remainingWorkdays
-      const capacityForecast = actual + provenMax * remainingWorkdays
-      let state = 'no-target', label = 'ללא יעד'
-      if (target > 0 && actual >= target) { state = 'achieved'; label = 'היעד הושג' }
-      else if (target > 0 && remainingWorkdays === 0) { state = 'risk'; label = 'היעד לא הושג' }
-      else if (target > 0 && provenMax > 0 && requiredDaily > provenMax) { state = 'risk'; label = 'לא בר־השגה' }
-      else if (target > 0 && forecast < target) { state = 'warning'; label = 'נדרש שיפור קצב' }
-      else if (target > 0) { state = 'good'; label = 'במסלול ליעד' }
-      return {
-        id, activity: targetRow?.activity || 'אריזה', target, capacity: targetRow?.capacity || 0, actual,
-        pct: target ? actual / target * 100 : 0, remaining, requiredDaily, average, recentAverage, provenMax,
-        forecast, capacityForecast, elapsedWorkdays, remainingWorkdays, totalWorkdays,
-        orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state, label,
-      }
+
+    return facilities.flatMap(facility => {
+      const facilityTargets = monthTargets.filter(t => t.facility === facility)
+      const targetRows = facilityTargets.length ? facilityTargets : [null]
+      return targetRows.map((targetRow, index) => {
+        const routingGroup = normalizeRouting(targetRow?.routingGroup)
+        const mapped = resourceMeta(facility, routingGroup)
+        let rows = monthRows.filter(r => r.facility === facility)
+        if (facility === '1542') rows = rows.filter(r => r.orderType.toUpperCase().includes('ZFIN'))
+        if (routingGroup) rows = rows.filter(r => normalizeRouting(r.routingGroup) === routingGroup)
+        const actual = rows.reduce((sum, r) => sum + r.qty, 0)
+        const target = targetRow?.target || 0
+        const dailyMap = new Map()
+        rows.forEach(r => { const date = iso(r.date); if (date) dailyMap.set(date, (dailyMap.get(date) || 0) + r.qty) })
+        const dailyValues = [...dailyMap.values()]
+        const actualDays = dailyValues.length
+        const average = actualDays ? actual / actualDays : 0
+        const recent = [...dailyMap.entries()].sort((a,b) => a[0].localeCompare(b[0])).slice(-7).map(([,value]) => value)
+        const recentAverage = recent.length ? recent.reduce((a,b) => a+b, 0) / recent.length : average
+        const provenMax = dailyValues.length ? Math.max(...dailyValues) : (targetRow?.capacity ? targetRow.capacity / Math.max(1, totalWorkdays) : (!routingGroup ? LEGACY_DAILY_TARGETS[facility] || 0 : 0))
+        const remaining = Math.max(0, target - actual)
+        const requiredDaily = remainingWorkdays ? remaining / remainingWorkdays : remaining
+        const forecast = actual + recentAverage * remainingWorkdays
+        const capacityForecast = actual + provenMax * remainingWorkdays
+        let state = 'no-target', label = 'ללא יעד'
+        if (target > 0 && actual >= target) { state = 'achieved'; label = 'היעד הושג' }
+        else if (target > 0 && remainingWorkdays === 0) { state = 'risk'; label = 'היעד לא הושג' }
+        else if (target > 0 && provenMax > 0 && requiredDaily > provenMax) { state = 'risk'; label = 'לא בר־השגה' }
+        else if (target > 0 && forecast < target) { state = 'warning'; label = 'נדרש שיפור קצב' }
+        else if (target > 0) { state = 'good'; label = 'במסלול ליעד' }
+        return {
+          id: `${facility}::${routingGroup || `ALL-${index}`}`,
+          facility,
+          routingGroup,
+          station: targetRow?.station || mapped.station || '',
+          lineName: targetRow?.lineName || mapped.line || rows.find(r => r.routingDescription)?.routingDescription || '',
+          activity: targetRow?.activity || 'אריזה', target, capacity: targetRow?.capacity || 0, actual,
+          pct: target ? actual / target * 100 : 0, remaining, requiredDaily, average, recentAverage, provenMax,
+          forecast, capacityForecast, elapsedWorkdays, remainingWorkdays, totalWorkdays,
+          orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state, label,
+        }
+      })
     })
   }, [planningMonth, prod, targets, facilities])
+
 
   const facilityStats = useMemo(() => facilities.map(id => {
     let rows = baseFiltered.filter(r => r.facility === id)
     if (id === '1542') rows = rows.filter(r => r.orderType.toUpperCase().includes('ZFIN'))
     const actual = rows.reduce((s, r) => s + r.qty, 0)
-    const plan = planningRows.find(x => x.id === id)
-    return { id, actual, target: plan?.target || 0, pct: plan?.target ? actual / plan.target * 100 : 0, orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state: plan?.state || 'no-target', forecast: plan?.forecast || 0 }
+    const plans = planningRows.filter(x => x.facility === id)
+    const target = plans.reduce((sum, row) => sum + row.target, 0)
+    const forecast = plans.reduce((sum, row) => sum + row.forecast, 0)
+    const rank = { risk: 3, warning: 2, 'no-target': 1, good: 0, achieved: 0 }
+    const state = plans.sort((a,b) => (rank[b.state] || 0) - (rank[a.state] || 0))[0]?.state || 'no-target'
+    return { id, actual, target, pct: target ? actual / target * 100 : 0, orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state, forecast }
   }), [facilities, baseFiltered, planningRows])
+
 
   const toggleFacility = (id) => setSelectedFacilities(current => current.includes(id) ? current.filter(x => x !== id) : [...current, id])
   const allFacilitiesSelected = selectedFacilities.length === facilities.length
@@ -505,9 +541,9 @@ export default function App() {
     const highestRisk = planningRows.filter(r => r.state === 'risk').sort((a,b) => (b.requiredDaily - b.provenMax) - (a.requiredDaily - a.provenMax))[0]
     const warning = planningRows.filter(r => r.state === 'warning').sort((a,b) => a.forecast / Math.max(1,a.target) - b.forecast / Math.max(1,b.target))[0]
     const best = planningRows.filter(r => r.target > 0).sort((a,b) => (b.forecast / b.target) - (a.forecast / a.target))[0]
-    if (highestRisk) insights.push({ state:'risk', title:`מתקן ${highestRisk.id} דורש פעולה`, text:`הקצב הנדרש הוא ${fmt(highestRisk.requiredDaily)} ליום לעומת שיא מוכח של ${fmt(highestRisk.provenMax)}.` })
-    if (warning) insights.push({ state:'warning', title:`מתקן ${warning.id} נמצא בסיכון`, text:`התחזית היא ${fmt(warning.forecast)} מול יעד של ${fmt(warning.target)}. נדרש שיפור בקצב היומי.` })
-    if (best && ['good','achieved'].includes(best.state)) insights.push({ state:'good', title:`מתקן ${best.id} מוביל`, text:`התחזית הנוכחית היא ${pctFmt(best.forecast / best.target * 100)} מהיעד החודשי.` })
+    if (highestRisk) insights.push({ state:'risk', title:`${planningName(highestRisk)} דורש פעולה`, text:`הקצב הנדרש הוא ${fmt(highestRisk.requiredDaily)} ליום לעומת שיא מוכח של ${fmt(highestRisk.provenMax)}.` })
+    if (warning) insights.push({ state:'warning', title:`${planningName(warning)} נמצא בסיכון`, text:`התחזית היא ${fmt(warning.forecast)} מול יעד של ${fmt(warning.target)}. נדרש שיפור בקצב היומי.` })
+    if (best && ['good','achieved'].includes(best.state)) insights.push({ state:'good', title:`${planningName(best)} מוביל`, text:`התחזית הנוכחית היא ${pctFmt(best.forecast / best.target * 100)} מהיעד החודשי.` })
     if (openDeviations.length) insights.push({ state:'risk', title:`${openDeviations.length} חריגות איכות פתוחות`, text:'לחיצה על הכרטיס תפתח את פירוט המנות ומאפייני החריגה.' })
     if (!insights.length) insights.push({ state:'good', title:'אין מוקדים חריגים', text:'לפי הנתונים הטעונים, המתקנים נמצאים במסלול תקין ואין חריגות פתוחות.' })
     return insights.slice(0,4)
@@ -520,14 +556,21 @@ export default function App() {
 
   const exportWorkbook = () => {
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filtered.map(r => ({ Date: iso(r.date), Time: r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : '', Facility: r.facility, Order: r.order, Batch: r.batch, Material: r.material, Description: r.desc, Quantity: r.qty }))), 'Production')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(planningRows.map(r => ({ Month: planningMonth, Facility: r.id, Activity: r.activity, MonthlyTarget: r.target, Actual: r.actual, Remaining: r.remaining, RequiredDaily: r.requiredDaily, RecentAverage: r.recentAverage, ProvenMax: r.provenMax, Forecast: r.forecast, Status: r.label }))), 'Planning')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filtered.map(r => ({ Date: iso(r.date), Time: r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : '', Facility: r.facility, Order: r.order, Batch: r.batch, Material: r.material, Description: r.desc, RoutingGroup: r.routingGroup, RoutingDescription: r.routingDescription, Quantity: r.qty }))), 'Production')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(planningRows.map(r => ({ Month: planningMonth, Facility: r.facility, RoutingGroup: r.routingGroup, Station: r.station, Line: r.lineName, Activity: r.activity, MonthlyTarget: r.target, Actual: r.actual, Remaining: r.remaining, RequiredDaily: r.requiredDaily, RecentAverage: r.recentAverage, ProvenMax: r.provenMax, Forecast: r.forecast, Status: r.label }))), 'Planning')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(qualityBad.map(r => ({ Date: iso(r.date), Facility: r.facility, InspectionLot: r.inspectionLot, Order: r.order, Batch: r.batch, Material: r.material, Status: r.status }))), 'Quality')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(openDeviations.map(r => ({ Date: iso(r.date), Facility: r.facility, Batch: r.batch, Material: r.material, Status: r.status, RejectedCount: r.rejectedCount, RejectedCharacteristics: r.rejectedCharacteristics.map(x => `${x.characteristic}: ${x.value || x.qualitative || '-'} (${[x.lower, x.upper].filter(v => v !== '').join('–')} ${x.unit || ''})`).join(' | '), Remarks: r.remarks }))), 'Deviations')
-    XLSX.writeFile(wb, `IML_Sprint7_Report_${new Date().toISOString().slice(0,10)}.xlsx`)
+    XLSX.writeFile(wb, `IML_Sprint8_Resource_Report_${new Date().toISOString().slice(0,10)}.xlsx`)
   }
   const downloadTargetTemplate = () => {
-    const rows = DEFAULT_FACILITIES.map(id => ({ 'חודש': planningMonth || monthKey(new Date()), 'מתקן': id, 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' }))
+    const month = planningMonth || monthKey(new Date())
+    const rows = DEFAULT_FACILITIES.flatMap(facility => facility === '1542'
+      ? [
+          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-1', 'תחנה': 'P-02', 'סוג אריזה': '1 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' },
+          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-5', 'תחנה': 'P-03', 'סוג אריזה': '5 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' },
+          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-10', 'תחנה': 'P-04', 'סוג אריזה': '10/20 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' },
+        ]
+      : [{ 'חודש': month, 'Storage Location': facility, 'Routing group': '', 'תחנה': '', 'סוג אריזה': '', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'הערות': '' }])
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'יעדים חודשיים'); XLSX.writeFile(wb, 'IML_Monthly_Targets_Template.xlsx')
   }
   const clearAllData = () => {
@@ -648,23 +691,23 @@ export default function App() {
 
       <div className="section-title facility-title"><div className="section-title-text"><Gauge/><div><h2>תחזית חודשית לפי מתקן</h2><p>יעד חודשי, קצב נדרש, קצב אחרון, שיא מוכח ותחזית</p></div></div><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת הכול' : 'בחירת כל המתקנים'}</button></div>
       <section className="forecast-grid" id="planning-section">
-        {planningRows.map(row => <ForecastCard key={row.id} {...row} selected={selectedFacilities.includes(row.id)} onClick={() => toggleFacility(row.id)}/>) }
+        {planningRows.map(row => <ForecastCard key={row.id} {...row} selected={selectedFacilities.includes(row.facility)} onClick={() => toggleFacility(row.facility)}/>) }
         {!planningRows.length && <div className="empty wide-empty">טען קובץ יעדים חודשי כדי להציג תחזית.</div>}
       </section>
 
       <section className="alert-panel" id="alerts-section">
         <div className="panel-head"><div><BellRing/><h2>מה דורש תשומת לב היום?</h2></div><span>{alerts.length} התראות</span></div>
         <div className="alert-list">
-          {alerts.map(r => <div className={`alert-item ${r.state}`} key={r.id}><div className="alert-symbol">{r.state === 'risk' ? '!' : '⚠'}</div><div><strong>מתקן {r.id} — {r.label}</strong><p>{r.state === 'risk' ? `נדרש ${fmt(r.requiredDaily)} ליום, אך השיא המוכח הוא ${fmt(r.provenMax)}.` : `התחזית היא ${fmt(r.forecast)} מול יעד ${fmt(r.target)}. נדרש קצב של ${fmt(r.requiredDaily)} ליום.`}</p></div></div>)}
+          {alerts.map(r => <div className={`alert-item ${r.state}`} key={r.id}><div className="alert-symbol">{r.state === 'risk' ? '!' : '⚠'}</div><div><strong>{planningName(r)} — {r.label}</strong><p>{r.state === 'risk' ? `נדרש ${fmt(r.requiredDaily)} ליום, אך השיא המוכח הוא ${fmt(r.provenMax)}.` : `התחזית היא ${fmt(r.forecast)} מול יעד ${fmt(r.target)}. נדרש קצב של ${fmt(r.requiredDaily)} ליום.`}</p></div></div>)}
           {!alerts.length && <div className="empty">אין התראות תכנון לחודש הנבחר.</div>}
         </div>
       </section>
 
       <section className="daily-management">
         <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><span>{planningMonth}</span></div>
-        <div className="table-wrap"><table><thead><tr><th>מתקן</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
-          {planningRows.map(r => <tr key={r.id}><td><b>{r.id}</b></td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
-          {!planningRows.length && <tr><td colSpan="12" className="empty">אין יעדים לחודש הנבחר</td></tr>}
+        <div className="table-wrap"><table><thead><tr><th>מתקן</th><th>Routing group</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
+          {planningRows.map(r => <tr key={r.id}><td><b>{r.facility}</b></td><td>{r.routingGroup || 'כל המתקן'}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+          {!planningRows.length && <tr><td colSpan="14" className="empty">אין יעדים לחודש הנבחר</td></tr>}
         </tbody></table></div>
       </section>
 
@@ -681,7 +724,7 @@ export default function App() {
         <button className={activeTab === 'quality' ? 'active' : ''} onClick={() => setActiveTab('quality')}><FlaskConical size={16}/> איכות ({qualityBad.length})</button>
         <button className={activeTab === 'deviations' ? 'active' : ''} onClick={() => setActiveTab('deviations')}><AlertTriangle size={16}/> מנות חריגות ({openDeviations.length})</button>
       </section>
-      {activeTab === 'production' && <section className="details"><h2>רשומות תפוקה אחרונות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>שעה</th><th>מתקן</th><th>הזמנה</th><th>Batch</th><th>חומר</th><th>כמות</th></tr></thead><tbody>{filtered.slice(-200).reverse().map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : ''}</td><td>{r.facility}</td><td>{r.order}</td><td>{r.batch}</td><td>{r.desc || r.material}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="7" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'production' && <section className="details"><h2>רשומות תפוקה אחרונות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>שעה</th><th>מתקן</th><th>Routing group</th><th>הזמנה</th><th>Batch</th><th>חומר</th><th>כמות</th></tr></thead><tbody>{filtered.slice(-200).reverse().map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : ''}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch}</td><td>{r.desc || r.material}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="8" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
       {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>Material</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="7" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">מאפייני החריגה נמשכים מקובץ תוצאות האיכות לפי Batch ומציגים תוצאה מול תחום המפרט.</p><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מתקן</th><th>Batch</th><th>Material</th><th>סטטוס</th><th>מאפייני החריגה</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.facility}</td><td><b>{r.batch}</b></td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics">{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="7" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
     </main>
@@ -702,9 +745,9 @@ function DataSource({ title, icon, meta, count, acceptLabel, busy, onFiles }) {
 function Summary({ title, value, sub, warn }) { return <div className={`summary ${warn ? 'warn' : ''}`}><span>{title}</span><b>{value}</b><small>{sub}</small></div> }
 function Executive({ icon, title, value, sub, good, warn, bad, onClick }) { return <button type="button" className={`executive ${good?'good':''} ${warn?'warn':''} ${bad?'bad':''} ${onClick?'clickable':''}`} onClick={onClick}><div className="executive-icon">{icon}</div><div><span>{title}</span><b>{value}</b><small>{sub}</small></div></button> }
 function StatusBadge({ state, label }) { return <span className={`status-pill ${state}`}>{label}</span> }
-function ForecastCard({ id, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
+function ForecastCard({ facility, routingGroup, station, lineName, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
   return <article className={`forecast-card ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0">
-    <div className="forecast-head"><div><small>מתקן</small><h3>{id}</h3></div><StatusBadge state={state} label={label}/></div>
+    <div className="forecast-head"><div><small>מתקן</small><h3>{facility}</h3>{routingGroup && <div className="forecast-resource"><b>{station || routingGroup}</b><span>{lineName || routingGroup}</span><small>{routingGroup}</small></div>}</div><StatusBadge state={state} label={label}/></div>
     <div className="forecast-main"><div><span>ביצוע</span><b>{pctFmt(pct)}</b></div><div><span>תחזית</span><b>{target ? pctFmt(forecast / target * 100) : '—'}</b></div></div>
     <div className="bar"><i style={{width:`${Math.min(100, pct)}%`}}/></div>
     <div className="forecast-values"><span>יעד<strong>{fmt(target)}</strong></span><span>בפועל<strong>{fmt(actual)}</strong></span><span>נותר<strong>{fmt(remaining)}</strong></span></div>
