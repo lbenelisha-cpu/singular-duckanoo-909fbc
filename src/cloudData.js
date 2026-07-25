@@ -2,136 +2,216 @@ import { supabase } from './supabase'
 
 export const CLOUD_KINDS = ['production', 'quality', 'deviations', 'targets']
 export const FUTURE_CLOUD_KINDS = [...CLOUD_KINDS, 'packaging_plan']
-const CHUNK_SIZE = 500
-const INSERT_BATCH_SIZE = 4
+const ROWS_PER_CHUNK = 350
+const CHUNKS_PER_REQUEST = 8
 
 function requireClient() {
   if (!supabase) throw new Error('Supabase client is not configured')
 }
 
-function newUploadId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16) })
+function emit(onProgress, phase, completed, total, message) {
+  const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
+  onProgress?.({ phase, completed, total, percent, message })
 }
 
-export async function loadCloudDataset(kind) {
+async function readVersionChunks(versionId, expectedChunks = 0, onProgress) {
+  const chunks = []
+  const pageSize = 500
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('iml_dataset_chunks')
+      .select('chunk_index,payload')
+      .eq('version_id', versionId)
+      .order('chunk_index', { ascending: true })
+      .range(from, from + pageSize - 1)
+    if (error) throw error
+    chunks.push(...(data || []))
+    emit(onProgress, 'download', chunks.length, expectedChunks || Math.max(chunks.length, 1), 'מוריד נתונים מהענן')
+    if (!data || data.length < pageSize) break
+  }
+  return chunks
+}
+
+export async function loadCloudDataset(kind, onProgress) {
   requireClient()
   const { data: source, error: sourceError } = await supabase
     .from('iml_data_sources')
-    .select('kind,upload_id,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at')
+    .select('kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at,active_version_id')
     .eq('kind', kind)
     .maybeSingle()
   if (sourceError) throw sourceError
   if (!source) return { rows: [], meta: null }
 
+  // Sprint 10 versioned storage. Legacy chunks remain readable during migration.
+  if (source.active_version_id) {
+    const { data: version, error: versionError } = await supabase
+      .from('iml_dataset_versions')
+      .select('id,version_no,chunk_count,status,created_at,activated_at')
+      .eq('id', source.active_version_id)
+      .single()
+    if (versionError) throw versionError
+    const chunks = await readVersionChunks(version.id, version.chunk_count, onProgress)
+    return {
+      rows: chunks.flatMap(chunk => Array.isArray(chunk.payload) ? chunk.payload : []),
+      meta: {
+        fileName: source.file_name,
+        rows: Number(source.row_count || 0),
+        rawRows: Number(source.raw_row_count || 0),
+        facilities: source.facilities,
+        loadedAt: source.loaded_at || source.updated_at,
+        loadedBy: source.loaded_by_email,
+        valid: true,
+        source: 'cloud',
+        version: version.version_no,
+        versionId: version.id,
+      },
+    }
+  }
+
   const chunks = []
-  const pageSize = 250
+  const pageSize = 500
   for (let from = 0; ; from += pageSize) {
-    let query = supabase
+    const { data, error } = await supabase
       .from('iml_data_chunks')
       .select('chunk_index,payload')
       .eq('kind', kind)
       .order('chunk_index', { ascending: true })
       .range(from, from + pageSize - 1)
-    if (source.upload_id) query = query.eq('upload_id', source.upload_id)
-    const { data, error } = await query
     if (error) throw error
     chunks.push(...(data || []))
     if (!data || data.length < pageSize) break
   }
-
-  const rows = chunks.flatMap(chunk => Array.isArray(chunk.payload) ? chunk.payload : [])
-  if (source.row_count && rows.length !== Number(source.row_count)) {
-    throw new Error(`Cloud dataset ${kind} is incomplete: expected ${source.row_count}, received ${rows.length}`)
-  }
-
   return {
-    rows,
+    rows: chunks.flatMap(chunk => Array.isArray(chunk.payload) ? chunk.payload : []),
     meta: {
       fileName: source.file_name,
-      rows: source.row_count,
-      rawRows: source.raw_row_count,
+      rows: Number(source.row_count || 0),
+      rawRows: Number(source.raw_row_count || 0),
       facilities: source.facilities,
       loadedAt: source.loaded_at || source.updated_at,
       loadedBy: source.loaded_by_email,
       valid: true,
       source: 'cloud',
+      version: 0,
     },
   }
 }
 
 export async function loadAllCloudDatasets(onProgress) {
   const result = {}
-  for (const kind of CLOUD_KINDS) {
-    onProgress?.(kind)
+  for (let index = 0; index < CLOUD_KINDS.length; index += 1) {
+    const kind = CLOUD_KINDS[index]
+    onProgress?.({ kind, phase: 'dataset', percent: Math.round((index / CLOUD_KINDS.length) * 100) })
     result[kind] = await loadCloudDataset(kind)
   }
+  onProgress?.({ kind: '', phase: 'complete', percent: 100 })
   return result
 }
 
 export async function uploadCloudDataset(kind, rows, meta, user, onProgress) {
   requireClient()
   if (!CLOUD_KINDS.includes(kind)) throw new Error(`Unsupported dataset kind: ${kind}`)
+  if (!Array.isArray(rows)) throw new Error('Dataset rows must be an array')
 
-  const uploadId = newUploadId()
+  const startedAt = Date.now()
   const chunks = []
-  for (let index = 0; index < rows.length; index += CHUNK_SIZE) {
-    chunks.push({
+  for (let index = 0; index < rows.length; index += ROWS_PER_CHUNK) {
+    chunks.push(rows.slice(index, index + ROWS_PER_CHUNK))
+  }
+  emit(onProgress, 'prepare', 1, 1, `הוכנו ${chunks.length} מקטעים`) 
+
+  const { data: version, error: versionError } = await supabase
+    .from('iml_dataset_versions')
+    .insert({
       kind,
-      upload_id: uploadId,
-      chunk_index: Math.floor(index / CHUNK_SIZE),
-      payload: rows.slice(index, index + CHUNK_SIZE),
+      file_name: meta.fileName || '',
+      row_count: rows.length,
+      raw_row_count: meta.rawRows ?? rows.length,
+      facilities: meta.facilities || 0,
+      chunk_count: chunks.length,
+      uploaded_by: user?.id || null,
+      uploaded_by_email: user?.email || '',
+      status: 'uploading',
     })
+    .select('id,version_no')
+    .single()
+  if (versionError) throw versionError
+
+  try {
+    for (let offset = 0; offset < chunks.length; offset += CHUNKS_PER_REQUEST) {
+      const batch = chunks.slice(offset, offset + CHUNKS_PER_REQUEST).map((payload, batchIndex) => ({
+        version_id: version.id,
+        chunk_index: offset + batchIndex,
+        payload,
+        row_count: payload.length,
+      }))
+      const { error } = await supabase.from('iml_dataset_chunks').insert(batch)
+      if (error) throw error
+      emit(onProgress, 'upload', Math.min(offset + batch.length, chunks.length), chunks.length || 1, 'מעלה מקטעים ל־Supabase')
+    }
+
+    emit(onProgress, 'verify', 0, 1, 'מאמת את הטעינה לפני הפעלה')
+    const { data: verification, error: verifyError } = await supabase
+      .from('iml_dataset_chunks')
+      .select('row_count')
+      .eq('version_id', version.id)
+    if (verifyError) throw verifyError
+    const verifiedRows = (verification || []).reduce((sum, item) => sum + Number(item.row_count || 0), 0)
+    if (verifiedRows !== rows.length || (verification || []).length !== chunks.length) {
+      throw new Error(`אימות הטעינה נכשל: נשמרו ${verifiedRows} מתוך ${rows.length} רשומות`)
+    }
+    emit(onProgress, 'verify', 1, 1, 'האימות הסתיים בהצלחה')
+
+    const { error: activateError } = await supabase.rpc('iml_activate_dataset_version', {
+      p_version_id: version.id,
+    })
+    if (activateError) throw activateError
+
+    await supabase.from('iml_upload_history').insert({
+      kind,
+      file_name: meta.fileName || '',
+      row_count: rows.length,
+      raw_row_count: meta.rawRows ?? rows.length,
+      uploaded_by: user?.id || null,
+      uploaded_by_email: user?.email || '',
+      status: 'success',
+      version_id: version.id,
+      duration_ms: Date.now() - startedAt,
+    })
+    emit(onProgress, 'complete', 1, 1, 'הגרסה הופעלה וזמינה לכל המשתמשים')
+
+    return {
+      ...meta,
+      rows: rows.length,
+      loadedAt: new Date().toISOString(),
+      loadedBy: user?.email || '',
+      source: 'cloud',
+      version: version.version_no,
+      versionId: version.id,
+    }
+  } catch (error) {
+    await supabase.from('iml_dataset_versions').update({ status: 'failed', error_message: error.message }).eq('id', version.id)
+    await supabase.from('iml_upload_history').insert({
+      kind,
+      file_name: meta.fileName || '',
+      row_count: rows.length,
+      raw_row_count: meta.rawRows ?? rows.length,
+      uploaded_by: user?.id || null,
+      uploaded_by_email: user?.email || '',
+      status: 'failed',
+      error_message: error.message,
+      version_id: version.id,
+      duration_ms: Date.now() - startedAt,
+    })
+    throw error
   }
-
-  // Upload the new version first. The shared metadata is switched only after
-  // every chunk is safely stored, so a failed upload never replaces good data.
-  for (let index = 0; index < chunks.length; index += INSERT_BATCH_SIZE) {
-    const batch = chunks.slice(index, index + INSERT_BATCH_SIZE)
-    const { error } = await supabase.from('iml_data_chunks').insert(batch)
-    if (error) throw error
-    onProgress?.({ uploadedChunks: Math.min(index + batch.length, chunks.length), totalChunks: chunks.length })
-  }
-
-  const cloudMeta = {
-    kind,
-    upload_id: uploadId,
-    file_name: meta.fileName || '',
-    row_count: rows.length,
-    raw_row_count: meta.rawRows ?? rows.length,
-    facilities: meta.facilities || 0,
-    loaded_at: meta.loadedAt || new Date().toISOString(),
-    loaded_by: user?.id || null,
-    loaded_by_email: user?.email || '',
-    updated_at: new Date().toISOString(),
-  }
-  const { error: sourceError } = await supabase.from('iml_data_sources').upsert(cloudMeta, { onConflict: 'kind' })
-  if (sourceError) throw sourceError
-
-  await supabase.from('iml_upload_history').insert({
-    kind,
-    file_name: cloudMeta.file_name,
-    row_count: cloudMeta.row_count,
-    raw_row_count: cloudMeta.raw_row_count,
-    uploaded_by: cloudMeta.loaded_by,
-    uploaded_by_email: cloudMeta.loaded_by_email,
-    status: 'success',
-  })
-
-  // Cleanup is deliberately best-effort. It must never turn a completed upload
-  // into an error if Supabase needs longer to remove an older large version.
-  supabase.rpc('iml_cleanup_old_chunks', { p_kind: kind, p_keep_upload_id: uploadId }).then(({ error }) => {
-    if (error) console.warn('Old cloud chunks cleanup was deferred', error)
-  })
-
-  return { ...meta, rows: rows.length, loadedBy: user?.email || '', source: 'cloud' }
 }
 
 export async function loadUploadHistory(limit = 25) {
   requireClient()
   const { data, error } = await supabase
     .from('iml_upload_history')
-    .select('id,kind,file_name,row_count,raw_row_count,uploaded_by_email,status,error_message,created_at')
+    .select('id,kind,file_name,row_count,raw_row_count,uploaded_by_email,status,error_message,created_at,version_id,duration_ms')
     .order('created_at', { ascending: false })
     .limit(limit)
   if (error) throw error
@@ -141,21 +221,15 @@ export async function loadUploadHistory(limit = 25) {
 export async function getCloudHealth() {
   requireClient()
   const started = Date.now()
-  // Avoid COUNT(*) on RLS-protected tables; it can time out on the free tier.
-  const { data, error } = await supabase
-    .from('iml_data_sources')
-    .select('kind,updated_at')
-    .limit(10)
+  const { data, error } = await supabase.from('iml_data_sources').select('kind').limit(10)
   if (error) throw error
   return { online: true, datasets: data?.length || 0, latencyMs: Date.now() - started, checkedAt: new Date().toISOString() }
 }
 
 export async function deleteAllCloudDatasets(user) {
   requireClient()
-  const { error: chunksError } = await supabase.from('iml_data_chunks').delete().in('kind', CLOUD_KINDS)
-  if (chunksError) throw chunksError
-  const { error: sourcesError } = await supabase.from('iml_data_sources').delete().in('kind', CLOUD_KINDS)
-  if (sourcesError) throw sourcesError
+  const { error } = await supabase.rpc('iml_delete_all_datasets')
+  if (error) throw error
   await supabase.from('iml_upload_history').insert({
     kind: 'all', file_name: '', row_count: 0, raw_row_count: 0,
     uploaded_by: user?.id || null, uploaded_by_email: user?.email || '', status: 'deleted',

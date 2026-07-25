@@ -248,6 +248,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
   const [selectedBatch, setSelectedBatch] = useState('')
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
+  const [uploadProgress, setUploadProgress] = useState(null)
 
   useEffect(() => {
     let active = true
@@ -374,7 +375,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
         if (missing.length) throw new Error(`${file.name}: חסרות עמודות חובה — ${missing.join(', ')}`)
         let storedCount = rows.length
         let rowsForCloud = rows
-        if (kind === 'production') setProduction(rows)
+        if (kind === 'production') {}
         else if (kind === 'quality') {
           const compact = rows.map(r => ({
             __compactQuality: true,
@@ -389,8 +390,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
             line: normalize(getField(r, ['Production Line'])), remarks: normalize(getField(r, ['Charactristic Remarks', 'Characteristic Remarks', 'Batch Remarks'])),
             qualitative: normalize(getField(r, ['Qualitative'])),
           })).filter(r => r.batch || r.inspectionLot)
-          storedCount = compact.length; rowsForCloud = compact; setQuality(compact)
-        } else if (kind === 'deviations') setDeviations(rows)
+          storedCount = compact.length; rowsForCloud = compact
+        } else if (kind === 'deviations') {}
         else if (kind === 'targets') {
           const fallbackMonth = parseMonth(file.name, new Date())
           const parsed = rows.map(r => {
@@ -410,22 +411,27 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
             }
           }).filter(r => r.facility && r.target > 0)
           if (!parsed.length) throw new Error(`${file.name}: לא נמצאו יעדים חודשיים תקינים`)
-          storedCount = parsed.length; rowsForCloud = parsed; setTargets(parsed); if (parsed[0]?.month) setPlanningMonth(parsed[0].month)
+          storedCount = parsed.length; rowsForCloud = parsed; if (parsed[0]?.month) setPlanningMonth(parsed[0].month)
         } else throw new Error(`${file.name}: סוג הקובץ לא זוהה. השתמש באזור הטעינה המתאים במרכז הנתונים.`)
         const facilitiesFound = new Set(rows.slice(0, 5000).map(r => canonicalFacility(getField(r, ['Storage Location','Inspection Lot Storage Location','Process Order Storage Location','Facility','Production Line','מתקן']))).filter(Boolean)).size
         const nextMeta = { fileName:file.name, rows:storedCount, rawRows:rows.length, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
         setStatus(`מעלה את ${file.name} למסד המשותף...`)
+        setUploadProgress({ fileName:file.name, kind, phase:'prepare', percent:0, message:'מכין את הנתונים' })
         const savedMeta = await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progress => {
-          const pct = progress.totalChunks ? Math.round(progress.uploadedChunks / progress.totalChunks * 100) : 0
-          setStatus(`מעלה את ${file.name} לענן — ${pct}% (${progress.uploadedChunks}/${progress.totalChunks})`)
+          setUploadProgress({ fileName:file.name, kind, ...progress })
+          setStatus(`${file.name}: ${progress.message} (${progress.percent}%)`)
         })
+        if (kind === 'production') setProduction(rowsForCloud)
+        else if (kind === 'quality') setQuality(rowsForCloud)
+        else if (kind === 'deviations') setDeviations(rowsForCloud)
+        else if (kind === 'targets') setTargets(rowsForCloud)
         setDataMeta(current => ({ ...current, [kind]: savedMeta }))
         setCloudState({ mode:'cloud', lastSync:savedMeta.loadedAt, message:'מחובר ומסונכרן עם Supabase', latencyMs:cloudState.latencyMs, live:true })
         loaded.push(`${file.name}: ${fmt(storedCount)} רשומות בענן`)
       }
       setStatus(`הטעינה לענן הושלמה — ${loaded.join(' | ')}`)
     } catch (e) { console.error(e); setStatus(`שגיאה בטעינה לענן: ${e.message}`); setCloudState(current => ({ ...current, mode:'error', message:e.message })) }
-    finally { setBusy(false) }
+    finally { setBusy(false); setTimeout(() => setUploadProgress(null), 1800) }
   }
 
   const handleFiles = (files) => loadFiles(files)
@@ -755,7 +761,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
       setProduction([]); setQuality([]); setDeviations([]); setTargets([]); setDataMeta({ production:null, quality:null, deviations:null, targets:null }); localStorage.removeItem(STORAGE_KEY); await idbClear().catch(console.warn)
       setStatus('כל הנתונים נמחקו מהענן'); setCloudState({ mode:'cloud', lastSync:new Date().toISOString(), message:'מחובר למסד המשותף', latencyMs:cloudState.latencyMs, live:true }); setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPlanningMonth(''); setAdditionalFacilities([]); setFacilityToAdd(''); setPeriodYear(''); setPeriodQuarter('')
     } catch (error) { setStatus(`מחיקת הנתונים מהענן נכשלה: ${error.message}`) }
-    finally { setBusy(false) }
+    finally { setBusy(false); setTimeout(() => setUploadProgress(null), 1800) }
   }
   const dailyTrend = useMemo(() => {
     const map = new Map(); filtered.forEach(r => { const d = iso(r.date); if (d) map.set(d, (map.get(d) || 0) + r.qty) })
@@ -795,12 +801,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
-      <div className="side-note">Sprint 9.2.2: העלאה בטוחה לענן. גרסה חדשה נכנסת לשימוש רק לאחר שכל הרשומות נשמרו.</div>
+      <div className="side-note">Sprint 10.1: מנוע נתונים גרסאי. גרסה חדשה מופעלת רק לאחר העלאה ואימות מלאים.</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 9.2.2 — ענן יציב והעלאות גדולות</p></div>
+        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 10.1 — Enterprise Data Engine</p></div>
         <div className="header-actions">
           <div className="user-session"><UserCircle size={18}/><span><b>{currentUser?.email || 'משתמש'}</b><small>{userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -812,6 +818,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', onSignO
       </header>
 
       <div className="load-status"><CheckCircle2 size={18}/>{status}</div>
+      {uploadProgress && <section className="upload-progress-card"><div className="upload-progress-head"><strong>{uploadProgress.fileName}</strong><span>{uploadProgress.percent}%</span></div><div className="upload-progress-track"><div style={{width:`${uploadProgress.percent}%`}}/></div><small>{uploadProgress.message}</small></section>}
 
       <section className={`cloud-status ${cloudState.mode}`}>
         <div className="cloud-status-icon">{cloudState.mode === 'offline' ? <WifiOff/> : <Cloud/>}</div>

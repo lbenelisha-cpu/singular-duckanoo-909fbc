@@ -78,3 +78,9 @@
 .cloud-status.offline,.cloud-status.error{background:#fff7e6;border-color:#f2ce7d}.cloud-status.offline .cloud-status-icon,.cloud-status.error .cloud-status-icon{background:#ffedbd;color:#9a6a00}
 .cloud-source-label{color:#087f6d!important;font-weight:700}
 @media(max-width:800px){.cloud-status{grid-template-columns:auto 1fr}.cloud-status-meta{grid-column:1/-1;border-right:0;border-top:1px solid #cfe7e2;padding:10px 0 0;min-width:0}}
+
+/* Sprint 10.1 upload transaction progress */
+.upload-progress-card{margin:0 0 14px;background:#fff;border:1px solid #d8e2ea;border-radius:14px;padding:14px 16px;box-shadow:0 5px 18px rgba(31,55,74,.07)}
+.upload-progress-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:9px}.upload-progress-head strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.upload-progress-head span{font-weight:800;color:#176b87}
+.upload-progress-track{height:11px;background:#e8eef2;border-radius:999px;overflow:hidden}.upload-progress-track>div{height:100%;background:linear-gradient(90deg,#149f75,#1b7ea4);border-radius:999px;transition:width .2s ease}
+.upload-progress-card small{display:block;margin-top:8px;color:#5f7180}

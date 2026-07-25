@@ -1,7 +1,7 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "9.2.2-cloud-stable",
+  "version": "10.1.0-enterprise-data-engine",
   "type": "module",
   "scripts": {
     "dev": "vite",
