@@ -1,7 +1,7 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "7.0.0-planning-forecast",
+  "version": "8.1.0-data-center",
   "type": "module",
   "scripts": {
     "dev": "vite",

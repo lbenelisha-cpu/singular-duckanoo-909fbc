@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw
 } from 'lucide-react'
 import './styles.css'
 
@@ -221,6 +221,7 @@ export default function App() {
   const [facilityToAdd, setFacilityToAdd] = useState('')
   const [periodYear, setPeriodYear] = useState('')
   const [periodQuarter, setPeriodQuarter] = useState('')
+  const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
 
   useEffect(() => {
     let active = true
@@ -230,6 +231,7 @@ export default function App() {
         if (!active || !saved) return
         setProduction(saved.production || []); setQuality(saved.quality || [])
         setDeviations(saved.deviations || []); setTargets(saved.targets || [])
+        setDataMeta(saved.dataMeta || { production:null, quality:null, deviations:null, targets:null })
         setStatus('הנתונים האחרונים שוחזרו ממסד הנתונים בדפדפן')
       } catch (e) {
         console.warn('Could not restore IndexedDB data', e)
@@ -248,13 +250,38 @@ export default function App() {
   useEffect(() => {
     if (!production.length && !quality.length && !deviations.length && !targets.length) return
     const timer = setTimeout(() => {
-      idbSet({ production, quality, deviations, targets, savedAt: new Date().toISOString() })
+      idbSet({ production, quality, deviations, targets, dataMeta, savedAt: new Date().toISOString() })
         .catch(e => { console.error(e); setStatus('הנתונים נטענו, אך שמירתם בדפדפן נכשלה') })
     }, 800)
     return () => clearTimeout(timer)
-  }, [production, quality, deviations, targets])
+  }, [production, quality, deviations, targets, dataMeta])
 
-  const handleFiles = async (files) => {
+  const validateRows = (kind, rows) => {
+    const sample = rows.slice(0, 250)
+    const present = (...names) => sample.some(r => names.some(n => getField(r, [n]) !== ''))
+    const checks = {
+      production: [
+        ['מתקן / Storage Location', present('Storage Location', 'Storage location')],
+        ['כמות', present('Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity')],
+        ['Order או Batch', present('Order', 'Process Order', 'Batch', 'Batch Number')],
+      ],
+      quality: [
+        ['Inspection Lot או Batch', present('Inspection Lot', 'Inspection Lot #', 'Batch', 'Batch Number')],
+        ['מאפיין או סטטוס איכות', present('Master Insp Charactristic', 'Master Inspection Characteristic', 'Result Status', 'QA Approval')],
+      ],
+      deviations: [
+        ['Batch', present('Batch', 'Batch Number')],
+        ['סטטוס / מאפיין חריג', present('QA Status', 'Rejected characteristics', 'UD Remarks')],
+      ],
+      targets: [
+        ['מתקן', present('Facility', 'מתקן', 'Storage Location', 'Resource', 'משאב')],
+        ['יעד חודשי', present('Monthly Target', 'Monthly Plan', 'Plan', 'יעד חודשי', 'תוכנית חודשית', 'Target')],
+      ],
+    }
+    return (checks[kind] || []).filter(([, ok]) => !ok).map(([label]) => label)
+  }
+
+  const loadFiles = async (files, forcedKind = '') => {
     if (!files.length) return
     setBusy(true)
     try {
@@ -262,51 +289,51 @@ export default function App() {
       for (const file of files) {
         setStatus(`קורא את ${file.name}...`)
         const rows = await readWorkbook(file)
-        const kind = classifyFile(rows)
+        const detected = classifyFile(rows)
+        const kind = forcedKind || detected
+        const missing = validateRows(kind, rows)
+        if (missing.length) throw new Error(`${file.name}: חסרות עמודות חובה — ${missing.join(', ')}`)
+        let storedCount = rows.length
         if (kind === 'production') setProduction(rows)
-        if (kind === 'quality') {
+        else if (kind === 'quality') {
           const compact = rows.map(r => ({
             __compactQuality: true,
             facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
             date: excelDate(getField(r, ['Date of Lot Creation', 'Start Date of Inspection', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date'])),
-            batch: normalize(getField(r, ['Batch', 'Batch Number'])),
-            material: normalize(getField(r, ['Material', 'Material #'])),
-            order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])),
-            status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
-            approval: normalize(getField(r, ['QA Approval'])),
-            inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
+            batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, ['Material', 'Material #'])),
+            order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])), status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
+            approval: normalize(getField(r, ['QA Approval'])), inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
             characteristic: normalize(getField(r, ['Master Insp Charactristic', 'Master Inspection Characteristic'])),
-            value: normalize(getField(r, ['Arithmetic Mean of Valid Measured Values'])),
-            lower: normalize(getField(r, ['Lower Specif Limit', 'Lower Spec Limit'])),
-            upper: normalize(getField(r, ['Upper Specif Limit', 'Upper Spec Limit'])),
-            unit: normalize(getField(r, ['Unit of Measurement'])),
-            line: normalize(getField(r, ['Production Line'])),
-            remarks: normalize(getField(r, ['Charactristic Remarks', 'Characteristic Remarks', 'Batch Remarks'])),
+            value: normalize(getField(r, ['Arithmetic Mean of Valid Measured Values'])), lower: normalize(getField(r, ['Lower Specif Limit', 'Lower Spec Limit'])),
+            upper: normalize(getField(r, ['Upper Specif Limit', 'Upper Spec Limit'])), unit: normalize(getField(r, ['Unit of Measurement'])),
+            line: normalize(getField(r, ['Production Line'])), remarks: normalize(getField(r, ['Charactristic Remarks', 'Characteristic Remarks', 'Batch Remarks'])),
             qualitative: normalize(getField(r, ['Qualitative'])),
           })).filter(r => r.batch || r.inspectionLot)
-          setQuality(compact)
-        }
-        if (kind === 'deviations') setDeviations(rows)
-        if (kind === 'targets') {
+          storedCount = compact.length; setQuality(compact)
+        } else if (kind === 'deviations') setDeviations(rows)
+        else if (kind === 'targets') {
           const fallbackMonth = parseMonth(file.name, new Date())
           const parsed = rows.map(r => ({
             facility: canonicalFacility(getField(r, ['Facility', 'מתקן', 'Storage Location', 'Resource', 'משאב'])),
             month: parseMonth(getField(r, ['Month', 'חודש', 'Target Month', 'Plan Month']), fallbackMonth),
             activity: normalize(getField(r, ['Activity', 'Type', 'סוג פעילות', 'סוג', 'Production/Packaging'])) || 'אריזה',
             target: num(getField(r, ['Monthly Target', 'Monthly Plan', 'Plan', 'יעד חודשי', 'תוכנית חודשית', 'Target'])),
-            capacity: num(getField(r, ['Capacity', 'קיבולת', 'Monthly Capacity', 'קיבולת חודשית'])),
-            notes: normalize(getField(r, ['Notes', 'Remarks', 'הערות'])),
+            capacity: num(getField(r, ['Capacity', 'קיבולת', 'Monthly Capacity', 'קיבולת חודשית'])), notes: normalize(getField(r, ['Notes', 'Remarks', 'הערות'])),
           })).filter(r => r.facility && r.target > 0)
-          setTargets(parsed)
-          if (parsed[0]?.month) setPlanningMonth(parsed[0].month)
-        }
-        loaded.push(`${file.name}: ${fmt(rows.length)} רשומות${kind === 'unknown' ? ' (סוג לא זוהה)' : ''}`)
+          if (!parsed.length) throw new Error(`${file.name}: לא נמצאו יעדים חודשיים תקינים`)
+          storedCount = parsed.length; setTargets(parsed); if (parsed[0]?.month) setPlanningMonth(parsed[0].month)
+        } else throw new Error(`${file.name}: סוג הקובץ לא זוהה. השתמש באזור הטעינה המתאים במרכז הנתונים.`)
+        const facilitiesFound = new Set(rows.slice(0, 5000).map(r => canonicalFacility(getField(r, ['Storage Location','Inspection Lot Storage Location','Process Order Storage Location','Facility','Production Line','מתקן']))).filter(Boolean)).size
+        setDataMeta(current => ({ ...current, [kind]: { fileName:file.name, rows:storedCount, rawRows:rows.length, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true } }))
+        loaded.push(`${file.name}: ${fmt(storedCount)} רשומות`)
       }
       setStatus(`נטען בהצלחה — ${loaded.join(' | ')}`)
-    } catch (e) {
-      console.error(e); setStatus(`שגיאה בקריאת קובץ: ${e.message}`)
-    } finally { setBusy(false) }
+    } catch (e) { console.error(e); setStatus(`שגיאה בקריאת קובץ: ${e.message}`) }
+    finally { setBusy(false) }
   }
+
+  const handleFiles = (files) => loadFiles(files)
+
 
   const prod = useMemo(() => production.map(r => {
     const finish = combineExcelDateTime(
@@ -454,7 +481,7 @@ export default function App() {
   }
   const clearAllData = () => {
     if (!window.confirm('למחוק את כל הנתונים והיעדים השמורים בדפדפן?')) return
-    setProduction([]); setQuality([]); setDeviations([]); setTargets([]); localStorage.removeItem(STORAGE_KEY); idbClear().catch(console.warn)
+    setProduction([]); setQuality([]); setDeviations([]); setTargets([]); setDataMeta({ production:null, quality:null, deviations:null, targets:null }); localStorage.removeItem(STORAGE_KEY); idbClear().catch(console.warn)
     setStatus('כל הנתונים נמחקו'); setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPlanningMonth(''); setAdditionalFacilities([]); setFacilityToAdd(''); setPeriodYear(''); setPeriodQuarter('')
   }
   const dailyTrend = useMemo(() => {
@@ -495,12 +522,12 @@ export default function App() {
       <div className="side-stat"><Database/><div><b>{fmt(production.length)}</b><small>רשומות תפוקה</small></div></div>
       <div className="side-stat"><Target/><div><b>{targets.length}</b><small>יעדים חודשיים</small></div></div>
       <div className="side-stat"><FlaskConical/><div><b>{fmt(quality.length + deviations.length)}</b><small>רשומות איכות</small></div></div>
-      <div className="side-note">Sprint 7: יעד חודשי, קצב דינמי, תחזית והתראות. הנתונים נשמרים בדפדפן בלבד.</div>
+      <div className="side-note">Sprint 8.1 Build 1: מרכז נתונים, אימות קבצים ומנוע נתונים אחיד. הנתונים נשמרים בדפדפן בלבד.</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>מרכז שליטה למתקני אריזה</h1><p>תפוקה, איכות, יעדים חודשיים ותחזית סוף חודש</p></div>
+        <div><h1>מרכז שליטה למתקני אריזה</h1><p>Sprint 8.1 — מנוע נתונים, בקרה על מקורות ותחזית סוף חודש</p></div>
         <div className="header-actions">
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
@@ -510,6 +537,17 @@ export default function App() {
       </header>
 
       <div className="load-status"><CheckCircle2 size={18}/>{status}</div>
+
+      <section className="data-center">
+        <div className="panel-head"><div><ShieldCheck/><h2>מרכז נתונים</h2></div><span>4 מקורות מידע</span></div>
+        <p className="data-center-help">כל מקור נטען בנפרד ועובר בדיקת עמודות לפני שהוא נכנס למערכת. הטעינה הכללית בראש הדף נשארה זמינה.</p>
+        <div className="data-source-grid">
+          <DataSource title="תפוקות" icon={<Factory/>} meta={dataMeta.production} count={production.length} acceptLabel="טען קובץ תפוקות" busy={busy} onFiles={files => loadFiles(files, 'production')}/>
+          <DataSource title="תוצאות איכות" icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} acceptLabel="טען תוצאות איכות" busy={busy} onFiles={files => loadFiles(files, 'quality')}/>
+          <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')}/>
+          <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')}/>
+        </div>
+      </section>
 
       <section className="planning-toolbar">
         <div><Target/><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></div>
@@ -591,6 +629,17 @@ export default function App() {
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מתקן</th><th>Batch</th><th>Material</th><th>סטטוס</th><th>מאפיינים שנדחו</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.facility}</td><td>{r.batch}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span></td><td>{r.rejected}</td><td>{r.remarks}</td></tr>)}{!openDeviations.length && <tr><td colSpan="7" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
     </main>
   </div>
+}
+
+function DataSource({ title, icon, meta, count, acceptLabel, busy, onFiles }) {
+  const loaded = Boolean(meta || count)
+  const loadedAt = meta?.loadedAt ? new Date(meta.loadedAt).toLocaleString('he-IL') : 'טרם נטען'
+  return <article className={`data-source ${loaded ? 'ready' : ''}`}>
+    <div className="data-source-head"><div className="data-source-icon">{icon}</div><div><h3>{title}</h3><span>{loaded ? 'תקין וזמין' : 'ממתין לקובץ'}</span></div></div>
+    <div className="data-source-count"><b>{fmt(count)}</b><span>רשומות פעילות</span></div>
+    <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{loadedAt}</small>{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
+    <label className={`source-upload ${busy ? 'disabled' : ''}`}><RefreshCw size={16}/>{acceptLabel}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; onFiles(files) }}/></label>
+  </article>
 }
 
 function Summary({ title, value, sub, warn }) { return <div className={`summary ${warn ? 'warn' : ''}`}><span>{title}</span><b>{value}</b><small>{sub}</small></div> }
