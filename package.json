@@ -1,7 +1,7 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "9.2.1-cloud-live",
+  "version": "9.2.1.2-cloud-connection-fix",
   "type": "module",
   "scripts": {
     "dev": "vite",
