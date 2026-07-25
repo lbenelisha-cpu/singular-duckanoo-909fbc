@@ -1,7 +1,7 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "9.1.2-auth-runtime-recovery",
+  "version": "9.2.1-cloud-live",
   "type": "module",
   "scripts": {
     "dev": "vite",
