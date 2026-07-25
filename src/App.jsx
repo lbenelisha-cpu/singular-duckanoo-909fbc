@@ -118,6 +118,18 @@ const combineExcelDateTime = (dateValue, timeValue, fallbackValue = '') => {
   if (time) result.setHours(time.h, time.m, time.s, 0)
   return result
 }
+
+const shiftInfo = (date) => {
+  if (!date) return { key: 'unknown', label: 'ללא שעה', order: 9, workDate: '' }
+  const d = new Date(date)
+  const hour = d.getHours()
+  let key = 'morning', label = 'בוקר', order = 0
+  if (hour >= 15 && hour < 23) { key = 'evening'; label = 'ערב'; order = 1 }
+  else if (hour >= 23 || hour < 7) { key = 'night'; label = 'לילה'; order = 2 }
+  const work = new Date(d)
+  if (hour < 7) work.setDate(work.getDate() - 1)
+  return { key, label, order, workDate: `${work.getFullYear()}-${String(work.getMonth()+1).padStart(2,'0')}-${String(work.getDate()).padStart(2,'0')}` }
+}
 const iso = (d) => {
   if (!d) return ''
   const value = new Date(d)
@@ -371,6 +383,7 @@ export default function App() {
       routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group'])),
       routingDescription: normalize(getField(r, ['Description', 'Routing Description'])),
       hour: finish ? finish.getHours() : null,
+      shift: shiftInfo(finish),
     }
   }).filter(r => r.facility), [production])
 
@@ -571,8 +584,52 @@ export default function App() {
 
   const total = filtered.reduce((s, x) => s + x.qty, 0)
   const activeFacilities = facilityStats.filter(x => x.actual > 0).length
-  const morningQty = filtered.filter(r => r.hour !== null && r.hour >= 7 && r.hour < 19).reduce((s, r) => s + r.qty, 0)
-  const nightQty = filtered.filter(r => r.hour !== null && (r.hour >= 19 || r.hour < 7)).reduce((s, r) => s + r.qty, 0)
+  const morningQty = filtered.filter(r => r.shift?.key === 'morning').reduce((s, r) => s + r.qty, 0)
+  const eveningQty = filtered.filter(r => r.shift?.key === 'evening').reduce((s, r) => s + r.qty, 0)
+  const nightQty = filtered.filter(r => r.shift?.key === 'night').reduce((s, r) => s + r.qty, 0)
+
+  const shiftAnalysis = useMemo(() => {
+    const batchShift = new Map()
+    filtered.forEach(r => { if (r.batch && r.shift?.key !== 'unknown') batchShift.set(r.batch, r.shift) })
+    const rowsByShift = new Map(['morning','evening','night'].map(key => [key, []]))
+    filtered.forEach(r => { if (rowsByShift.has(r.shift?.key)) rowsByShift.get(r.shift.key).push(r) })
+    const labels = { morning:'בוקר', evening:'ערב', night:'לילה' }
+    const hours = { morning:'07:00–15:00', evening:'15:00–23:00', night:'23:00–07:00' }
+    return ['morning','evening','night'].map(key => {
+      const rows = rowsByShift.get(key).slice().sort((a,b) => (a.date?.getTime?.() || 0) - (b.date?.getTime?.() || 0))
+      const groups = new Map()
+      rows.forEach(r => {
+        const groupKey = `${r.shift.workDate}|${r.facility}|${r.routingGroup || 'NO-ROUTING'}`
+        const list = groups.get(groupKey) || []; list.push(r); groups.set(groupKey, list)
+      })
+      const changeovers = []
+      groups.forEach(list => {
+        list.sort((a,b) => a.date - b.date)
+        for (let i=1;i<list.length;i++) {
+          const prev=list[i-1], curr=list[i]
+          if (prev.material && curr.material && prev.material !== curr.material) {
+            const minutes = Math.max(0, Math.round((curr.date - prev.date)/60000))
+            changeovers.push({ facility:curr.facility, routingGroup:curr.routingGroup, at:curr.date, fromMaterial:prev.material, fromDesc:prev.desc, toMaterial:curr.material, toDesc:curr.desc, minutes })
+          }
+        }
+      })
+      const batches = new Set(rows.map(r=>r.batch).filter(Boolean))
+      const shiftDeviations = enrichedDeviationRows.filter(d => { const st = normalize(d.status).toLowerCase(); const isOpen = !st || !['approved','closed','מאושר','סגור'].some(x => st.includes(x)); return isOpen && d.batch && batches.has(d.batch) })
+      const total = rows.reduce((sum,r)=>sum+r.qty,0)
+      return {
+        key, label:labels[key], hours:hours[key], total,
+        orders:new Set(rows.map(r=>r.order).filter(Boolean)).size,
+        batches:batches.size,
+        materials:new Set(rows.map(r=>r.material).filter(Boolean)).size,
+        changeovers,
+        avgChangeover:changeovers.length ? changeovers.reduce((sum,c)=>sum+c.minutes,0)/changeovers.length : 0,
+        totalChangeover:changeovers.reduce((sum,c)=>sum+c.minutes,0),
+        deviations:shiftDeviations.length,
+        avgPerHour:total/8,
+        share: total ? total / Math.max(1, filtered.reduce((sum,r)=>sum+r.qty,0))*100 : 0,
+      }
+    })
+  }, [filtered, enrichedDeviationRows])
   const allQualityBad = qualityRows.filter(r => { const st = r.status.toLowerCase(); return st && !['accepted', 'תקין', 'pass', 'approved', 'מאושר'].some(x => st.includes(x)) })
   const allOpenDeviations = enrichedDeviationRows.filter(r => { const st = r.status.toLowerCase(); return !st || !['approved', 'closed', 'מאושר', 'סגור'].some(x => st.includes(x)) })
   const qualityBad = useMemo(() => allQualityBad.filter(r => (!selectedFacilities.length || selectedFacilities.includes(r.facility)) && matchesDateRange(r.date, from, to)), [allQualityBad, selectedFacilities, from, to])
@@ -734,8 +791,9 @@ export default function App() {
       <section className="summary-grid">
         <Summary title="סה״כ תפוקה מסוננת" value={fmt(total)} sub="ליטר / ק״ג לפי הקובץ"/>
         <Summary title="מתקנים פעילים" value={activeFacilities} sub={`מתוך ${facilities.length} מתקנים`}/>
-        <Summary title="משמרת בוקר" value={fmt(morningQty)} sub="07:00–19:00"/>
-        <Summary title="משמרת לילה" value={fmt(nightQty)} sub="19:00–07:00"/>
+        <Summary title="משמרת בוקר" value={fmt(morningQty)} sub="07:00–15:00"/>
+        <Summary title="משמרת ערב" value={fmt(eveningQty)} sub="15:00–23:00"/>
+        <Summary title="משמרת לילה" value={fmt(nightQty)} sub="23:00–07:00"/>
         <Summary title="חריגות פתוחות" value={openDeviations.length} sub="לפי קובץ החריגות" warn/>
         <Summary title="איכות לא תקינה" value={qualityBad.length} sub="לפי קובץ האיכות" warn/>
       </section>
@@ -772,10 +830,12 @@ export default function App() {
 
       <section className="tabs" id="details-section">
         <button className={activeTab === 'production' ? 'active' : ''} onClick={() => setActiveTab('production')}><BarChart3 size={16}/> תפוקה</button>
+        <button className={activeTab === 'shifts' ? 'active' : ''} onClick={() => setActiveTab('shifts')}><Clock3 size={16}/> ניתוח משמרות</button>
         <button className={activeTab === 'quality' ? 'active' : ''} onClick={() => setActiveTab('quality')}><FlaskConical size={16}/> איכות ({qualityBad.length})</button>
         <button className={activeTab === 'deviations' ? 'active' : ''} onClick={() => setActiveTab('deviations')}><AlertTriangle size={16}/> מנות חריגות ({openDeviations.length})</button>
       </section>
       {activeTab === 'production' && <section className="details"><h2>רשומות תפוקה אחרונות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>שעה</th><th>מתקן</th><th>Routing group</th><th>הזמנה</th><th>Batch</th><th>מק״ט חומר</th><th>תיאור חומר</th><th>כמות</th></tr></thead><tbody>{filtered.slice(-200).reverse().map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : ''}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="9" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'shifts' && <section className="details shift-intelligence"><h2>ניתוח משמרות — בוקר, ערב ולילה</h2><p className="details-note">החלפות מוצר מזוהות לפי שינוי מק״ט באותו מתקן ו-Routing group. זמן המעבר הוא פער זמן משוער בין שני דיווחים עוקבים.</p><div className="shift-card-grid">{shiftAnalysis.map(item => <article className={`shift-analysis-card shift-${item.key}`} key={item.key}><div className="shift-card-head"><div><h3>{item.label}</h3><span>{item.hours}</span></div><strong>{fmt(item.total)}</strong></div><div className="shift-metrics"><div><span>קצב ממוצע לשעה</span><b>{fmt(item.avgPerHour)}</b></div><div><span>Orders</span><b>{item.orders}</b></div><div><span>Batch</span><b>{item.batches}</b></div><div><span>מק״טים</span><b>{item.materials}</b></div><div><span>החלפות מוצר</span><b>{item.changeovers.length}</b></div><div><span>חריגות איכות</span><b>{item.deviations}</b></div><div><span>ממוצע מעבר</span><b>{fmt(item.avgChangeover)} דק׳</b></div><div><span>תרומה לתפוקה</span><b>{pctFmt(item.share)}</b></div></div></article>)}</div><h3 className="shift-subtitle">פירוט החלפות מוצר</h3><div className="table-wrap"><table><thead><tr><th>משמרת</th><th>שעה</th><th>מתקן</th><th>Routing group</th><th>מוצר קודם</th><th>מוצר חדש</th><th>פער דיווח משוער</th></tr></thead><tbody>{shiftAnalysis.flatMap(item => item.changeovers.map((c,i) => <tr key={`${item.key}-${i}`}><td>{item.label}</td><td>{c.at?.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})}</td><td>{c.facility}</td><td>{c.routingGroup || '—'}</td><td>{c.fromMaterial}{c.fromDesc ? ` · ${c.fromDesc}` : ''}</td><td>{c.toMaterial}{c.toDesc ? ` · ${c.toDesc}` : ''}</td><td>{fmt(c.minutes)} דקות</td></tr>))}{!shiftAnalysis.some(item => item.changeovers.length) && <tr><td colSpan="7" className="empty">לא זוהו החלפות מוצר בטווח שנבחר</td></tr>}</tbody></table></div></section>}
       {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="7" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch.</p><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="8" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
     </main>
