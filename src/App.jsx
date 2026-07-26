@@ -13,6 +13,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [connectionStatus, setConnectionStatus] = useState(null)
+  const [publicViewer, setPublicViewer] = useState(false)
 
   useEffect(() => {
     if (!cloudConfigured || configurationError) return
@@ -51,27 +52,22 @@ export default function App() {
     }
   }
 
-  const signInAsViewer = async () => {
-    const viewerEmail = import.meta.env.VITE_VIEWER_EMAIL
-    const viewerPassword = import.meta.env.VITE_VIEWER_PASSWORD
-    if (!viewerEmail || !viewerPassword) {
-      setMessage('כניסת צפייה עדיין לא הוגדרה. יש להוסיף VITE_VIEWER_EMAIL ו־VITE_VIEWER_PASSWORD ב־Netlify.')
-      return
-    }
-    setBusy(true); setMessage('')
-    try {
-      const { error } = await supabase.auth.signInWithPassword({ email: viewerEmail, password: viewerPassword })
-      if (error) setMessage(error.message === 'Invalid login credentials' ? 'חשבון הצפייה אינו מוגדר נכון ב־Supabase.' : error.message)
-    } catch (error) {
-      setMessage(connectionStatus?.message || 'לא ניתן להתחבר כרגע במצב צפייה בלבד.')
-    } finally {
-      setBusy(false)
-    }
+  const enterPublicViewer = () => {
+    setMessage('')
+    setPublicViewer(true)
   }
 
-  const signOut = async () => { if (supabase) await supabase.auth.signOut({ scope: 'local' }) }
+
+  const signOut = async () => {
+    if (publicViewer) {
+      setPublicViewer(false)
+      return
+    }
+    if (supabase) await supabase.auth.signOut({ scope: 'local' })
+  }
 
   if (!cloudConfigured || configurationError) return <SetupRequired error={configurationError} />
+  if (publicViewer) return <DashboardApp currentUser={null} userRole="viewer" isGuest={true} onSignOut={signOut}/>
   if (!session) return <div className="auth-page" dir="rtl"><form className="auth-card" onSubmit={signIn}>
     <div className="auth-brand"><img src="/icons/icon-192.png" alt="IML Control"/><div className="auth-logo">IML<span>CONTROL</span></div></div>
     <div className="auth-icon"><LockKeyhole/></div><h1>כניסה למערכת</h1><p>התחבר כדי לצפות בנתוני המתקנים המשותפים.</p>
@@ -82,11 +78,11 @@ export default function App() {
     {message && <div className="auth-error"><AlertCircle size={18}/>{message}</div>}
     <button className="auth-submit" disabled={busy}>{busy?'מתחבר...':'כניסת מנהל'}</button>
     <div className="auth-divider"><span>או</span></div>
-    <button className="auth-guest" type="button" disabled={busy || (connectionStatus && !connectionStatus.ok)} onClick={signInAsViewer}>
+    <button className="auth-guest" type="button" disabled={busy || (connectionStatus && !connectionStatus.ok)} onClick={enterPublicViewer}>
       <UserRoundCheck size={19}/>{busy?'מתחבר...':'צפייה בלבד'}
     </button>
     <div className="guest-note"><ShieldCheck size={16}/> משתמש צפייה יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
-    <small><ShieldCheck size={15}/> הגישה נשלטת באמצעות Supabase Auth והרשאות תפקיד. · Sprint 11.2.1</small>
+    <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.2.2</small>
   </form></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   return <DashboardApp currentUser={session.user} userRole={profile?.role || 'viewer'} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>
