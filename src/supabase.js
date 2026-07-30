@@ -49,26 +49,33 @@ export const configurationError = !supabaseAnonKey
     : ''
 
 function supabaseFetch(input, init = {}) {
-  const requestUrl = typeof input === 'string' ? input : input?.url || ''
-  const isSupabaseRequest = requestUrl.startsWith(supabaseUrl)
+  // Normalize every fetch input form supported by the Fetch API: string, URL,
+  // or Request. The previous implementation did not recognize URL objects,
+  // so some PostgREST requests bypassed the API-key guard and Supabase replied
+  // with "No API key found in request".
+  const baseRequest = new Request(input, init)
+  let isSupabaseRequest = false
 
-  if (!isSupabaseRequest) return fetch(input, init)
-
-  const headers = new Headers(input instanceof Request ? input.headers : undefined)
-  const initHeaders = new Headers(init.headers || {})
-  initHeaders.forEach((value, key) => headers.set(key, value))
-
-  // Every Supabase API request must carry the project key. Supabase-js normally
-  // adds it, but this explicit guard prevents browser/build edge cases that
-  // produced "No API key found in request" during Excel uploads.
-  if (!headers.has('apikey')) headers.set('apikey', supabaseAnonKey)
-
-  const requestInit = { ...init, headers }
-
-  if (input instanceof Request) {
-    return fetch(new Request(input, requestInit))
+  try {
+    const requestUrl = new URL(baseRequest.url)
+    const projectUrl = new URL(supabaseUrl)
+    isSupabaseRequest = requestUrl.origin === projectUrl.origin
+  } catch {
+    isSupabaseRequest = String(baseRequest.url || '').startsWith(supabaseUrl)
   }
-  return fetch(input, requestInit)
+
+  if (!isSupabaseRequest) return fetch(baseRequest)
+
+  const headers = new Headers(baseRequest.headers)
+  headers.set('apikey', supabaseAnonKey)
+
+  // Preserve the authenticated user's Bearer token when supabase-js supplied
+  // one. For anonymous project calls, provide the publishable key as fallback.
+  if (!headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${supabaseAnonKey}`)
+  }
+
+  return fetch(new Request(baseRequest, { headers }))
 }
 
 export const supabase = cloudConfigured && !configurationError
