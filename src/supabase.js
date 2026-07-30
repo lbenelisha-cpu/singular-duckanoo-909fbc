@@ -48,6 +48,29 @@ export const configurationError = !supabaseAnonKey
     ? 'כתובת Supabase אינה בפורמט תקין.'
     : ''
 
+function supabaseFetch(input, init = {}) {
+  const requestUrl = typeof input === 'string' ? input : input?.url || ''
+  const isSupabaseRequest = requestUrl.startsWith(supabaseUrl)
+
+  if (!isSupabaseRequest) return fetch(input, init)
+
+  const headers = new Headers(input instanceof Request ? input.headers : undefined)
+  const initHeaders = new Headers(init.headers || {})
+  initHeaders.forEach((value, key) => headers.set(key, value))
+
+  // Every Supabase API request must carry the project key. Supabase-js normally
+  // adds it, but this explicit guard prevents browser/build edge cases that
+  // produced "No API key found in request" during Excel uploads.
+  if (!headers.has('apikey')) headers.set('apikey', supabaseAnonKey)
+
+  const requestInit = { ...init, headers }
+
+  if (input instanceof Request) {
+    return fetch(new Request(input, requestInit))
+  }
+  return fetch(input, requestInit)
+}
+
 export const supabase = cloudConfigured && !configurationError
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
@@ -55,6 +78,12 @@ export const supabase = cloudConfigured && !configurationError
         autoRefreshToken: true,
         detectSessionInUrl: true,
         storageKey: 'iml-control-auth-v9212',
+      },
+      global: {
+        fetch: supabaseFetch,
+        headers: {
+          apikey: supabaseAnonKey,
+        },
       },
     })
   : null
