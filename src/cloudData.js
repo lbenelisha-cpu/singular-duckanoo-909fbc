@@ -6,8 +6,8 @@ export const FUTURE_CLOUD_KINDS = [...CLOUD_KINDS, 'packaging_plan']
 // Keep every request deliberately small. A quality file can contain hundreds of
 // thousands of rows, and large JSONB responses are what caused the database
 // statement timeouts in the previous build.
-const ROWS_PER_CHUNK = 150
-const CHUNKS_PER_UPLOAD_REQUEST = 3
+const ROWS_PER_CHUNK = 75
+const CHUNKS_PER_UPLOAD_REQUEST = 1
 const CHUNKS_PER_DOWNLOAD_PAGE = 12
 const MAX_RETRIES = 4
 const RETRY_BASE_MS = 700
@@ -230,11 +230,27 @@ export async function loadAllCloudDatasets(onProgress) {
   return result
 }
 
+
+export async function assertCloudWriteAccess() {
+  requireClient()
+  const { data: authData, error: authError } = await supabase.auth.getUser()
+  if (authError) throw authError
+  if (!authData?.user) throw new Error('אין משתמש מחובר ל־Supabase')
+
+  const { data, error } = await supabase.rpc('iml_is_admin')
+  if (error) throw error
+  if (!data) {
+    throw new Error(`למשתמש ${authData.user.email || ''} אין הרשאת מנהל ב־Supabase. יש לעדכן את role ל־admin בטבלת profiles.`)
+  }
+  return authData.user
+}
+
 export async function uploadCloudDataset(kind, rows, meta, user, onProgress) {
   requireClient()
   if (!CLOUD_KINDS.includes(kind)) throw new Error(`Unsupported dataset kind: ${kind}`)
   if (!Array.isArray(rows)) throw new Error('Dataset rows must be an array')
 
+  await assertCloudWriteAccess()
   const capability = await detectCloudSchema(true)
   if (!capability.versioned) {
     throw new Error('מנוע הגרסאות עדיין לא מותקן ב־Supabase. יש להריץ את קובץ ההגירה ולאחר מכן לרענן את האתר.')

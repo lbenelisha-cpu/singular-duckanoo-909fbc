@@ -376,7 +376,26 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         if (missing.length) throw new Error(`${file.name}: חסרות עמודות חובה — ${missing.join(', ')}`)
         let storedCount = rows.length
         let rowsForCloud = rows
-        if (kind === 'production') {}
+        if (kind === 'production') {
+          const compact = rows.map(r => ({
+            __compactProduction: true,
+            facility: canonicalFacility(getField(r, ['Storage Location', 'Storage location'])),
+            finishDate: combineExcelDateTime(
+              getField(r, ['Actual finish date', 'Actual Finish Date']),
+              getField(r, ['Actual Finish Time', 'Actual finish time']),
+              getField(r, ['Release date (actual)', 'Time Stamp'])
+            )?.toISOString?.() || '',
+            qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
+            order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
+            batch: normalize(getField(r, ['Batch', 'Batch Number'])),
+            material: normalize(getField(r, ['Material', 'Material #', 'Material Number', 'Material No.', 'מקט', 'מק"ט', 'מק״ט'])),
+            desc: normalize(getField(r, ['Material description', 'Material Description'])),
+            orderType: normalize(getField(r, ['Order Type'])),
+            routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup'])),
+          })).filter(r => r.facility && (r.qty || r.order || r.batch))
+          storedCount = compact.length
+          rowsForCloud = compact
+        }
         else if (kind === 'quality') {
           const compact = rows.map(r => ({
             __compactQuality: true,
@@ -431,7 +450,17 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         loaded.push(`${file.name}: ${fmt(storedCount)} רשומות בענן`)
       }
       setStatus(`הטעינה לענן הושלמה — ${loaded.join(' | ')}`)
-    } catch (e) { console.error(e); setStatus(`שגיאה בטעינה לענן: ${e.message}`); setCloudState(current => ({ ...current, mode:'error', message:e.message })) }
+    } catch (e) {
+      console.error('Cloud upload failed', e)
+      const technical = [e?.message, e?.details, e?.hint, e?.code].filter(Boolean).join(' | ')
+      setStatus(`שגיאה בטעינה לענן: ${technical || 'שגיאה לא ידועה'}`)
+      setCloudState(current => ({
+        ...current,
+        mode: current.lastSync ? 'cloud' : current.mode,
+        live: current.live,
+        message: `החיבור לענן פעיל, אך העלאת הקובץ נכשלה: ${technical || 'שגיאה לא ידועה'}`,
+      }))
+    }
     finally { setBusy(false); setTimeout(() => setUploadProgress(null), 1800) }
   }
 
@@ -439,6 +468,19 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
 
   const prod = useMemo(() => production.map(r => {
+    if (r?.__compactProduction) {
+      return {
+        facility: canonicalFacility(r.facility),
+        date: r.finishDate ? new Date(r.finishDate) : null,
+        qty: num(r.qty),
+        order: normalize(r.order),
+        batch: normalize(r.batch),
+        material: normalize(r.material),
+        desc: normalize(r.desc),
+        orderType: normalize(r.orderType),
+        routingGroup: normalizeRouting(r.routingGroup),
+      }
+    }
     const finish = combineExcelDateTime(
       getField(r, ['Actual finish date', 'Actual Finish Date']),
       getField(r, ['Actual Finish Time', 'Actual finish time']),
