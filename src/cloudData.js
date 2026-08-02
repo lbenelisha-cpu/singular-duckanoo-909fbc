@@ -220,14 +220,15 @@ export async function loadCloudDataset(kind, onProgress) {
 }
 
 export async function loadAllCloudDatasets(onProgress) {
-  const result = {}
-  for (let index = 0; index < CLOUD_KINDS.length; index += 1) {
-    const kind = CLOUD_KINDS[index]
+  // Download independent datasets in parallel. The previous sequential loop
+  // made startup time equal to the sum of all four downloads.
+  const entries = await Promise.all(CLOUD_KINDS.map(async (kind, index) => {
     onProgress?.({ kind, phase: 'dataset', percent: Math.round((index / CLOUD_KINDS.length) * 100) })
-    result[kind] = await loadCloudDataset(kind, progress => onProgress?.({ kind, ...progress }))
-  }
+    const dataset = await loadCloudDataset(kind, progress => onProgress?.({ kind, ...progress }))
+    return [kind, dataset]
+  }))
   onProgress?.({ kind: '', phase: 'complete', percent: 100 })
-  return result
+  return Object.fromEntries(entries)
 }
 
 

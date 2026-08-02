@@ -82,7 +82,7 @@ export default function App() {
       <UserRoundCheck size={19}/>{busy?'מתחבר...':'צפייה בלבד'}
     </button>
     <div className="guest-note"><ShieldCheck size={16}/> משתמש צפייה יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
-    <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.3.2</small>
+    <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.4.1</small>
   </form></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   return <DashboardApp currentUser={session.user} userRole={profile?.role || 'viewer'} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>

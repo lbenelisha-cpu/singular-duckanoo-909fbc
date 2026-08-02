@@ -5,7 +5,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse
 } from 'lucide-react'
-import { loadAllCloudDatasets, uploadCloudDataset, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
+import { loadAllCloudDatasets, loadCloudDataset, uploadCloudDataset, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
 import './styles.css'
 
@@ -25,6 +25,10 @@ const FACILITY_ALIASES = {
   '1541': ['1541', '41'],
   '1542': ['1542', '42-P-01', 'T42A'],
   '1543': ['1543', '42-P-03', 'T42B'],
+}
+const TARGET_FACILITY_MAP = {
+  '19': '1519', '23': '1521', '24': '1524', '25': '1525', '28': '1528',
+  '40': '1540', '41': '1541', '42': '1542', '43': '1523',
 }
 const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1528', '1524', '1542', '1543']
 const DEFAULT_FACILITIES = PRIMARY_FACILITIES
@@ -79,8 +83,33 @@ const idbClear = async () => {
 const normalize = (v) => String(v ?? '').trim()
 const normalizeRouting = (v) => normalize(v).toUpperCase()
 const resourceMeta = (facility, routingGroup) => RESOURCE_LABELS[`${facility}|${normalizeRouting(routingGroup)}`] || {}
-const planningName = (row) => row.routingGroup ? `מתקן ${row.facility} · ${row.station || row.routingGroup}${row.lineName ? ` · ${row.lineName}` : ''}` : `מתקן ${row.facility}`
+const planningName = (row) => row.resourceName || (row.routingGroup ? `מתקן ${row.facility} · ${row.station || row.routingGroup}${row.lineName ? ` · ${row.lineName}` : ''}` : `מתקן ${row.facility}`)
 const normKey = (v) => normalize(v).toLowerCase().replace(/[\s_\-./()]+/g, '')
+
+const resourceDescriptionMatches = (resourceName, description) => {
+  const resource = normalize(resourceName).toUpperCase()
+  const desc = normalize(description).toUpperCase()
+  if (!resource || !desc) return false
+
+  // Packaging resources in facility 42 are identified by the Description field.
+  if (/10\s*\/?\s*20\s*(?:L|LT|LIT)/i.test(resource)) return /(?:^|\D)(10|20)\s*(?:L|LT|LIT)(?:\D|$)/i.test(desc)
+  if (/(?:^|\D)5\s*(?:L|LT|LIT)(?:\D|$)/i.test(resource)) return /(?:^|\D)5\s*(?:L|LT|LIT)(?:\D|$)/i.test(desc)
+  if (/(?:^|\D)1\s*(?:L|LT|LIT)(?:\D|$)/i.test(resource)) return /(?:^|\D)1\s*(?:L|LT|LIT)(?:\D|$)/i.test(desc)
+
+  // For product-based targets (for example Diuron / Tolurex), compare the
+  // meaningful words from the target name with the Description value.
+  const stop = new Set(['LQ','EC','SC','WG','CS','SMALL','PACKS','PREMIX','TECH'])
+  const words = resource
+    .replace(/\([^)]*\)/g, ' ')
+    .split(/[^A-Z0-9]+/)
+    .filter(word => word.length >= 3 && !stop.has(word) && !/^\d+$/.test(word))
+  if (words.some(word => desc.includes(word))) return true
+
+  const resourceKey = normKey(resource.replace(/\([^)]*\)/g, ''))
+  const descKey = normKey(desc)
+  return resourceKey.length >= 3 && (descKey.includes(resourceKey) || resourceKey.includes(descKey))
+}
+
 const num = (v) => {
   const n = Number(String(v ?? '').replace(/,/g, '').replace(/\s/g, ''))
   return Number.isFinite(n) ? n : 0
@@ -196,6 +225,54 @@ async function readWorkbook(file) {
   }
   return rows
 }
+
+async function readTargetReport(file) {
+  const buf = await file.arrayBuffer()
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true, dense: true })
+  const parsed = []
+  let reportMonth = parseMonth(file.name, new Date())
+  for (const sheetName of wb.SheetNames) {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '', raw: true })
+    for (const row of grid.slice(0, 12)) {
+      for (const cell of row) {
+        const text = normalize(cell)
+        const monthFromCell = parseMonth(cell, null)
+        if (monthFromCell) reportMonth = monthFromCell
+        const english = text.match(/(?:Production Report\s+)?(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(20\d{2})/i)
+        if (english) {
+          const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+          reportMonth = `${english[2]}-${String(months.indexOf(english[1].slice(0,3).toLowerCase()) + 1).padStart(2,'0')}`
+        }
+      }
+    }
+    const headerIndex = grid.findIndex(row => {
+      const keys = row.map(normKey)
+      return keys.some(k => k.includes('capacity')) && keys.some(k => k === 'plan' || k.includes('monthlyplan'))
+    })
+    if (headerIndex < 0) continue
+    const header = grid[headerIndex].map(normKey)
+    const resourceCol = Math.max(0, header.findIndex(k => ['resource','facility','מתקן','משאב'].some(x => k.includes(normKey(x)))))
+    const capacityCol = header.findIndex(k => k.includes('capacity'))
+    const planCol = header.findIndex(k => k === 'plan' || k.includes('monthlyplan'))
+    const productionCol = header.findIndex(k => k.includes('production'))
+    const achievementCol = header.findIndex(k => k.includes('achievement'))
+    for (const row of grid.slice(headerIndex + 1)) {
+      const resourceName = normalize(row[resourceCol])
+      const plan = num(row[planCol])
+      if (!resourceName || !plan) continue
+      const number = resourceName.match(/\((\d{2,4})\)/)?.[1] || ''
+      const facility = TARGET_FACILITY_MAP[number] || canonicalFacility(number)
+      parsed.push({
+        facility, resourceName, routingGroup: '', station: facility, lineName: '',
+        month: reportMonth, activity: 'ייצור / אריזה', target: plan,
+        capacity: num(row[capacityCol]), reportProduction: productionCol >= 0 ? num(row[productionCol]) : 0,
+        reportAchievement: achievementCol >= 0 ? num(row[achievementCol]) : 0, notes: '',
+      })
+    }
+  }
+  return parsed
+}
+
 function classifyFile(rows) {
   // Some workbooks start with a title/summary sheet. Inspect headers across
   // a sample of rows instead of relying only on the first row.
@@ -255,7 +332,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     let active = true
     ;(async () => {
       try {
-        setCloudState({ mode:'connecting', lastSync:null, message:'קורא את הנתונים המשותפים מ־Supabase...' })
+        // Show the latest browser snapshot immediately, then refresh from Supabase.
+        const cached = await idbGet().catch(() => null)
+        if (active && cached) {
+          setProduction(cached.production || []); setQuality(cached.quality || [])
+          setDeviations(cached.deviations || []); setTargets(cached.targets || [])
+          setDataMeta(cached.dataMeta || { production:null, quality:null, deviations:null, targets:null })
+          setStatus('מוצג גיבוי מקומי — מסנכרן נתונים חדשים מהשרת...')
+        }
+        setCloudState({ mode:'connecting', lastSync:cached?.savedAt || null, message:'מסנכרן נתונים מ־Supabase...' })
         const cloud = await loadAllCloudDatasets(kind => {
           if (active) setStatus(`מסנכרן ${kind} מהענן...`)
         })
@@ -299,20 +384,21 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     let refreshTimer
     const channel = supabase
       .channel('iml-data-sources-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'iml_data_sources' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'iml_data_sources' }, payload => {
+        window.__imlChangedKind = payload?.new?.kind || payload?.old?.kind || ''
         clearTimeout(refreshTimer)
         refreshTimer = setTimeout(async () => {
           try {
             setStatus('התקבל עדכון חדש מהענן — מסנכרן...')
-            const cloud = await loadAllCloudDatasets()
-            const reviveQuality = (cloud.quality?.rows || []).map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row)
-            setProduction(cloud.production?.rows || [])
-            setQuality(reviveQuality)
-            setDeviations(cloud.deviations?.rows || [])
-            setTargets(cloud.targets?.rows || [])
-            const meta = { production:cloud.production?.meta||null, quality:cloud.quality?.meta||null, deviations:cloud.deviations?.meta||null, targets:cloud.targets?.meta||null }
+            const changedKind = window.__imlChangedKind || ''
+            const cloud = changedKind ? { [changedKind]: await loadCloudDataset(changedKind) } : await loadAllCloudDatasets()
+            if (cloud.production) setProduction(cloud.production.rows || [])
+            if (cloud.quality) setQuality((cloud.quality.rows || []).map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
+            if (cloud.deviations) setDeviations(cloud.deviations.rows || [])
+            if (cloud.targets) setTargets(cloud.targets.rows || [])
+            const meta = { ...dataMeta, ...Object.fromEntries(Object.entries(cloud).map(([kind,value]) => [kind, value?.meta || null])) }
             setDataMeta(meta)
-            const lastSync = [meta.production,meta.quality,meta.deviations,meta.targets].map(x=>x?.loadedAt).filter(Boolean).sort().at(-1) || new Date().toISOString()
+            const lastSync = Object.values(meta).map(x=>x?.loadedAt).filter(Boolean).sort().at(-1) || new Date().toISOString()
             setCloudState(current => ({ ...current, mode:'cloud', live:true, lastSync, message:'עדכון חי התקבל מ־Supabase' }))
             setStatus('הנתונים עודכנו אוטומטית וזמינים לכל המשתמשים')
           } catch (error) {
@@ -369,10 +455,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       const loaded = []
       for (const file of files) {
         setStatus(`קורא את ${file.name}...`)
-        const rows = await readWorkbook(file)
+        let rows = await readWorkbook(file)
         const detected = classifyFile(rows)
         const kind = forcedKind || detected
-        const missing = validateRows(kind, rows)
+        if (kind === 'targets') {
+          const reportRows = await readTargetReport(file)
+          if (reportRows.length) rows = reportRows
+        }
+        const missing = kind === 'targets' && rows[0]?.resourceName ? [] : validateRows(kind, rows)
         if (missing.length) throw new Error(`${file.name}: חסרות עמודות חובה — ${missing.join(', ')}`)
         let storedCount = rows.length
         let rowsForCloud = rows
@@ -419,12 +509,13 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         } else if (kind === 'deviations') {}
         else if (kind === 'targets') {
           const fallbackMonth = parseMonth(file.name, new Date())
-          const parsed = rows.map(r => {
+          const parsed = rows[0]?.resourceName ? rows : rows.map(r => {
             const facility = canonicalFacility(getField(r, ['Storage Location', 'Facility', 'מתקן']))
             const routingGroup = normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup', 'קבוצת ניתוב', 'משאב']))
             const mapped = resourceMeta(facility, routingGroup)
             return {
               facility,
+              resourceName: normalize(getField(r, ['Resource Name', 'Resource', 'משאב', 'Facility'])) || normalize(getField(r, ['Station', 'תחנה'])),
               routingGroup,
               station: normalize(getField(r, ['Station', 'Resource', 'Work Center', 'תחנה'])) || mapped.station || '',
               lineName: normalize(getField(r, ['Line', 'Line Description', 'Packaging Type', 'סוג אריזה', 'קו'])) || mapped.line || '',
@@ -659,15 +750,18 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     const remainingWorkdays = Math.max(0, totalWorkdays - elapsedWorkdays)
     const monthTargets = targets.filter(t => t.month === planningMonth)
 
-    return facilities.flatMap(facility => {
-      const facilityTargets = monthTargets.filter(t => t.facility === facility)
-      const targetRows = facilityTargets.length ? facilityTargets : [null]
-      return targetRows.map((targetRow, index) => {
+    return monthTargets.map((targetRow, index) => {
+        const facility = targetRow.facility
         const routingGroup = normalizeRouting(targetRow?.routingGroup)
         const mapped = resourceMeta(facility, routingGroup)
         let rows = monthRows.filter(r => r.facility === facility)
         if (facility === '1542') rows = rows.filter(r => r.orderType.toUpperCase().includes('ZFIN'))
         if (routingGroup) rows = rows.filter(r => normalizeRouting(r.routingGroup) === routingGroup)
+        if (targetRow?.resourceName) {
+          // A target row is connected to production only when both the mapped
+          // facility and the production Description match the resource.
+          rows = rows.filter(r => resourceDescriptionMatches(targetRow.resourceName, r.routingDescription))
+        }
         const actual = rows.reduce((sum, r) => sum + r.qty, 0)
         const target = targetRow?.target || 0
         const dailyMap = new Map()
@@ -692,6 +786,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           id: `${facility}::${routingGroup || `ALL-${index}`}`,
           facility,
           routingGroup,
+          resourceName: targetRow?.resourceName || '',
           station: targetRow?.station || mapped.station || '',
           lineName: targetRow?.lineName || mapped.line || '',
           resourceDescription: rows.find(r => r.routingDescription)?.routingDescription || '',
@@ -701,8 +796,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state, label,
         }
       })
-    })
-  }, [planningMonth, prod, targets, facilities])
+  }, [planningMonth, prod, targets])
 
 
   const facilityStats = useMemo(() => facilities.map(id => {
@@ -822,23 +916,18 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       const facility = canonicalFacility(row.facility)
       if (facility) deviationByFacility.set(facility, (deviationByFacility.get(facility) || 0) + 1)
     })
-    return facilities.map(facility => {
-      const rows = planningRows.filter(row => row.facility === facility)
-      const target = rows.reduce((sum, row) => sum + row.target, 0)
-      const actual = rows.reduce((sum, row) => sum + row.actual, 0)
-      const forecast = rows.reduce((sum, row) => sum + row.forecast, 0)
-      const requiredDaily = rows.reduce((sum, row) => sum + row.requiredDaily, 0)
-      const orders = rows.reduce((sum, row) => sum + row.orders, 0)
+    return planningRows.map(row => {
+      const facility = row.facility
       const deviationsCount = deviationByFacility.get(facility) || 0
-      const forecastPct = target ? forecast / target * 100 : 0
-      const actualPct = target ? actual / target * 100 : 0
-      const planScore = target ? Math.min(100, forecastPct) : 70
+      const forecastPct = row.target ? row.forecast / row.target * 100 : 0
+      const actualPct = row.target ? row.actual / row.target * 100 : 0
+      const planScore = row.target ? Math.min(100, forecastPct) : 70
       const qualityScore = Math.max(0, 100 - deviationsCount * 8)
       const healthScore = Math.max(0, Math.min(100, Math.round(planScore * 0.72 + qualityScore * 0.28)))
-      const state = !target ? 'no-target' : forecastPct >= 100 ? 'good' : forecastPct >= 90 ? 'warning' : 'risk'
-      return { facility, target, actual, forecast, requiredDaily, orders, deviationsCount, forecastPct, actualPct, healthScore, state, gap: forecast - target }
+      const state = !row.target ? 'no-target' : forecastPct >= 100 ? 'good' : forecastPct >= 90 ? 'warning' : 'risk'
+      return { ...row, deviationsCount, forecastPct, actualPct, healthScore, state, gap: row.forecast - row.target }
     }).filter(row => row.target > 0 || row.actual > 0 || row.deviationsCount > 0)
-      .sort((a,b) => ({risk:0,warning:1,good:2,'no-target':3}[a.state] - {risk:0,warning:1,good:2,'no-target':3}[b.state]) || a.facility.localeCompare(b.facility))
+      .sort((a,b) => ({risk:0,warning:1,good:2,'no-target':3}[a.state] - {risk:0,warning:1,good:2,'no-target':3}[b.state]) || planningName(a).localeCompare(planningName(b), 'he'))
   }, [facilities, planningRows, openDeviations])
 
   const controlTowerTrend = useMemo(() => {
@@ -928,12 +1017,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">Sprint 11.3.2 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">Sprint 11.4.1 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.3.2 — Control Tower & Roles</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.4.1 — Control Tower & Roles</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -966,11 +1055,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       </section>
 
       <section className="tower-facility-section">
-        <div className="panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><span>{controlTowerFacilities.length} מתקנים במעקב</span></div>
+        <div className="panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><span>{controlTowerFacilities.length} משאבים במעקב</span></div>
         <div className="tower-facility-grid">
-          {controlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => { setSelectedFacilities([row.facility]); document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'}) }}>
-            <div className="tower-facility-head"><div><i></i><strong>{row.facility}</strong></div><span>{row.state === 'good' ? 'תקין' : row.state === 'warning' ? 'דורש תשומת לב' : row.state === 'risk' ? 'בסיכון' : 'ללא יעד'}</span></div>
-            <div className="tower-health"><div><HeartPulse/><span>Health Score</span></div><b>{row.healthScore}<small>/100</small></b></div>
+          {controlTowerFacilities.map(row => <button key={row.id} className={`tower-facility-card ${row.state}`} onClick={() => { setSelectedFacilities([row.facility]); document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'}) }}>
+            <div className="tower-facility-head"><div><i></i><strong>{row.resourceName || row.facility}</strong></div><span>{row.state === 'good' ? 'תקין' : row.state === 'warning' ? 'דורש תשומת לב' : row.state === 'risk' ? 'בסיכון' : 'ללא יעד'}</span></div>
+            <small className="tower-resource-meta">תחנה {row.facility}{row.resourceDescription ? ` · ${row.resourceDescription}` : ''}</small><div className="tower-health"><div><HeartPulse/><span>Health Score</span></div><b>{row.healthScore}<small>/100</small></b></div>
             <div className="tower-progress"><i style={{width:`${Math.min(100,row.actualPct)}%`}}/></div>
             <dl><div><dt>יעד חודשי</dt><dd>{fmt(row.target)}</dd></div><div><dt>בוצע</dt><dd>{fmt(row.actual)}</dd></div><div><dt>תחזית</dt><dd>{fmt(row.forecast)}</dd></div><div><dt>פער צפוי</dt><dd className={row.gap >= 0 ? 'positive' : 'negative'}>{row.gap >= 0 ? '+' : ''}{fmt(row.gap)}</dd></div><div><dt>קצב נדרש</dt><dd>{fmt(row.requiredDaily)}</dd></div><div><dt>חריגות פתוחות</dt><dd>{row.deviationsCount}</dd></div></dl>
             <span className="tower-enter">לפרטים מלאים <ArrowLeft size={16}/></span>
@@ -1058,7 +1147,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
       <section className="daily-management">
         <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><span>{planningMonth}</span></div>
-        <div className="table-wrap"><table><thead><tr><th>מתקן</th><th>Routing group</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
+        <div className="table-wrap"><table><thead><tr><th>מתקן</th><th>Routing group</th><th>תחנה / קו / Description</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
           {planningRows.map(r => <tr key={r.id}><td><b>{r.facility}</b></td><td>{r.routingGroup || 'כל המתקן'}</td><td>{[...new Set([r.station, r.lineName, r.resourceDescription].filter(Boolean))].join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
           {!planningRows.length && <tr><td colSpan="14" className="empty">אין יעדים לחודש הנבחר</td></tr>}
         </tbody></table></div>
