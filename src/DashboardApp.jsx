@@ -31,6 +31,14 @@ const TARGET_FACILITY_MAP = {
   '40': '1540', '41': '1541', '42': '1542', '43': '1523',
 }
 const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1528', '1524', '1542', '1543']
+const TARGET_FORM_RESOURCES = [
+  ['EC (23)','1521'], ['LQ 1lt (42)','1542'], ['LQ 5 lt (42)','1542'], ['LQ 10/20 lt (42)','1542'],
+  ['LQ 43','1523'], ['SC (28)','1528'], ['WG (19)','1519'], ['WG small packs (19)','1519'],
+  ['24F128','1524'], ['24F','1524'], ['EC (25)','1525'], ['Diuron (40)','1540'], ['Tolurex (40)','1540'],
+  ['CS (25,40)','1525'], ['Bromacil (25,40)','1525'], ['Galigan (25,40)','1525'], ['Propa Premix (25,40)','1525'],
+  ['Fluorochloridon (25,40)','1525'], ['Saflufenacil Tech (25,40)','1525'], ['Metazachlor (41)','1541'],
+  ['Atralone (41)','1541'], ['NANA (41)','1541'], ['D. Damascone (41)','1541'],
+].map(([resourceName, facility]) => ({ resourceName, facility }))
 const DEFAULT_FACILITIES = PRIMARY_FACILITIES
 const RESOURCE_LABELS = {
   '1542|LQ-P-1': { station: 'P-02', line: '1 ליטר' },
@@ -327,6 +335,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [selectedBatch, setSelectedBatch] = useState('')
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
+  const [targetFormOpen, setTargetFormOpen] = useState(false)
+  const [targetFormMonth, setTargetFormMonth] = useState(monthKey(new Date()))
+  const [targetFormRows, setTargetFormRows] = useState([])
 
   useEffect(() => {
     let active = true
@@ -952,16 +963,68 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(openDeviations.map(r => ({ Date: iso(r.date), Facility: r.facility, Batch: r.batch, Material: r.material, Status: r.status, RejectedCount: r.rejectedCount, RejectedCharacteristics: r.rejectedCharacteristics.map(x => `${x.characteristic}: ${x.value || x.qualitative || '-'} (${[x.lower, x.upper].filter(v => v !== '').join('–')} ${x.unit || ''})`).join(' | '), ApprovedCharacteristics: r.approvedCharacteristics.map(x => `${x.characteristic}: ${x.value || x.qualitative || '-'} (${[x.lower, x.upper].filter(v => v !== '').join('–')} ${x.unit || ''})`).join(' | '), Remarks: r.remarks }))), 'Deviations')
     XLSX.writeFile(wb, `IML_Sprint8_Resource_Report_${new Date().toISOString().slice(0,10)}.xlsx`)
   }
+  const makeTargetFormRows = (month) => TARGET_FORM_RESOURCES.map(item => {
+    const existing = targets.find(row => row.month === month && normalize(row.resourceName) === normalize(item.resourceName))
+    return {
+      ...item,
+      capacity: existing?.capacity || '',
+      target: existing?.target || '',
+      activity: existing?.activity || 'ייצור / אריזה',
+      notes: existing?.notes || '',
+    }
+  })
+  const openTargetForm = () => {
+    const month = planningMonth || monthKey(new Date())
+    setTargetFormMonth(month)
+    setTargetFormRows(makeTargetFormRows(month))
+    setTargetFormOpen(true)
+  }
+  const updateTargetFormRow = (index, field, value) => setTargetFormRows(current => current.map((row, i) => i === index ? { ...row, [field]: value } : row))
+  const saveTargetForm = async () => {
+    const rowsForCloud = targetFormRows.map(row => ({
+      facility: row.facility,
+      resourceName: row.resourceName,
+      routingGroup: '',
+      station: row.facility,
+      lineName: row.resourceName,
+      month: targetFormMonth,
+      activity: row.activity || 'ייצור / אריזה',
+      target: num(row.target),
+      capacity: num(row.capacity),
+      notes: normalize(row.notes),
+    })).filter(row => row.target > 0)
+    if (!rowsForCloud.length) { setStatus('יש להזין לפחות יעד אחד לפני השמירה'); return }
+    setBusy(true)
+    try {
+      const nextMeta = { fileName:`Target_Form_${targetFormMonth}.xlsx`, rows:rowsForCloud.length, rawRows:targetFormRows.length, loadedAt:new Date().toISOString(), facilities:new Set(rowsForCloud.map(r => r.facility)).size, valid:true, source:'cloud' }
+      const savedMeta = await uploadCloudDataset('targets', rowsForCloud, nextMeta, currentUser, progress => {
+        setUploadProgress({ fileName:'טופס יעדים חודשי', kind:'targets', ...progress })
+        setStatus(`שומר יעדים חודשיים (${progress.percent}%)`)
+      })
+      setTargets(rowsForCloud); setPlanningMonth(targetFormMonth)
+      setDataMeta(current => ({ ...current, targets:savedMeta }))
+      setCloudState(current => ({ ...current, mode:'cloud', lastSync:savedMeta.loadedAt, message:'יעדי החודש נשמרו ב־Supabase', live:true }))
+      setTargetFormOpen(false); setStatus(`יעדי ${targetFormMonth} נשמרו בהצלחה`)
+    } catch (error) { setStatus(`שמירת היעדים נכשלה: ${error?.message || 'שגיאה לא ידועה'}`) }
+    finally { setBusy(false); setTimeout(() => setUploadProgress(null), 1800) }
+  }
   const downloadTargetTemplate = () => {
     const month = planningMonth || monthKey(new Date())
-    const rows = DEFAULT_FACILITIES.flatMap(facility => facility === '1542'
-      ? [
-          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-1', 'תחנה': 'P-02', 'סוג אריזה': '1 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'שיטת תחזית': 'ממוצע 7 ימי עבודה אחרונים', 'ימי עבודה בחודש': '', 'הערות': '' },
-          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-5', 'תחנה': 'P-03', 'סוג אריזה': '5 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'שיטת תחזית': 'ממוצע 7 ימי עבודה אחרונים', 'ימי עבודה בחודש': '', 'הערות': '' },
-          { 'חודש': month, 'Storage Location': facility, 'Routing group': 'LQ-P-10', 'תחנה': 'P-04', 'סוג אריזה': '10/20 ליטר', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'שיטת תחזית': 'ממוצע 7 ימי עבודה אחרונים', 'ימי עבודה בחודש': '', 'הערות': '' },
-        ]
-      : [{ 'חודש': month, 'Storage Location': facility, 'Routing group': '', 'תחנה': '', 'סוג אריזה': '', 'סוג פעילות': 'אריזה', 'יעד חודשי': '', 'קיבולת חודשית': '', 'שיטת תחזית': 'ממוצע 7 ימי עבודה אחרונים', 'ימי עבודה בחודש': '', 'הערות': '' }])
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'יעדים חודשיים'); XLSX.writeFile(wb, 'IML_Monthly_Targets_Template.xlsx')
+    const [year, monthNo] = month.split('-').map(Number)
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    const reportDate = new Date(year, monthNo - 1, 2)
+    const aoa = [
+      [reportDate, `Production Report ${monthNames[monthNo-1]} ${year}`, '', '', ''],
+      ['', '', '', '', ''],
+      ['Resource', 'Capacity', 'Plan', 'Production', '% Achievement'],
+      ...TARGET_FORM_RESOURCES.map(item => [item.resourceName, '', '', '', '']),
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!merges'] = [{ s:{r:0,c:1}, e:{r:0,c:4} }]
+    ws['!cols'] = [{wch:28},{wch:14},{wch:14},{wch:16},{wch:18}]
+    ws['!freeze'] = { xSplit:0, ySplit:3 }
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Monthly Targets')
+    XLSX.writeFile(wb, `IML_Production_Targets_${month}.xlsx`)
   }
   const clearAllData = async () => {
     if (!window.confirm('למחוק את כל הנתונים המשותפים מהענן? הפעולה תשפיע על כל המשתמשים.')) return
@@ -1017,15 +1080,16 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">Sprint 11.4.1 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">Sprint 11.4.2 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.4.1 — Control Tower & Roles</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.4.2 — Control Tower & Roles</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
-          <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
+          {canManageData && <button className="action secondary" onClick={openTargetForm}><Target size={18}/> טופס יעדים</button>}
+          <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> הורדת תבנית</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
           {canManageData && <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label>}
@@ -1172,6 +1236,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="8" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch.</p><div className="table-wrap"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{iso(r.sampleDate) || '—'}</td><td>{r.sampleDate ? new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="10" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
     </main>
+    {targetFormOpen && <div className="target-form-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setTargetFormOpen(false) }}>
+      <section className="target-form-modal" role="dialog" aria-modal="true" aria-label="טופס יעדים חודשי">
+        <header><div><span>MONTHLY TARGET MANAGEMENT</span><h2>טופס יעדים חודשי</h2><p>הזן Capacity ו־Plan לכל משאב לפי דוח היעדים החודשי.</p></div><button onClick={() => setTargetFormOpen(false)} aria-label="סגירה"><X/></button></header>
+        <div className="target-form-toolbar"><label>חודש הדוח<input type="month" value={targetFormMonth} onChange={e => { setTargetFormMonth(e.target.value); setTargetFormRows(makeTargetFormRows(e.target.value)) }}/></label><small>Production ו־% Achievement יחושבו אוטומטית מנתוני הכמויות.</small></div>
+        <div className="target-form-table-wrap"><table><thead><tr><th>משאב</th><th>תחנה</th><th>Capacity</th><th>Plan</th><th>הערות</th></tr></thead><tbody>{targetFormRows.map((row,index)=><tr key={row.resourceName}><td><b>{row.resourceName}</b></td><td>{row.facility}</td><td><input type="number" min="0" step="0.1" value={row.capacity} onChange={e => updateTargetFormRow(index,'capacity',e.target.value)}/></td><td><input type="number" min="0" step="0.1" value={row.target} onChange={e => updateTargetFormRow(index,'target',e.target.value)}/></td><td><input value={row.notes} onChange={e => updateTargetFormRow(index,'notes',e.target.value)} placeholder="הערה אופציונלית"/></td></tr>)}</tbody></table></div>
+        <footer><button className="action secondary" onClick={() => setTargetFormOpen(false)}>ביטול</button><button className="action primary" onClick={saveTargetForm} disabled={busy}><Save size={18}/>{busy?'שומר...':'שמירת יעדים'}</button></footer>
+      </section>
+    </div>}
     {selectedBatchData && <BatchControlCard data={selectedBatchData} onClose={() => setSelectedBatch('')}/>}
   </div>
 }
