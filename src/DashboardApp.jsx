@@ -392,6 +392,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             desc: normalize(getField(r, ['Material description', 'Material Description'])),
             orderType: normalize(getField(r, ['Order Type'])),
             routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup'])),
+            routingDescription: normalize(getField(r, ['Description', 'Routing Description'])),
           })).filter(r => r.facility && (r.qty || r.order || r.batch))
           storedCount = compact.length
           rowsForCloud = compact
@@ -483,6 +484,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         desc: normalize(r.desc),
         orderType: normalize(r.orderType),
         routingGroup: normalizeRouting(r.routingGroup),
+        routingDescription: normalize(r.routingDescription),
       }
     }
     const finish = combineExcelDateTime(
@@ -691,7 +693,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           facility,
           routingGroup,
           station: targetRow?.station || mapped.station || '',
-          lineName: targetRow?.lineName || mapped.line || rows.find(r => r.routingDescription)?.routingDescription || '',
+          lineName: targetRow?.lineName || mapped.line || '',
+          resourceDescription: rows.find(r => r.routingDescription)?.routingDescription || '',
           activity: targetRow?.activity || 'אריזה', target, capacity: targetRow?.capacity || 0, actual,
           pct: target ? actual / target * 100 : 0, remaining, requiredDaily, average, recentAverage, provenMax,
           forecast, capacityForecast, elapsedWorkdays, remainingWorkdays, totalWorkdays,
@@ -1056,7 +1059,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <section className="daily-management">
         <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><span>{planningMonth}</span></div>
         <div className="table-wrap"><table><thead><tr><th>מתקן</th><th>Routing group</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
-          {planningRows.map(r => <tr key={r.id}><td><b>{r.facility}</b></td><td>{r.routingGroup || 'כל המתקן'}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+          {planningRows.map(r => <tr key={r.id}><td><b>{r.facility}</b></td><td>{r.routingGroup || 'כל המתקן'}</td><td>{[...new Set([r.station, r.lineName, r.resourceDescription].filter(Boolean))].join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
           {!planningRows.length && <tr><td colSpan="14" className="empty">אין יעדים לחודש הנבחר</td></tr>}
         </tbody></table></div>
       </section>
