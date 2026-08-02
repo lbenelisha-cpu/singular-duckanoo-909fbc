@@ -220,12 +220,14 @@ export async function loadCloudDataset(kind, onProgress) {
 }
 
 export async function loadAllCloudDatasets(onProgress) {
-  // Download independent datasets in parallel. The previous sequential loop
-  // made startup time equal to the sum of all four downloads.
-  const entries = await Promise.all(CLOUD_KINDS.map(async (kind, index) => {
-    onProgress?.({ kind, phase: 'dataset', percent: Math.round((index / CLOUD_KINDS.length) * 100) })
-    const dataset = await loadCloudDataset(kind, progress => onProgress?.({ kind, ...progress }))
-    return [kind, dataset]
+  // Sprint 11.4.3 Build 1: download independent datasets in parallel.
+  // This removes the previous production -> quality -> deviations -> targets waterfall.
+  const completed = new Set()
+  const entries = await Promise.all(CLOUD_KINDS.map(async kind => {
+    const value = await loadCloudDataset(kind, progress => onProgress?.({ kind, ...progress }))
+    completed.add(kind)
+    onProgress?.({ kind, phase: 'dataset-complete', percent: Math.round((completed.size / CLOUD_KINDS.length) * 100) })
+    return [kind, value]
   }))
   onProgress?.({ kind: '', phase: 'complete', percent: 100 })
   return Object.fromEntries(entries)

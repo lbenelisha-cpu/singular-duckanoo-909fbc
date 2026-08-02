@@ -1,26 +1,21 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "11.4.2",
+  "version": "11.4.3",
   "type": "module",
-  "engines": {
-    "node": ">=20 <23",
-    "npm": ">=10"
-  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.49.1",
-    "lucide-react": "0.468.0",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "xlsx": "0.18.5"
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "lucide-react": "latest",
+    "xlsx": "latest",
+    "@supabase/supabase-js": "latest"
   },
-  "devDependencies": {
-    "@vitejs/plugin-react": "4.3.4",
-    "vite": "5.4.14"
-  }
+  "devDependencies": {}
 }
