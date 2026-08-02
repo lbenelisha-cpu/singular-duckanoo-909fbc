@@ -109,3 +109,15 @@
 .side-quick-ranges{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:4px 0 10px}.side-quick-ranges button,.side-clear{border:0;border-radius:8px;padding:9px;cursor:pointer;font-weight:700}.side-quick-ranges button{background:#173d53;color:#d7e7ef}.side-clear{width:100%;display:flex;align-items:center;justify-content:center;gap:6px;background:#ffe6e6;color:#9d2d2d}
 .side-live-stats{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:14px}.side-live-stats>div{background:#16364b;border-radius:10px;padding:9px;display:flex;align-items:center;gap:7px}.side-live-stats svg{color:#22c7a9;width:17px}.side-live-stats span,.side-live-stats b,.side-live-stats small{display:block}.side-live-stats b{font-size:14px}.side-live-stats small{font-size:10px;color:#aab9c5}.filter-side .side-note{margin-top:14px}.legacy-filters{display:none}
 @media(max-width:850px){.filter-side{display:none}.main{margin-right:0;width:100%;padding:18px}.legacy-filters{display:flex}}
+
+/* Sprint 11.3.1 — Batch Intelligence side drawer */
+.batch-modal-backdrop{justify-content:flex-end;align-items:stretch;padding:0;background:#0f172a8f;backdrop-filter:blur(2px)}
+.batch-control-card{width:min(1120px,72vw);height:100vh;max-height:none;border-radius:20px 0 0 20px;box-shadow:-25px 0 70px #0006;animation:batchDrawerIn .24s ease-out}
+.batch-card-body{grid-template-columns:minmax(0,1.65fr) minmax(280px,.75fr)}
+.quality-panel,.production-panel{grid-column:1}
+.production-panel{margin-top:0}
+.production-record-count{background:#eef6f4;color:#08705f;border-radius:999px;padding:6px 10px;font-size:11px;font-weight:900;white-space:nowrap}
+.batch-production-table{max-height:360px}.batch-production-table table{min-width:980px}
+@keyframes batchDrawerIn{from{transform:translateX(105%);opacity:.4}to{transform:translateX(0);opacity:1}}
+@media(max-width:1100px){.batch-control-card{width:88vw}.batch-summary-grid{grid-template-columns:repeat(4,minmax(120px,1fr))}.batch-card-body{grid-template-columns:1fr}.quality-panel,.production-panel{grid-column:auto}.batch-side-column{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.batch-control-card{width:100vw;border-radius:0}.batch-side-column{display:flex}.batch-summary-grid{grid-template-columns:repeat(2,1fr)}}
