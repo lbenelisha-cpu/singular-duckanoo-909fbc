@@ -254,11 +254,29 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => {
     let active = true
     ;(async () => {
+      let saved = null
       try {
-        setCloudState({ mode:'connecting', lastSync:null, message:'קורא את הנתונים המשותפים מ־Supabase...' })
-        const cloud = await loadAllCloudDatasets(kind => {
-          if (active) setStatus(`מסנכרן ${kind} מהענן...`)
-        })
+        // Render the last successful snapshot first. The user can work while
+        // a lightweight version check runs against Supabase in the background.
+        saved = await idbGet().catch(() => null)
+        if (active && saved) {
+          setProduction(saved.production || [])
+          setQuality(saved.quality || [])
+          setDeviations(saved.deviations || [])
+          setTargets(saved.targets || [])
+          setDataMeta(saved.dataMeta || { production:null, quality:null, deviations:null, targets:null })
+          setStatus('מוצגים נתונים אחרונים — בודק עדכונים מהשרת ברקע')
+          setCloudState({ mode:'connecting', lastSync:saved.savedAt || null, message:'מוצג מטמון מקומי; בודק גרסאות מול Supabase...', latencyMs:null, live:false })
+          // Give React one frame to paint the dashboard before network work.
+          await new Promise(resolve => requestAnimationFrame(() => resolve()))
+        } else {
+          setCloudState({ mode:'connecting', lastSync:null, message:'קורא את הנתונים המשותפים מ־Supabase...' })
+        }
+        const cloud = await loadAllCloudDatasets(progress => {
+          if (!active) return
+          if (progress?.phase === 'cache-hit') setStatus(`הנתונים של ${progress.kind} כבר מעודכנים`)
+          else if (progress?.kind) setStatus(`מסנכרן ${progress.kind} מהענן...`)
+        }, saved)
         if (!active) return
         const reviveQuality = (cloud.quality?.rows || []).map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row)
         setProduction(cloud.production?.rows || [])
@@ -279,7 +297,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       } catch (cloudError) {
         console.warn('Cloud restore failed; using browser cache', cloudError)
         try {
-          const saved = await idbGet()
+          saved = saved || await idbGet()
           if (!active) return
           if (saved) {
             setProduction(saved.production || []); setQuality(saved.quality || [])
@@ -340,11 +358,22 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   useEffect(() => {
     if (!production.length && !quality.length && !deviations.length && !targets.length) return
-    const timer = setTimeout(() => {
+    let cancelled = false
+    let idleId = null
+    const save = () => {
+      if (cancelled) return
       idbSet({ production, quality, deviations, targets, dataMeta, savedAt: new Date().toISOString() })
         .catch(e => { console.error(e); setStatus('הנתונים בענן, אך יצירת גיבוי מקומי נכשלה') })
-    }, 800)
-    return () => clearTimeout(timer)
+    }
+    const timer = setTimeout(() => {
+      if ('requestIdleCallback' in window) idleId = window.requestIdleCallback(save, { timeout: 5000 })
+      else save()
+    }, 2500)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      if (idleId !== null && 'cancelIdleCallback' in window) window.cancelIdleCallback(idleId)
+    }
   }, [production, quality, deviations, targets, dataMeta])
 
   const validateRows = (kind, rows) => {
@@ -936,12 +965,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">Sprint 11.4.3 Build 1 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">Sprint 11.4.3 Build 2 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.4.3 Build 1 — Performance Stabilization</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.4.3 Build 2 — Performance Stabilization</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>

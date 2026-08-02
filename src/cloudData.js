@@ -8,7 +8,7 @@ export const FUTURE_CLOUD_KINDS = [...CLOUD_KINDS, 'packaging_plan']
 // statement timeouts in the previous build.
 const ROWS_PER_CHUNK = 75
 const CHUNKS_PER_UPLOAD_REQUEST = 1
-const CHUNKS_PER_DOWNLOAD_PAGE = 12
+const CHUNKS_PER_DOWNLOAD_PAGE = 100
 const MAX_RETRIES = 4
 const RETRY_BASE_MS = 700
 
@@ -138,7 +138,7 @@ async function readChunkPages({ table, filterColumn, filterValue, expectedChunks
   return rows
 }
 
-export async function loadCloudDataset(kind, onProgress) {
+export async function loadCloudDataset(kind, onProgress, cached = null) {
   requireClient()
   const capability = await detectCloudSchema()
   const sourceFields = capability.versioned
@@ -156,6 +156,17 @@ export async function loadCloudDataset(kind, onProgress) {
   }, `קריאת מקור ${kind}`)
 
   if (!source) return { rows: [], meta: null }
+
+  // Fast path: when the browser already has this exact active version, reuse it
+  // immediately and avoid downloading every JSON chunk again.
+  if (cached?.meta && Array.isArray(cached.rows)) {
+    const sameVersion = capability.versioned && source.active_version_id && cached.meta.versionId === source.active_version_id
+    const sameLegacyRevision = !capability.versioned && cached.meta.loadedAt && cached.meta.loadedAt === (source.loaded_at || source.updated_at)
+    if (sameVersion || sameLegacyRevision) {
+      emit(onProgress, 'cache-hit', 1, 1, `הנתונים של ${kind} כבר מעודכנים במטמון המקומי`, { cachedRows: cached.rows.length })
+      return { rows: cached.rows, meta: { ...cached.meta, source: 'cache' }, cacheHit: true }
+    }
+  }
 
   if (capability.versioned && source.active_version_id) {
     const version = await withRetry(async () => {
@@ -219,14 +230,15 @@ export async function loadCloudDataset(kind, onProgress) {
   }
 }
 
-export async function loadAllCloudDatasets(onProgress) {
-  // Sprint 11.4.3 Build 1: download independent datasets in parallel.
-  // This removes the previous production -> quality -> deviations -> targets waterfall.
+export async function loadAllCloudDatasets(onProgress, cache = null) {
+  // Check all sources in parallel, but only download datasets whose active
+  // version changed. Existing datasets are served from IndexedDB.
   const completed = new Set()
   const entries = await Promise.all(CLOUD_KINDS.map(async kind => {
-    const value = await loadCloudDataset(kind, progress => onProgress?.({ kind, ...progress }))
+    const cached = cache ? { rows: cache[kind] || [], meta: cache.dataMeta?.[kind] || null } : null
+    const value = await loadCloudDataset(kind, progress => onProgress?.({ kind, ...progress }), cached)
     completed.add(kind)
-    onProgress?.({ kind, phase: 'dataset-complete', percent: Math.round((completed.size / CLOUD_KINDS.length) * 100) })
+    onProgress?.({ kind, phase: 'dataset-complete', percent: Math.round((completed.size / CLOUD_KINDS.length) * 100), cacheHit: value.cacheHit })
     return [kind, value]
   }))
   onProgress?.({ kind: '', phase: 'complete', percent: 100 })
