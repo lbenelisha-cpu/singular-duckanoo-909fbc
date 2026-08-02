@@ -606,9 +606,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => { if (!planningMonth && availableMonths.length) setPlanningMonth(availableMonths[0]) }, [availableMonths, planningMonth])
 
   const dateBounds = useMemo(() => {
-    const ds = prod.map(r => r.date).filter(Boolean).sort((a, b) => a - b)
+    // The date selector controls every dataset, therefore its available range
+    // must include production, quality and deviations (not production only).
+    const ds = [...prod, ...qualityRows, ...deviationRows]
+      .map(r => r.date)
+      .filter(Boolean)
+      .sort((a, b) => new Date(a) - new Date(b))
     return { min: iso(ds[0]), max: iso(ds.at(-1)) }
-  }, [prod])
+  }, [prod, qualityRows, deviationRows])
 
   const baseFiltered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -745,10 +750,28 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       }
     })
   }, [filtered, enrichedDeviationRows])
-  const allQualityBad = qualityRows.filter(r => { const st = r.status.toLowerCase(); return st && !['accepted', 'תקין', 'pass', 'approved', 'מאושר'].some(x => st.includes(x)) })
-  const allOpenDeviations = enrichedDeviationRows.filter(r => { const st = r.status.toLowerCase(); return !st || !['approved', 'closed', 'מאושר', 'סגור'].some(x => st.includes(x)) })
-  const qualityBad = useMemo(() => allQualityBad.filter(r => (!selectedFacilities.length || selectedFacilities.includes(r.facility)) && matchesDateRange(r.date, from, to)), [allQualityBad, selectedFacilities, from, to])
-  const openDeviations = useMemo(() => allOpenDeviations.filter(r => (!selectedFacilities.length || selectedFacilities.includes(r.facility)) && matchesDateRange(r.date, from, to)), [allOpenDeviations, selectedFacilities, from, to])
+  // A single date/facility scope is shared by production, quality and deviations.
+  // This prevents quality/deviation cards from continuing to show rows outside
+  // the selected period (for example when choosing "יום אחרון").
+  const filteredQualityRows = useMemo(() => qualityRows.filter(r =>
+    (!selectedFacilities.length || selectedFacilities.includes(r.facility)) &&
+    matchesDateRange(r.date, from, to)
+  ), [qualityRows, selectedFacilities, from, to])
+
+  const filteredDeviationRows = useMemo(() => enrichedDeviationRows.filter(r =>
+    (!selectedFacilities.length || selectedFacilities.includes(r.facility)) &&
+    matchesDateRange(r.date, from, to)
+  ), [enrichedDeviationRows, selectedFacilities, from, to])
+
+  const qualityBad = useMemo(() => filteredQualityRows.filter(r => {
+    const st = normalize(r.status).toLowerCase()
+    return st && !['accepted', 'תקין', 'pass', 'approved', 'מאושר'].some(x => st.includes(x))
+  }), [filteredQualityRows])
+
+  const openDeviations = useMemo(() => filteredDeviationRows.filter(r => {
+    const st = normalize(r.status).toLowerCase()
+    return !st || !['approved', 'closed', 'מאושר', 'סגור'].some(x => st.includes(x))
+  }), [filteredDeviationRows])
 
   const alerts = useMemo(() => planningRows.filter(r => ['risk', 'warning'].includes(r.state)).sort((a,b) => ({ risk:0, warning:1 }[a.state] - { risk:0, warning:1 }[b.state])), [planningRows])
   const achievedCount = planningRows.filter(r => ['achieved', 'good'].includes(r.state)).length
