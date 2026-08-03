@@ -138,7 +138,28 @@ async function readChunkPages({ table, filterColumn, filterValue, expectedChunks
   return rows
 }
 
-export async function loadCloudDataset(kind, onProgress, cached = null) {
+
+const inFlightLoads = new Map()
+
+export async function getCloudDatasetMeta(kind) {
+  requireClient()
+  const capability = await detectCloudSchema()
+  const fields = capability.versioned
+    ? 'kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at,active_version_id'
+    : 'kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at'
+  const { data, error } = await supabase.from('iml_data_sources').select(fields).eq('kind', kind).maybeSingle()
+  if (error) throw error
+  return data || null
+}
+
+export function loadCloudDatasetOnce(kind, onProgress) {
+  if (inFlightLoads.has(kind)) return inFlightLoads.get(kind)
+  const request = loadCloudDataset(kind, onProgress).finally(() => inFlightLoads.delete(kind))
+  inFlightLoads.set(kind, request)
+  return request
+}
+
+export async function loadCloudDataset(kind, onProgress) {
   requireClient()
   const capability = await detectCloudSchema()
   const sourceFields = capability.versioned
@@ -156,17 +177,6 @@ export async function loadCloudDataset(kind, onProgress, cached = null) {
   }, `קריאת מקור ${kind}`)
 
   if (!source) return { rows: [], meta: null }
-
-  // Fast path: when the browser already has this exact active version, reuse it
-  // immediately and avoid downloading every JSON chunk again.
-  if (cached?.meta && Array.isArray(cached.rows)) {
-    const sameVersion = capability.versioned && source.active_version_id && cached.meta.versionId === source.active_version_id
-    const sameLegacyRevision = !capability.versioned && cached.meta.loadedAt && cached.meta.loadedAt === (source.loaded_at || source.updated_at)
-    if (sameVersion || sameLegacyRevision) {
-      emit(onProgress, 'cache-hit', 1, 1, `הנתונים של ${kind} כבר מעודכנים במטמון המקומי`, { cachedRows: cached.rows.length })
-      return { rows: cached.rows, meta: { ...cached.meta, source: 'cache' }, cacheHit: true }
-    }
-  }
 
   if (capability.versioned && source.active_version_id) {
     const version = await withRetry(async () => {
@@ -230,19 +240,15 @@ export async function loadCloudDataset(kind, onProgress, cached = null) {
   }
 }
 
-export async function loadAllCloudDatasets(onProgress, cache = null) {
-  // Check all sources in parallel, but only download datasets whose active
-  // version changed. Existing datasets are served from IndexedDB.
-  const completed = new Set()
-  const entries = await Promise.all(CLOUD_KINDS.map(async kind => {
-    const cached = cache ? { rows: cache[kind] || [], meta: cache.dataMeta?.[kind] || null } : null
-    const value = await loadCloudDataset(kind, progress => onProgress?.({ kind, ...progress }), cached)
-    completed.add(kind)
-    onProgress?.({ kind, phase: 'dataset-complete', percent: Math.round((completed.size / CLOUD_KINDS.length) * 100), cacheHit: value.cacheHit })
-    return [kind, value]
-  }))
+export async function loadAllCloudDatasets(onProgress) {
+  const result = {}
+  for (let index = 0; index < CLOUD_KINDS.length; index += 1) {
+    const kind = CLOUD_KINDS[index]
+    onProgress?.({ kind, phase: 'dataset', percent: Math.round((index / CLOUD_KINDS.length) * 100) })
+    result[kind] = await loadCloudDatasetOnce(kind, progress => onProgress?.({ kind, ...progress }))
+  }
   onProgress?.({ kind: '', phase: 'complete', percent: 100 })
-  return Object.fromEntries(entries)
+  return result
 }
 
 

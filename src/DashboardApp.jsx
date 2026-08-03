@@ -5,7 +5,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse
 } from 'lucide-react'
-import { loadAllCloudDatasets, loadCloudDataset, uploadCloudDataset, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
+import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
 import './styles.css'
 
@@ -36,7 +36,11 @@ const RESOURCE_LABELS = {
 const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
-const DB_KEY = 'sprint7'
+const DB_KEY = 'sprint1150'
+const BUILD_LABEL = 'Sprint 11.5.0 Build 1'
+const isoDate = date => date.toISOString().slice(0, 10)
+const initialToDate = () => isoDate(new Date())
+const initialFromDate = () => { const date = new Date(); date.setDate(date.getDate() - 6); return isoDate(date) }
 
 const openDashboardDb = () => new Promise((resolve, reject) => {
   const request = indexedDB.open(DB_NAME, 1)
@@ -237,8 +241,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [status, setStatus] = useState('ממתין לטעינת קבצים')
   const [busy, setBusy] = useState(false)
   const [query, setQuery] = useState('')
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
+  const [from, setFrom] = useState(initialFromDate)
+  const [to, setTo] = useState(initialToDate)
   const [selectedFacilities, setSelectedFacilities] = useState([])
   const [activeTab, setActiveTab] = useState('production')
   const [planningMonth, setPlanningMonth] = useState('')
@@ -250,63 +254,83 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [selectedBatch, setSelectedBatch] = useState('')
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
+  const [perfStats, setPerformance] = useState({ startedAt:0, cache:'MISS', queries:0, rows:0, loadMs:0, phase:'אתחול' })
 
   useEffect(() => {
     let active = true
+    const startedAt = performance.now()
+    const kinds = ['production', 'quality', 'deviations', 'targets']
+
+    const applyDataset = (kind, dataset) => {
+      const rows = dataset?.rows || []
+      if (kind === 'production') setProduction(rows)
+      if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
+      if (kind === 'deviations') setDeviations(rows)
+      if (kind === 'targets') setTargets(rows)
+      setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
+      return rows.length
+    }
+
     ;(async () => {
-      let saved = null
+      let cached = null
       try {
-        // Render the last successful snapshot first. The user can work while
-        // a lightweight version check runs against Supabase in the background.
-        saved = await idbGet().catch(() => null)
-        if (active && saved) {
-          setProduction(saved.production || [])
-          setQuality(saved.quality || [])
-          setDeviations(saved.deviations || [])
-          setTargets(saved.targets || [])
-          setDataMeta(saved.dataMeta || { production:null, quality:null, deviations:null, targets:null })
-          setStatus('מוצגים נתונים אחרונים — בודק עדכונים מהשרת ברקע')
-          setCloudState({ mode:'connecting', lastSync:saved.savedAt || null, message:'מוצג מטמון מקומי; בודק גרסאות מול Supabase...', latencyMs:null, live:false })
-          // Give React one frame to paint the dashboard before network work.
-          await new Promise(resolve => requestAnimationFrame(() => resolve()))
-        } else {
-          setCloudState({ mode:'connecting', lastSync:null, message:'קורא את הנתונים המשותפים מ־Supabase...' })
+        cached = await idbGet()
+        if (active && cached) {
+          setProduction(cached.production || [])
+          setQuality(cached.quality || [])
+          setDeviations(cached.deviations || [])
+          setTargets(cached.targets || [])
+          setDataMeta(cached.dataMeta || { production:null, quality:null, deviations:null, targets:null })
+          setStatus('מוצג מטמון מקומי — בודק עדכונים מהשרת...')
+          setCloudState({ mode:'connecting', lastSync:cached.savedAt || null, message:'הדשבורד זמין; בודק גרסאות חדשות ברקע...', latencyMs:null, live:false })
+          setPerformance(current => ({ ...current, cache:'HIT', rows:(cached.production?.length||0)+(cached.quality?.length||0)+(cached.deviations?.length||0)+(cached.targets?.length||0), phase:'בדיקת גרסאות' }))
         }
-        const cloud = await loadAllCloudDatasets(progress => {
-          if (!active) return
-          if (progress?.phase === 'cache-hit') setStatus(`הנתונים של ${progress.kind} כבר מעודכנים`)
-          else if (progress?.kind) setStatus(`מסנכרן ${progress.kind} מהענן...`)
-        }, saved)
+      } catch (error) { console.warn('Cache restore failed', error) }
+
+      try {
+        const remoteMeta = {}
+        await Promise.all(kinds.map(async kind => { remoteMeta[kind] = await getCloudDatasetMeta(kind) }))
         if (!active) return
-        const reviveQuality = (cloud.quality?.rows || []).map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row)
-        setProduction(cloud.production?.rows || [])
-        setQuality(reviveQuality)
-        setDeviations(cloud.deviations?.rows || [])
-        setTargets(cloud.targets?.rows || [])
-        const meta = {
-          production: cloud.production?.meta || null,
-          quality: cloud.quality?.meta || null,
-          deviations: cloud.deviations?.meta || null,
-          targets: cloud.targets?.meta || null,
+        setPerformance(current => ({ ...current, queries:current.queries + 4 }))
+
+        const changed = kind => {
+          const remote = remoteMeta[kind]
+          const local = cached?.dataMeta?.[kind]
+          if (!remote) return !local
+          const remoteId = remote.active_version_id || remote.updated_at || remote.loaded_at
+          const localId = local?.versionId || local?.loadedAt
+          return !cached || !local || String(remoteId || '') !== String(localId || '')
         }
-        setDataMeta(meta)
-        const lastSync = [meta.production,meta.quality,meta.deviations,meta.targets].map(x=>x?.loadedAt).filter(Boolean).sort().at(-1) || new Date().toISOString()
-        const health = await getCloudHealth().catch(() => null)
-        setCloudState({ mode:'cloud', lastSync, message:health?.versioned ? 'מחובר למסד הנתונים המשותף — מנוע גרסאות פעיל' : (health?.schemaMessage || 'מחובר לענן במצב תאימות'), latencyMs:health?.latencyMs ?? null, live:true })
-        setStatus('הנתונים נטענו מ־Supabase וזמינים לכל המשתמשים')
-      } catch (cloudError) {
-        console.warn('Cloud restore failed; using browser cache', cloudError)
-        try {
-          saved = saved || await idbGet()
+
+        let loadedRows = 0
+        if (changed('production')) {
+          setStatus('טוען נתוני ייצור מעודכנים...')
+          loadedRows += applyDataset('production', await loadCloudDatasetOnce('production'))
+          setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'הדשבורד זמין' }))
+          await new Promise(resolve => setTimeout(resolve, 0))
+        }
+
+        for (const kind of ['targets', 'quality', 'deviations']) {
           if (!active) return
-          if (saved) {
-            setProduction(saved.production || []); setQuality(saved.quality || [])
-            setDeviations(saved.deviations || []); setTargets(saved.targets || [])
-            setDataMeta(saved.dataMeta || { production:null, quality:null, deviations:null, targets:null })
-            setStatus('אין חיבור לענן — מוצג גיבוי מקומי מהדפדפן')
-          } else setStatus('אין חיבור לענן ולא נמצא גיבוי מקומי')
-        } catch (cacheError) { console.warn('Could not restore IndexedDB data', cacheError) }
-        setCloudState({ mode:'offline', lastSync:null, message:cloudError?.message || 'אין חיבור למסד המשותף', latencyMs:null, live:false })
+          if (!changed(kind)) continue
+          setStatus(`טוען ${kind} ברקע...`)
+          loadedRows += applyDataset(kind, await loadCloudDatasetOnce(kind))
+          setPerformance(current => ({ ...current, queries:current.queries + 1, phase:`נטען ${kind}` }))
+          await new Promise(resolve => setTimeout(resolve, 0))
+        }
+
+        const health = await getCloudHealth().catch(() => null)
+        if (!active) return
+        const elapsed = Math.round(performance.now() - startedAt)
+        const lastSync = Object.values(remoteMeta).map(x => x?.loaded_at || x?.updated_at).filter(Boolean).sort().at(-1) || new Date().toISOString()
+        setCloudState({ mode:'cloud', lastSync, message:'מחובר לענן — טעינה חכמה של 7 ימים כברירת מחדל', latencyMs:health?.latencyMs ?? null, live:true })
+        setStatus(cached && loadedRows === 0 ? 'הנתונים במטמון מעודכנים — לא נדרשה הורדה מחדש' : 'הנתונים המעודכנים נטענו בהצלחה')
+        setPerformance(current => ({ ...current, loadMs:elapsed, rows:current.rows + loadedRows, phase:'הושלם' }))
+      } catch (cloudError) {
+        console.warn('Smart cloud restore failed', cloudError)
+        if (!active) return
+        setCloudState({ mode:cached ? 'offline' : 'error', lastSync:cached?.savedAt || null, message:cached ? 'השרת אינו זמין — מוצג מטמון מקומי' : (cloudError?.message || 'טעינת הנתונים נכשלה'), latencyMs:null, live:false })
+        setStatus(cached ? 'מוצג גיבוי מקומי; הסנכרון לענן נכשל' : 'לא נמצאו נתונים זמינים')
       }
     })()
     return () => { active = false }
@@ -315,34 +339,24 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => {
     if (!supabase) return
     let refreshTimer
-    const channel = supabase
-      .channel('iml-data-sources-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'iml_data_sources' }, payload => {
+    const channel = supabase.channel('iml-data-sources-live')
+      .on('postgres_changes', { event:'*', schema:'public', table:'iml_data_sources' }, payload => {
         clearTimeout(refreshTimer)
         refreshTimer = setTimeout(async () => {
+          const kind = payload?.new?.kind || payload?.old?.kind
+          if (!['production','quality','deviations','targets'].includes(kind)) return
           try {
-            const changedKind = payload?.new?.kind || payload?.old?.kind
-            setStatus(changedKind ? `התקבל עדכון ${changedKind} — מסנכרן רק את הקובץ שהשתנה...` : 'התקבל עדכון חדש מהענן — מסנכרן...')
-            if (changedKind && ['production','quality','deviations','targets'].includes(changedKind)) {
-              const dataset = await loadCloudDataset(changedKind)
-              const rows = changedKind === 'quality'
-                ? (dataset.rows || []).map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row)
-                : (dataset.rows || [])
-              if (changedKind === 'production') setProduction(rows)
-              if (changedKind === 'quality') setQuality(rows)
-              if (changedKind === 'deviations') setDeviations(rows)
-              if (changedKind === 'targets') setTargets(rows)
-              setDataMeta(current => ({ ...current, [changedKind]:dataset.meta || null }))
-              setCloudState(current => ({ ...current, mode:'cloud', live:true, lastSync:dataset.meta?.loadedAt || new Date().toISOString(), message:'עדכון חי התקבל מ־Supabase' }))
-            } else {
-              const cloud = await loadAllCloudDatasets()
-              setProduction(cloud.production?.rows || [])
-              setQuality((cloud.quality?.rows || []).map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
-              setDeviations(cloud.deviations?.rows || [])
-              setTargets(cloud.targets?.rows || [])
-              setDataMeta({ production:cloud.production?.meta||null, quality:cloud.quality?.meta||null, deviations:cloud.deviations?.meta||null, targets:cloud.targets?.meta||null })
-            }
-            setStatus('הנתונים עודכנו אוטומטית וזמינים לכל המשתמשים')
+            setStatus(`התקבל עדכון ${kind} — מסנכרן רק את הקובץ שהשתנה...`)
+            const dataset = await loadCloudDatasetOnce(kind)
+            const rows = dataset?.rows || []
+            if (kind === 'production') setProduction(rows)
+            if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
+            if (kind === 'deviations') setDeviations(rows)
+            if (kind === 'targets') setTargets(rows)
+            setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
+            setCloudState(current => ({ ...current, mode:'cloud', live:true, lastSync:new Date().toISOString(), message:`עודכן ${kind} בלבד` }))
+            setPerformance(current => ({ ...current, queries:current.queries + 1, rows:rows.length, phase:'עדכון חי' }))
+            setStatus(`העדכון של ${kind} הושלם`)
           } catch (error) {
             console.warn('Realtime refresh failed', error)
             setCloudState(current => ({ ...current, live:false, message:'מחובר לענן, אך העדכון החי נכשל' }))
@@ -358,22 +372,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   useEffect(() => {
     if (!production.length && !quality.length && !deviations.length && !targets.length) return
-    let cancelled = false
-    let idleId = null
-    const save = () => {
-      if (cancelled) return
+    const timer = setTimeout(() => {
       idbSet({ production, quality, deviations, targets, dataMeta, savedAt: new Date().toISOString() })
         .catch(e => { console.error(e); setStatus('הנתונים בענן, אך יצירת גיבוי מקומי נכשלה') })
-    }
-    const timer = setTimeout(() => {
-      if ('requestIdleCallback' in window) idleId = window.requestIdleCallback(save, { timeout: 5000 })
-      else save()
-    }, 2500)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-      if (idleId !== null && 'cancelIdleCallback' in window) window.cancelIdleCallback(idleId)
-    }
+    }, 800)
+    return () => clearTimeout(timer)
   }, [production, quality, deviations, targets, dataMeta])
 
   const validateRows = (kind, rows) => {
@@ -431,7 +434,6 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             desc: normalize(getField(r, ['Material description', 'Material Description'])),
             orderType: normalize(getField(r, ['Order Type'])),
             routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup'])),
-            routingDescription: normalize(getField(r, ['Description', 'Routing Description', 'Work Center Description', 'תיאור'])),
           })).filter(r => r.facility && (r.qty || r.order || r.batch))
           storedCount = compact.length
           rowsForCloud = compact
@@ -965,12 +967,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">Sprint 11.4.3 Build 3 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">Sprint 11.5.0 Build 1 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.4.3 Build 3 — Performance Stabilization</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 1 — Control Tower & Roles</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -982,6 +984,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       </header>
 
       <div className="load-status"><CheckCircle2 size={18}/>{status}</div>
+      {canManageData && <div className="performance-strip"><Activity size={16}/><b>Build 1 Diagnostics</b><span>Cache: {perfStats.cache}</span><span>Queries: {perfStats.queries}</span><span>Rows: {perfStats.rows.toLocaleString()}</span><span>Load: {perfStats.loadMs ? `${perfStats.loadMs}ms` : perfStats.phase}</span><span>Range: {from}–{to}</span></div>}
       {uploadProgress && <section className="upload-progress-card"><div className="upload-progress-head"><strong>{uploadProgress.fileName}</strong><span>{uploadProgress.percent}%</span></div><div className="upload-progress-track"><div style={{width:`${uploadProgress.percent}%`}}/></div><small>{uploadProgress.message}</small></section>}
 
       <section className={`cloud-status ${cloudState.mode}`}>

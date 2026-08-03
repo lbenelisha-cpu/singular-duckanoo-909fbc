@@ -122,13 +122,5 @@
 @media(max-width:1100px){.batch-control-card{width:88vw}.batch-summary-grid{grid-template-columns:repeat(4,minmax(120px,1fr))}.batch-card-body{grid-template-columns:1fr}.quality-panel,.production-panel{grid-column:auto}.batch-side-column{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.batch-control-card{width:100vw;border-radius:0}.batch-side-column{display:flex}.batch-summary-grid{grid-template-columns:repeat(2,1fr)}}
 
-
-/* Sprint 11.4.3 Build 1 — full-screen batch and quality workspace */
-.batch-modal-backdrop{padding:0;align-items:stretch;justify-content:stretch}
-.batch-control-card{width:100vw!important;height:100vh;max-height:100vh;border-radius:0!important;box-shadow:none}
-.batch-card-body{min-height:calc(100vh - 250px);grid-template-columns:minmax(0,2fr) minmax(300px,.72fr)}
-.batch-quality-table{max-height:calc(100vh - 390px)}
-@media(max-width:1100px){.batch-control-card{width:100vw!important}.batch-quality-table{max-height:520px}}
-
-/* Sprint 11.4.3 Build 3 — verified startup */
-.startup-card{text-align:center;align-items:center;max-width:430px}.startup-card .auth-brand{align-self:stretch}.startup-card p{font-weight:700;color:#335365}.startup-spinner{width:48px;height:48px;border-radius:50%;border:5px solid #dcebf0;border-top-color:#176887;animation:imlSpin .85s linear infinite}.startup-progress{width:100%;height:8px;border-radius:999px;background:#e3edf1;overflow:hidden}.startup-progress i{display:block;width:38%;height:100%;border-radius:inherit;background:#176887;animation:imlProgress 1.25s ease-in-out infinite}.startup-card small{justify-content:center}@keyframes imlSpin{to{transform:rotate(360deg)}}@keyframes imlProgress{0%{transform:translateX(180%)}50%{transform:translateX(0)}100%{transform:translateX(-180%)}}
+/* Sprint 11.5.0 Build 1 — performance diagnostics */
+.performance-strip{display:flex;flex-wrap:wrap;align-items:center;gap:12px;background:#eef7fb;border:1px solid #c7e3ee;border-radius:12px;padding:9px 13px;margin:8px 0;color:#24566b;font-size:12px}.performance-strip span{background:#fff;border-radius:8px;padding:5px 8px}.auth-loading{min-height:230px;justify-content:center}.auth-loading .auth-icon{animation:imlPulse 1.2s ease-in-out infinite}@keyframes imlPulse{50%{transform:scale(1.08);opacity:.65}}
