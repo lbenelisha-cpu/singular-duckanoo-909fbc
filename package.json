@@ -1,7 +1,7 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "11.5.0-build.2",
+  "version": "11.5.0-build.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

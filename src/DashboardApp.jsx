@@ -629,92 +629,97 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     udCode: normalize(getField(r, ['UD Code'])),
   })), [deviations])
 
-  const rejectedQualityByBatch = useMemo(() => {
-    const map = new Map()
-    qualityRows.forEach(r => {
-      const status = normalize(r.status).toLowerCase()
-      const isRejected = ['rejection', 'rejected', 'fail', 'failed', 'פסול', 'לא תקין', 'חריג'].some(x => status.includes(x))
-      if (!isRejected || !r.batch || !r.characteristic) return
-      const item = {
-        characteristic: r.characteristic,
-        value: r.value,
-        lower: r.lower,
-        upper: r.upper,
-        unit: r.unit,
-        remarks: r.remarks,
-        qualitative: r.qualitative,
-        inspectionLot: r.inspectionLot,
-        date: r.date,
-      }
-      const current = map.get(r.batch) || []
-      const duplicate = current.some(x => x.characteristic === item.characteristic && x.value === item.value && x.inspectionLot === item.inspectionLot)
-      if (!duplicate) current.push(item)
-      map.set(r.batch, current)
-    })
-    return map
-  }, [qualityRows])
+  // Build every quality lookup in one linear pass. The previous implementation
+  // scanned the 263K-row quality array several times and then filtered the whole
+  // array again for every deviation, which froze the browser after the fast cache render.
+  const qualityIndex = useMemo(() => {
+    const byBatch = new Map()
+    const rejected = new Map()
+    const approved = new Map()
+    const material = new Map()
+    const latestByBatch = new Map()
+    const latestByBatchLot = new Map()
+    const seenRejected = new Map()
+    const seenApproved = new Map()
 
-  const approvedQualityByBatch = useMemo(() => {
-    const map = new Map()
-    qualityRows.forEach(r => {
-      const status = normalize(r.status || r.approval).toLowerCase()
-      const isRejected = ['rejection', 'rejected', 'fail', 'failed', 'פסול', 'לא תקין', 'חריג'].some(x => status.includes(x))
-      if (isRejected || !r.batch || !r.characteristic) return
-      const item = {
-        characteristic: r.characteristic,
-        value: r.value,
-        lower: r.lower,
-        upper: r.upper,
-        unit: r.unit,
-        remarks: r.remarks,
-        qualitative: r.qualitative,
-        inspectionLot: r.inspectionLot,
-        date: r.date,
+    const addCharacteristic = (target, seenMap, batch, item) => {
+      if (!batch || !item.characteristic) return
+      const signature = `${item.characteristic}|${item.value}|${item.inspectionLot}`
+      let seen = seenMap.get(batch)
+      if (!seen) { seen = new Set(); seenMap.set(batch, seen) }
+      if (seen.has(signature)) return
+      seen.add(signature)
+      const list = target.get(batch) || []
+      list.push(item)
+      target.set(batch, list)
+    }
+
+    qualityRows.forEach(row => {
+      const batch = normalize(row.batch)
+      if (!batch) return
+      const list = byBatch.get(batch) || []
+      list.push(row)
+      byBatch.set(batch, list)
+      if (row.material && !material.has(batch)) material.set(batch, row.material)
+
+      const timestamp = row.date ? new Date(row.date).getTime() : 0
+      if (timestamp > (latestByBatch.get(batch)?.timestamp || 0)) latestByBatch.set(batch, { timestamp, date: row.date })
+      if (row.inspectionLot) {
+        const lotKey = `${batch}|${row.inspectionLot}`
+        if (timestamp > (latestByBatchLot.get(lotKey)?.timestamp || 0)) latestByBatchLot.set(lotKey, { timestamp, date: row.date })
       }
-      const current = map.get(r.batch) || []
-      const duplicate = current.some(x => x.characteristic === item.characteristic && x.value === item.value && x.inspectionLot === item.inspectionLot)
-      if (!duplicate) current.push(item)
-      map.set(r.batch, current)
+
+      const status = normalize(row.status || row.approval).toLowerCase()
+      const isRejected = ['rejection', 'rejected', 'fail', 'failed', 'פסול', 'לא תקין', 'חריג'].some(x => status.includes(x))
+      const item = {
+        characteristic: row.characteristic,
+        value: row.value,
+        lower: row.lower,
+        upper: row.upper,
+        unit: row.unit,
+        remarks: row.remarks,
+        qualitative: row.qualitative,
+        inspectionLot: row.inspectionLot,
+        date: row.date,
+      }
+      addCharacteristic(isRejected ? rejected : approved, isRejected ? seenRejected : seenApproved, batch, item)
     })
-    return map
+
+    return { byBatch, rejected, approved, material, latestByBatch, latestByBatchLot }
   }, [qualityRows])
 
   const materialByBatch = useMemo(() => {
-    const map = new Map()
+    const map = new Map(qualityIndex.material)
     prod.forEach(r => { if (r.batch && r.material && !map.has(r.batch)) map.set(r.batch, r.material) })
-    qualityRows.forEach(r => { if (r.batch && r.material && !map.has(r.batch)) map.set(r.batch, r.material) })
     return map
-  }, [prod, qualityRows])
+  }, [prod, qualityIndex])
 
-  const enrichedDeviationRows = useMemo(() => deviationRows.map(r => {
-    const batchQuality = qualityRows.filter(q => q.batch && q.batch === r.batch)
-    const lotQuality = r.inspectionLot ? batchQuality.filter(q => q.inspectionLot === r.inspectionLot) : []
-    const matchedQuality = lotQuality.length ? lotQuality : batchQuality
-    const sampleDate = matchedQuality.map(q => q.date).filter(Boolean).sort((a,b) => new Date(b) - new Date(a))[0] || null
+  const enrichedDeviationRows = useMemo(() => deviationRows.map(row => {
+    const batch = normalize(row.batch)
+    const lotKey = row.inspectionLot ? `${batch}|${row.inspectionLot}` : ''
+    const sampleDate = (lotKey && qualityIndex.latestByBatchLot.get(lotKey)?.date) || qualityIndex.latestByBatch.get(batch)?.date || null
     return {
-      ...r,
+      ...row,
       sampleDate,
-      material: r.material || materialByBatch.get(r.batch) || '',
-      rejectedCharacteristics: rejectedQualityByBatch.get(r.batch) || [],
-      approvedCharacteristics: approvedQualityByBatch.get(r.batch) || [],
+      material: row.material || materialByBatch.get(batch) || '',
+      rejectedCharacteristics: qualityIndex.rejected.get(batch) || [],
+      approvedCharacteristics: qualityIndex.approved.get(batch) || [],
     }
-  }), [deviationRows, qualityRows, materialByBatch, rejectedQualityByBatch, approvedQualityByBatch])
+  }), [deviationRows, materialByBatch, qualityIndex])
 
-  const batchIndex = useMemo(() => {
-    const map = new Map()
-    const ensure = (batch) => {
-      const key = normalize(batch)
-      if (!key) return null
-      if (!map.has(key)) map.set(key, { batch:key, production:[], quality:[], deviations:[] })
-      return map.get(key)
+  // Batch intelligence is now assembled only after the user opens a batch.
+  // This avoids building a giant index for every batch during application startup.
+  const selectedBatchData = useMemo(() => {
+    const batch = normalize(selectedBatch)
+    if (!batch) return null
+    return {
+      batch,
+      production: prod.filter(row => normalize(row.batch) === batch),
+      quality: qualityIndex.byBatch.get(batch) || [],
+      deviations: enrichedDeviationRows.filter(row => normalize(row.batch) === batch),
     }
-    prod.forEach(row => { const item=ensure(row.batch); if (item) item.production.push(row) })
-    qualityRows.forEach(row => { const item=ensure(row.batch); if (item) item.quality.push(row) })
-    enrichedDeviationRows.forEach(row => { const item=ensure(row.batch); if (item) item.deviations.push(row) })
-    return map
-  }, [prod, qualityRows, enrichedDeviationRows])
+  }, [selectedBatch, prod, qualityIndex, enrichedDeviationRows])
 
-  const selectedBatchData = selectedBatch ? batchIndex.get(selectedBatch) : null
   const openBatchCard = (batch) => { if (batch) setSelectedBatch(normalize(batch)) }
 
   const dataMonths = useMemo(() => [...new Set(prod.map(r => monthKey(r.date)).filter(Boolean))].sort(), [prod])
@@ -723,13 +728,19 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => { if (!planningMonth && availableMonths.length) setPlanningMonth(availableMonths[0]) }, [availableMonths, planningMonth])
 
   const dateBounds = useMemo(() => {
-    // The date selector controls every dataset, therefore its available range
-    // must include production, quality and deviations (not production only).
-    const ds = [...prod, ...qualityRows, ...deviationRows]
-      .map(r => r.date)
-      .filter(Boolean)
-      .sort((a, b) => new Date(a) - new Date(b))
-    return { min: iso(ds[0]), max: iso(ds.at(-1)) }
+    let minTime = Infinity
+    let maxTime = -Infinity
+    const scan = rows => rows.forEach(row => {
+      const time = row.date ? new Date(row.date).getTime() : NaN
+      if (!Number.isFinite(time)) return
+      if (time < minTime) minTime = time
+      if (time > maxTime) maxTime = time
+    })
+    scan(prod); scan(qualityRows); scan(deviationRows)
+    return {
+      min: Number.isFinite(minTime) ? iso(new Date(minTime)) : '',
+      max: Number.isFinite(maxTime) ? iso(new Date(maxTime)) : '',
+    }
   }, [prod, qualityRows, deviationRows])
 
   const baseFiltered = useMemo(() => {
@@ -976,12 +987,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">Sprint 11.5.0 Build 1 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">Sprint 11.5.0 Build 2.1 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 1 — Control Tower & Roles</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 2.1 — Control Tower & Roles</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -993,7 +1004,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       </header>
 
       <div className="load-status"><CheckCircle2 size={18}/>{status}</div>
-      {canManageData && <div className="performance-strip"><Activity size={16}/><b>Build 1 Diagnostics</b><span>Cache: {perfStats.cache}</span><span>Queries: {perfStats.queries}</span><span>Rows: {perfStats.rows.toLocaleString()}</span><span>Load: {perfStats.loadMs ? `${perfStats.loadMs}ms` : perfStats.phase}</span><span>Range: {from}–{to}</span></div>}
+      {canManageData && <div className="performance-strip"><Activity size={16}/><b>Build 2.1 Diagnostics</b><span>Cache: {perfStats.cache}</span><span>Queries: {perfStats.queries}</span><span>Production: {production.length.toLocaleString()}</span><span>Quality: {quality.length.toLocaleString()}</span><span>In range: {(filtered.length + filteredQualityRows.length + filteredDeviationRows.length).toLocaleString()}</span><span>Load: {perfStats.loadMs ? `${perfStats.loadMs}ms` : perfStats.phase}</span><span>Range: {from}–{to}</span></div>}
       {uploadProgress && <section className="upload-progress-card"><div className="upload-progress-head"><strong>{uploadProgress.fileName}</strong><span>{uploadProgress.percent}%</span></div><div className="upload-progress-track"><div style={{width:`${uploadProgress.percent}%`}}/></div><small>{uploadProgress.message}</small></section>}
 
       <section className={`cloud-status ${cloudState.mode}`}>
