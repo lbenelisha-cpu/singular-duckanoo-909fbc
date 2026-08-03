@@ -1,21 +1,22 @@
-{
-  "name": "iml-control-center",
-  "private": true,
-  "version": "11.4.3-build.3",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "4.3.4",
-    "vite": "6.0.11",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "lucide-react": "0.468.0",
-    "xlsx": "0.18.5",
-    "@supabase/supabase-js": "2.49.1"
-  },
-  "devDependencies": {}
-}
+-- Sprint 11.2.3 upload permission verification
+-- Run in Supabase SQL Editor while logged in as project owner.
+
+-- Confirm the administrator profile exists.
+select id, email, role, is_active
+from public.profiles
+where lower(email) = lower('lbenelisha@gmail.com');
+
+-- Repair the role if required.
+update public.profiles
+set role = 'admin', is_active = true, updated_at = now()
+where lower(email) = lower('lbenelisha@gmail.com');
+
+-- Ensure authenticated users can execute the permission and activation functions.
+grant execute on function public.iml_is_admin() to authenticated;
+grant execute on function public.iml_activate_dataset_version(uuid) to authenticated;
+
+-- Show recent failed uploads and their exact reason.
+select created_at, kind, file_name, row_count, status, error_message, duration_ms
+from public.iml_upload_history
+order by created_at desc
+limit 20;

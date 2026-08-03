@@ -1,191 +1,159 @@
--- IML Control Sprint 10.1.1
--- Dedicated schema recovery migration.
--- Run the ENTIRE file in Supabase SQL Editor, then confirm the verification row at the end.
+-- IML Control Sprint 9.2.1 - Safe Cloud Installer
+-- This script is idempotent: it may be run more than once.
 
-create extension if not exists pgcrypto;
+begin;
 
--- 1. Active version pointer on the existing metadata table.
-alter table public.iml_data_sources
-  add column if not exists active_version_id uuid;
-
--- 2. Dataset version header.
-create table if not exists public.iml_dataset_versions (
-  id uuid primary key default gen_random_uuid(),
-  kind text not null check (kind in ('production','quality','deviations','targets','packaging_plan')),
-  version_no bigint not null,
-  file_name text not null default '',
-  row_count bigint not null default 0,
-  raw_row_count bigint not null default 0,
-  facilities integer not null default 0,
-  chunk_count integer not null default 0,
-  uploaded_by uuid references auth.users(id) on delete set null,
-  uploaded_by_email text not null default '',
-  status text not null default 'uploading' check (status in ('uploading','active','archived','failed')),
-  error_message text not null default '',
+-- ---------- Users and roles ----------
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text,
+  full_name text,
+  role text not null default 'viewer' check (role in ('admin','manager','viewer')),
+  is_active boolean not null default true,
   created_at timestamptz not null default now(),
-  activated_at timestamptz,
-  unique(kind, version_no)
+  updated_at timestamptz not null default now()
 );
 
--- 3. Automatic sequential version number per dataset kind.
-create or replace function public.iml_assign_version_no()
+alter table public.profiles enable row level security;
+
+drop policy if exists "users read own profile" on public.profiles;
+create policy "users read own profile" on public.profiles
+for select to authenticated using (id = auth.uid());
+
+create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
 begin
-  if new.version_no is null or new.version_no = 0 then
-    perform pg_advisory_xact_lock(hashtext('iml-version-' || new.kind));
-    select coalesce(max(version_no), 0) + 1 into new.version_no
-    from public.iml_dataset_versions where kind = new.kind;
-  end if;
+  insert into public.profiles(id,email,full_name,role)
+  values(new.id,new.email,coalesce(new.raw_user_meta_data->>'full_name',''),'viewer')
+  on conflict (id) do update set email = excluded.email;
   return new;
 end;
 $$;
 
-drop trigger if exists iml_dataset_version_number on public.iml_dataset_versions;
-create trigger iml_dataset_version_number
-before insert on public.iml_dataset_versions
-for each row execute function public.iml_assign_version_no();
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute procedure public.handle_new_user();
 
--- 4. Versioned data chunks.
-create table if not exists public.iml_dataset_chunks (
-  version_id uuid not null references public.iml_dataset_versions(id) on delete cascade,
-  chunk_index integer not null,
-  payload jsonb not null default '[]'::jsonb,
-  row_count integer not null default 0,
-  created_at timestamptz not null default now(),
-  primary key(version_id, chunk_index)
+insert into public.profiles(id,email,full_name,role)
+select id,email,coalesce(raw_user_meta_data->>'full_name',''),'viewer'
+from auth.users
+on conflict (id) do update set email = excluded.email;
+
+-- Preserve the existing administrator assignment when the user exists.
+update public.profiles
+set role='admin', is_active=true, updated_at=now()
+where lower(email)=lower('lbenelisha@gmail.com');
+
+create or replace function public.iml_is_admin()
+returns boolean language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'admin' and is_active = true
+  );
+$$;
+
+grant execute on function public.iml_is_admin() to authenticated;
+
+-- Admins can read and manage all profiles. Users can still read their own profile.
+drop policy if exists "admins read profiles" on public.profiles;
+create policy "admins read profiles" on public.profiles
+for select to authenticated using (public.iml_is_admin());
+
+drop policy if exists "admins update profiles" on public.profiles;
+create policy "admins update profiles" on public.profiles
+for update to authenticated using (public.iml_is_admin()) with check (public.iml_is_admin());
+
+-- ---------- Shared datasets ----------
+create table if not exists public.iml_data_sources (
+  kind text primary key check (kind in ('production','quality','deviations','targets','packaging_plan')),
+  file_name text not null default '',
+  row_count bigint not null default 0,
+  raw_row_count bigint not null default 0,
+  facilities integer not null default 0,
+  loaded_at timestamptz not null default now(),
+  loaded_by uuid references auth.users(id) on delete set null,
+  loaded_by_email text not null default '',
+  updated_at timestamptz not null default now()
 );
 
-alter table public.iml_upload_history add column if not exists version_id uuid;
-alter table public.iml_upload_history add column if not exists duration_ms bigint;
-
-create index if not exists iml_dataset_versions_kind_status_idx
-  on public.iml_dataset_versions(kind, status, created_at desc);
-create index if not exists iml_dataset_chunks_version_idx
-  on public.iml_dataset_chunks(version_id, chunk_index);
-
--- 5. Security policies.
-alter table public.iml_dataset_versions enable row level security;
-alter table public.iml_dataset_chunks enable row level security;
-
-drop policy if exists "authenticated read dataset versions" on public.iml_dataset_versions;
-create policy "authenticated read dataset versions" on public.iml_dataset_versions
-for select to authenticated using (true);
-
-drop policy if exists "admin manage dataset versions" on public.iml_dataset_versions;
-create policy "admin manage dataset versions" on public.iml_dataset_versions
-for all to authenticated using (public.iml_is_admin()) with check (public.iml_is_admin());
-
-drop policy if exists "authenticated read dataset chunks" on public.iml_dataset_chunks;
-create policy "authenticated read dataset chunks" on public.iml_dataset_chunks
-for select to authenticated using (true);
-
-drop policy if exists "admin manage dataset chunks" on public.iml_dataset_chunks;
-create policy "admin manage dataset chunks" on public.iml_dataset_chunks
-for all to authenticated using (public.iml_is_admin()) with check (public.iml_is_admin());
-
--- 6. Atomic activation: a new version becomes visible only after verification.
-create or replace function public.iml_activate_dataset_version(p_version_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v public.iml_dataset_versions%rowtype;
-  actual_chunks integer;
-  actual_rows bigint;
-begin
-  if not public.iml_is_admin() then
-    raise exception 'Admin permission required';
-  end if;
-
-  select * into v
-  from public.iml_dataset_versions
-  where id = p_version_id
-  for update;
-
-  if not found then raise exception 'Dataset version not found'; end if;
-  if v.status <> 'uploading' then raise exception 'Dataset version is not awaiting activation'; end if;
-
-  select count(*), coalesce(sum(row_count),0)
-  into actual_chunks, actual_rows
-  from public.iml_dataset_chunks
-  where version_id = p_version_id;
-
-  if actual_chunks <> v.chunk_count or actual_rows <> v.row_count then
-    raise exception 'Dataset verification failed: chunks %, rows %', actual_chunks, actual_rows;
-  end if;
-
-  update public.iml_dataset_versions
-  set status = 'archived'
-  where kind = v.kind and status = 'active' and id <> v.id;
-
-  update public.iml_dataset_versions
-  set status = 'active', activated_at = now(), error_message = ''
-  where id = v.id;
-
-  insert into public.iml_data_sources(
-    kind,file_name,row_count,raw_row_count,facilities,loaded_at,
-    loaded_by,loaded_by_email,updated_at,active_version_id
-  ) values (
-    v.kind,v.file_name,v.row_count,v.raw_row_count,v.facilities,now(),
-    v.uploaded_by,v.uploaded_by_email,now(),v.id
-  )
-  on conflict(kind) do update set
-    file_name=excluded.file_name,
-    row_count=excluded.row_count,
-    raw_row_count=excluded.raw_row_count,
-    facilities=excluded.facilities,
-    loaded_at=excluded.loaded_at,
-    loaded_by=excluded.loaded_by,
-    loaded_by_email=excluded.loaded_by_email,
-    updated_at=excluded.updated_at,
-    active_version_id=excluded.active_version_id;
-end;
-$$;
-
-grant execute on function public.iml_activate_dataset_version(uuid) to authenticated;
-
--- 7. Safe full-data deletion function.
-create or replace function public.iml_delete_all_datasets()
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if not public.iml_is_admin() then raise exception 'Admin permission required'; end if;
-  delete from public.iml_data_sources
-  where kind in ('production','quality','deviations','targets','packaging_plan');
-  delete from public.iml_dataset_versions
-  where kind in ('production','quality','deviations','targets','packaging_plan');
-  delete from public.iml_data_chunks
-  where kind in ('production','quality','deviations','targets','packaging_plan');
-end;
-$$;
-
-grant execute on function public.iml_delete_all_datasets() to authenticated;
-
--- 8. Realtime and PostgREST schema refresh.
+-- Upgrade an older installation whose check constraint had only four kinds.
 do $$
+declare constraint_name text;
 begin
-  alter publication supabase_realtime add table public.iml_dataset_versions;
+  select conname into constraint_name
+  from pg_constraint
+  where conrelid = 'public.iml_data_sources'::regclass
+    and contype = 'c'
+    and pg_get_constraintdef(oid) ilike '%kind%';
+  if constraint_name is not null then
+    execute format('alter table public.iml_data_sources drop constraint %I', constraint_name);
+  end if;
+  alter table public.iml_data_sources
+    add constraint iml_data_sources_kind_check
+    check (kind in ('production','quality','deviations','targets','packaging_plan'));
 exception when duplicate_object then null;
 end $$;
 
-notify pgrst, 'reload schema';
+create table if not exists public.iml_data_chunks (
+  kind text not null references public.iml_data_sources(kind) on delete cascade deferrable initially deferred,
+  chunk_index integer not null,
+  payload jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  primary key (kind, chunk_index)
+);
 
--- 9. Verification. Expected result: all three columns are TRUE.
-select
-  to_regclass('public.iml_dataset_versions') is not null as versions_table_ready,
-  to_regclass('public.iml_dataset_chunks') is not null as chunks_table_ready,
-  exists (
-    select 1 from information_schema.columns
-    where table_schema='public'
-      and table_name='iml_data_sources'
-      and column_name='active_version_id'
-  ) as active_version_column_ready;
+create table if not exists public.iml_upload_history (
+  id bigint generated by default as identity primary key,
+  kind text not null,
+  file_name text not null default '',
+  row_count bigint not null default 0,
+  raw_row_count bigint not null default 0,
+  uploaded_by uuid references auth.users(id) on delete set null,
+  uploaded_by_email text not null default '',
+  status text not null default 'success',
+  error_message text not null default '',
+  created_at timestamptz not null default now()
+);
+
+alter table public.iml_data_sources enable row level security;
+alter table public.iml_data_chunks enable row level security;
+alter table public.iml_upload_history enable row level security;
+
+drop policy if exists "authenticated read iml sources" on public.iml_data_sources;
+create policy "authenticated read iml sources" on public.iml_data_sources
+for select to authenticated using (true);
+drop policy if exists "admin manage iml sources" on public.iml_data_sources;
+create policy "admin manage iml sources" on public.iml_data_sources
+for all to authenticated using (public.iml_is_admin()) with check (public.iml_is_admin());
+
+drop policy if exists "authenticated read iml chunks" on public.iml_data_chunks;
+create policy "authenticated read iml chunks" on public.iml_data_chunks
+for select to authenticated using (true);
+drop policy if exists "admin manage iml chunks" on public.iml_data_chunks;
+create policy "admin manage iml chunks" on public.iml_data_chunks
+for all to authenticated using (public.iml_is_admin()) with check (public.iml_is_admin());
+
+drop policy if exists "authenticated read upload history" on public.iml_upload_history;
+create policy "authenticated read upload history" on public.iml_upload_history
+for select to authenticated using (true);
+drop policy if exists "admin insert upload history" on public.iml_upload_history;
+create policy "admin insert upload history" on public.iml_upload_history
+for insert to authenticated with check (public.iml_is_admin());
+
+create index if not exists iml_data_chunks_kind_idx on public.iml_data_chunks(kind, chunk_index);
+create index if not exists iml_upload_history_created_idx on public.iml_upload_history(created_at desc);
+
+-- Enable change notifications for the small metadata table. Ignore if already enabled.
+do $$
+begin
+  alter publication supabase_realtime add table public.iml_data_sources;
+exception when duplicate_object then null;
+end $$;
+
+commit;
