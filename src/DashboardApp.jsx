@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
+import { buildResourceRows } from './resourceEngine'
 import './styles.css'
 
 const LEGACY_DAILY_TARGETS = {
@@ -37,7 +38,7 @@ const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1150'
-const BUILD_LABEL = 'Sprint 11.5.0 Build 2'
+const BUILD_LABEL = 'Sprint 11.5.0 Build 3'
 const isoDate = date => date.toISOString().slice(0, 10)
 const initialToDate = () => isoDate(new Date())
 const initialFromDate = () => { const date = new Date(); date.setDate(date.getDate() - 6); return isoDate(date) }
@@ -299,6 +300,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [periodQuarter, setPeriodQuarter] = useState('')
   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
   const [selectedBatch, setSelectedBatch] = useState('')
+  const [selectedResource, setSelectedResource] = useState(null)
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
   const [perfStats, setPerformance] = useState({ startedAt:0, cache:'MISS', queries:0, rows:0, loadMs:0, phase:'אתחול' })
@@ -754,28 +756,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
   const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
 
-  const planningRows = useMemo(() => {
-    if (!planningMonth) return []
-    const [year,month]=planningMonth.split('-').map(Number); const monthRows=prod.filter(r=>monthKey(r.date)===planningMonth)
-    const latestDataDate=monthRows.map(r=>r.date).filter(Boolean).sort((a,b)=>b-a)[0]; const now=new Date()
-    const isCurrent=now.getFullYear()===year&&now.getMonth()+1===month; const isPast=new Date(year,month,0)<new Date(now.getFullYear(),now.getMonth(),1)
-    const asOfDay=isCurrent?Math.min(now.getDate(),daysInMonth(planningMonth)):isPast?daysInMonth(planningMonth):(latestDataDate?.getDate()||0)
-    const elapsedWorkdays=workdayCount(planningMonth,1,Math.max(0,asOfDay)); const totalWorkdays=workdayCount(planningMonth); const remainingWorkdays=Math.max(0,totalWorkdays-elapsedWorkdays)
-    const monthTargets=targets.filter(t=>t.month===planningMonth); const sourceRows=monthTargets.length?monthTargets:facilities.map(facility=>({facility,facilities:[facility],resource:`מתקן ${facility}`,target:0,capacity:0,descriptionTokens:[]}))
-    return sourceRows.map((targetRow,index)=>{
-      const facilityIds=targetRow.facilities?.length?targetRow.facilities:[targetRow.facility].filter(Boolean); const tokens=(targetRow.descriptionTokens||[]).map(normalizeRouting).filter(Boolean)
-      let rows=monthRows.filter(r=>facilityIds.includes(r.facility)); if(facilityIds.includes('1542')) rows=rows.filter(r=>r.facility!=='1542'||r.orderType.toUpperCase().includes('ZFIN'))
-      if(targetRow.routingGroup) rows=rows.filter(r=>normalizeRouting(r.routingGroup)===normalizeRouting(targetRow.routingGroup))
-      if(tokens.length) rows=rows.filter(r=>{const hay=normalizeRouting(`${r.routingDescription||''} ${r.desc||''}`); return tokens.some(token=>hay.includes(token))})
-      const actual=rows.reduce((sum,r)=>sum+r.qty,0); const target=targetRow.target||0; const dailyMap=new Map(); rows.forEach(r=>{const d=iso(r.date);if(d)dailyMap.set(d,(dailyMap.get(d)||0)+r.qty)})
-      const dailyValues=[...dailyMap.values()], actualDays=dailyValues.length, average=actualDays?actual/actualDays:0
-      const recent=[...dailyMap.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(-7).map(([,v])=>v); const recentAverage=recent.length?recent.reduce((a,b)=>a+b,0)/recent.length:average
-      const provenMax=dailyValues.length?Math.max(...dailyValues):(targetRow.capacity?targetRow.capacity/Math.max(1,totalWorkdays):0); const remaining=Math.max(0,target-actual)
-      const requiredDaily=remainingWorkdays?remaining/remainingWorkdays:remaining; const forecast=actual+recentAverage*remainingWorkdays; const capacityForecast=actual+provenMax*remainingWorkdays
-      let state='no-target',label='ללא יעד'; if(target>0&&actual>=target){state='achieved';label='היעד הושג'}else if(target>0&&remainingWorkdays===0){state='risk';label='היעד לא הושג'}else if(target>0&&provenMax>0&&requiredDaily>provenMax){state='risk';label='לא בר־השגה'}else if(target>0&&forecast<target){state='warning';label='נדרש שיפור קצב'}else if(target>0){state='good';label='במסלול ליעד'}
-      return {id:`${targetRow.resource||targetRow.facility||index}::${index}`,resource:targetRow.resource||`מתקן ${targetRow.facility}`,facility:facilityIds.join(','),facilities:facilityIds,routingGroup:targetRow.routingGroup||'',station:targetRow.station||facilityIds.join(','),lineName:targetRow.lineName||targetRow.resource||'',activity:targetRow.activity||'ייצור / אריזה',target,capacity:targetRow.capacity||0,actual,pct:target?actual/target*100:0,remaining,requiredDaily,average,recentAverage,provenMax,forecast,capacityForecast,elapsedWorkdays,remainingWorkdays,totalWorkdays,orders:new Set(rows.map(r=>r.order).filter(Boolean)).size,state,label,notes:targetRow.notes||'',recyclingPlan:targetRow.recyclingPlan||0,recycled:targetRow.recycled||0,forPacking:targetRow.forPacking||0,restrictedRecycling:targetRow.restrictedRecycling||0,restrictedDisposal:targetRow.restrictedDisposal||0}
-    })
-  }, [planningMonth,prod,targets,facilities])
+  const planningRows = useMemo(() => buildResourceRows({
+    production: prod,
+    targets,
+    planningMonth,
+    fallbackFacilities: facilities,
+  }), [planningMonth, prod, targets, facilities])
 
   const facilityStats = useMemo(() => facilities.map(id => {
     let rows = baseFiltered.filter(r => r.facility === id)
@@ -987,12 +973,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">Sprint 11.5.0 Build 2.1 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">Sprint 11.5.0 Build 3 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 2.1 — Control Tower & Roles</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 3 — Resource Engine & Control Tower</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -1004,7 +990,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       </header>
 
       <div className="load-status"><CheckCircle2 size={18}/>{status}</div>
-      {canManageData && <div className="performance-strip"><Activity size={16}/><b>Build 2.1 Diagnostics</b><span>Cache: {perfStats.cache}</span><span>Queries: {perfStats.queries}</span><span>Production: {production.length.toLocaleString()}</span><span>Quality: {quality.length.toLocaleString()}</span><span>In range: {(filtered.length + filteredQualityRows.length + filteredDeviationRows.length).toLocaleString()}</span><span>Load: {perfStats.loadMs ? `${perfStats.loadMs}ms` : perfStats.phase}</span><span>Range: {from}–{to}</span></div>}
+      {canManageData && <div className="performance-strip"><Activity size={16}/><b>Build 3 Diagnostics</b><span>Cache: {perfStats.cache}</span><span>Queries: {perfStats.queries}</span><span>Production: {production.length.toLocaleString()}</span><span>Quality: {quality.length.toLocaleString()}</span><span>In range: {(filtered.length + filteredQualityRows.length + filteredDeviationRows.length).toLocaleString()}</span><span>Load: {perfStats.loadMs ? `${perfStats.loadMs}ms` : perfStats.phase}</span><span>Range: {from}–{to}</span></div>}
       {uploadProgress && <section className="upload-progress-card"><div className="upload-progress-head"><strong>{uploadProgress.fileName}</strong><span>{uploadProgress.percent}%</span></div><div className="upload-progress-track"><div style={{width:`${uploadProgress.percent}%`}}/></div><small>{uploadProgress.message}</small></section>}
 
       <section className={`cloud-status ${cloudState.mode}`}>
@@ -1028,7 +1014,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <section className="tower-facility-section">
         <div className="panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><span>{controlTowerFacilities.length} מתקנים במעקב</span></div>
         <div className="tower-facility-grid">
-          {controlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => { setSelectedFacilities(row.facilityIds || []); document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'}) }}>
+          {controlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => setSelectedResource(row)}>
             <div className="tower-facility-head"><div><i></i><strong>{row.facility}</strong></div><span>{row.state === 'good' ? 'תקין' : row.state === 'warning' ? 'דורש תשומת לב' : row.state === 'risk' ? 'בסיכון' : 'ללא יעד'}</span></div>
             <div className="tower-health"><div><HeartPulse/><span>Health Score</span></div><b>{row.healthScore}<small>/100</small></b></div>
             <div className="tower-progress"><i style={{width:`${Math.min(100,row.actualPct)}%`}}/></div>
@@ -1143,7 +1129,37 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="8" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch.</p><div className="table-wrap"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{iso(r.sampleDate) || '—'}</td><td>{r.sampleDate ? new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="10" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
     </main>
+    {selectedResource && <ResourceDetailModal resource={selectedResource} onClose={() => setSelectedResource(null)} onOpenBatch={batch => { setSelectedResource(null); openBatchCard(batch) }}/>}
     {selectedBatchData && <BatchControlCard data={selectedBatchData} onClose={() => setSelectedBatch('')}/>}
+  </div>
+}
+
+function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
+  useEffect(() => {
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const close = event => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', close)
+    return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', close) }
+  }, [onClose])
+  const rows = resource.productionRows || []
+  const batches = [...new Set(rows.map(row => row.batch).filter(Boolean))]
+  const orders = [...new Set(rows.map(row => row.order).filter(Boolean))]
+  const progress = resource.target ? Math.min(100, resource.actual / resource.target * 100) : 0
+  return <div className="resource-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="resource-detail-modal" role="dialog" aria-modal="true" aria-label={`פירוט ${resource.resource}`}>
+      <header><div><span>RESOURCE CONTROL CENTER</span><h2>{resource.resource}</h2><p>{[resource.station && `Station ${resource.station}`, resource.description, resource.lineName].filter(Boolean).join(' · ')}</p></div><button onClick={onClose} aria-label="סגירה"><X/></button></header>
+      <div className={`resource-status-banner ${resource.state}`}><strong>{resource.label}</strong><span>תחזית {fmt(resource.forecast)} מול יעד {fmt(resource.target)}</span></div>
+      <div className="resource-detail-kpis">
+        <BatchMetric label="יעד חודשי" value={fmt(resource.target)}/><BatchMetric label="בוצע" value={fmt(resource.actual)}/><BatchMetric label="עמידה" value={pctFmt(resource.pct)}/><BatchMetric label="תחזית" value={fmt(resource.forecast)}/><BatchMetric label="קצב נדרש" value={fmt(resource.requiredDaily)}/><BatchMetric label="קצב אחרון" value={fmt(resource.recentAverage)}/><BatchMetric label="ימי עבודה נותרו" value={resource.remainingWorkdays}/><BatchMetric label="שיא מוכח" value={fmt(resource.provenMax)}/>
+      </div>
+      <div className="resource-detail-progress"><div><span>התקדמות חודשית</span><b>{Math.round(progress)}%</b></div><i><em style={{width:`${progress}%`}}/></i></div>
+      <div className="resource-detail-grid">
+        <article><h3>נתוני משאב</h3><dl><div><dt>תחנה</dt><dd>{resource.station || '—'}</dd></div><div><dt>Description</dt><dd>{resource.description || '—'}</dd></div><div><dt>Orders</dt><dd>{orders.length}</dd></div><div><dt>Batches</dt><dd>{batches.length}</dd></div><div><dt>חריגות פתוחות</dt><dd>{resource.deviationsCount || 0}</dd></div><div><dt>Capacity</dt><dd>{fmt(resource.capacity)}</dd></div></dl></article>
+        <article><h3>הערות ומגבלות</h3><p>{resource.notes || 'לא הוזנה הערה בקובץ היעדים.'}</p><dl><div><dt>Recycling Plan</dt><dd>{fmt(resource.recyclingPlan)}</dd></div><div><dt>Recycled</dt><dd>{fmt(resource.recycled)}</dd></div><div><dt>For Packing</dt><dd>{fmt(resource.forPacking)}</dd></div><div><dt>Restricted recycling</dt><dd>{fmt(resource.restrictedRecycling)}</dd></div><div><dt>Risk for disposal</dt><dd>{fmt(resource.restrictedDisposal)}</dd></div></dl></article>
+      </div>
+      <section className="resource-batches"><div><h3>מנות פעילות</h3><span>{batches.length} מנות</span></div><div>{batches.slice(0,24).map(batch => <button key={batch} onClick={() => onOpenBatch(batch)}>{batch}<ArrowLeft size={15}/></button>)}{!batches.length && <p>לא נמצאו מנות למשאב בחודש הנבחר.</p>}</div></section>
+    </section>
   </div>
 }
 
