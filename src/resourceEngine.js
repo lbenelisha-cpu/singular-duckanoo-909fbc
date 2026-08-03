@@ -32,6 +32,16 @@ const matchProductionToTarget = (row, target) => {
   return tokens.some(token => haystack.includes(token))
 }
 
+
+const packagingTypeForTarget = target => {
+  const resource = upper(target.resource)
+  const tokens = (target.descriptionTokens || []).map(upper)
+  if (/LQ\s*1\s*(LT|L)\b/.test(resource) || tokens.some(t => ['1L','1 L','1LT','1 LT'].includes(t))) return '1 ליטר'
+  if (/LQ\s*5\s*(LT|L)\b/.test(resource) || tokens.some(t => ['5L','5 L','5LT','5 LT'].includes(t))) return '5 ליטר'
+  if (/LQ\s*10\s*\/\s*20/.test(resource) || tokens.some(t => ['10L','10 L','20L','20 L','10/20'].includes(t))) return '10/20 ליטר'
+  return ''
+}
+
 export function buildResourceRows({ production = [], targets = [], planningMonth = '', fallbackFacilities = [], now = new Date() }) {
   if (!planningMonth) return []
   const [year, month] = planningMonth.split('-').map(Number)
@@ -86,7 +96,7 @@ export function buildResourceRows({ production = [], targets = [], planningMonth
       resource:targetRow.resource || `מתקן ${targetRow.facility}`,
       facility:facilities.join(','), facilities,
       routingGroup:targetRow.routingGroup || '', station:targetRow.station || facilities.join(','),
-      description:(targetRow.descriptionTokens || []).join(' / '), lineName:targetRow.lineName || targetRow.resource || '', activity:targetRow.activity || 'ייצור / אריזה',
+      description:(targetRow.descriptionTokens || []).join(' / '), packagingType:packagingTypeForTarget(targetRow), lineName:targetRow.lineName || targetRow.resource || '', activity:targetRow.activity || 'ייצור / אריזה',
       target, capacity, actual, pct:target ? actual / target * 100 : 0, remaining, requiredDaily,
       average, recentAverage, provenMax, forecast, capacityForecast, elapsedWorkdays, remainingWorkdays, totalWorkdays,
       orders:orders.size, batches:batches.size, productionRows:rows, dailyEntries, state, label,

@@ -402,3 +402,70 @@ export async function deleteAllCloudDatasets(user) {
     uploaded_by: user?.id || null, uploaded_by_email: user?.email || '', status: 'deleted',
   })
 }
+
+
+export async function uploadCloudDatasetIncremental(kind, newRows, meta, user, onProgress) {
+  requireClient()
+  if (kind !== 'quality') throw new Error('טעינה מצטברת נתמכת כעת עבור איכות בלבד')
+  if (!Array.isArray(newRows) || !newRows.length) throw new Error('לא נמצאו רשומות חדשות להעלאה')
+  await assertCloudWriteAccess()
+  const startedAt = Date.now()
+  const chunks = []
+  for (let index = 0; index < newRows.length; index += ROWS_PER_CHUNK) chunks.push(newRows.slice(index, index + ROWS_PER_CHUNK))
+  emit(onProgress, 'prepare', 1, 1, `נמצאו ${newRows.length} רשומות חדשות בלבד`)
+
+  const { data: seed, error: seedError } = await supabase.rpc('iml_create_incremental_dataset_version', {
+    p_kind: kind,
+    p_file_name: meta.fileName || '',
+    p_raw_row_count: meta.rawRows ?? newRows.length,
+    p_facilities: meta.facilities || 0,
+    p_new_row_count: newRows.length,
+    p_new_chunk_count: chunks.length,
+    p_uploaded_by: user?.id || null,
+    p_uploaded_by_email: user?.email || '',
+  })
+  if (seedError) {
+    const text = `${seedError.message || ''} ${seedError.hint || ''}`
+    if (/iml_create_incremental_dataset_version|schema cache|could not find/i.test(text)) {
+      throw new Error('מנגנון טעינת איכות מצטברת עדיין לא מותקן ב-Supabase. יש להריץ פעם אחת את SPRINT_11_5_0_BUILD4_INCREMENTAL_QUALITY.sql.')
+    }
+    throw seedError
+  }
+  const version = Array.isArray(seed) ? seed[0] : seed
+  if (!version?.version_id) throw new Error('Supabase לא החזיר מזהה לגרסת האיכות המצטברת')
+  const baseChunkIndex = Number(version.base_chunk_count) || 0
+
+  try {
+    for (let offset = 0; offset < chunks.length; offset += CHUNKS_PER_UPLOAD_REQUEST) {
+      const batch = chunks.slice(offset, offset + CHUNKS_PER_UPLOAD_REQUEST).map((payload, batchIndex) => ({
+        version_id: version.version_id,
+        chunk_index: baseChunkIndex + offset + batchIndex,
+        payload,
+        row_count: payload.length,
+      }))
+      await withRetry(async () => {
+        const { error } = await supabase.from('iml_dataset_chunks').upsert(batch, { onConflict:'version_id,chunk_index' })
+        if (error) throw error
+      }, `העלאת רשומות איכות חדשות ${offset + 1}-${offset + batch.length}`)
+      emit(onProgress, 'upload', Math.min(offset + batch.length, chunks.length), chunks.length || 1, 'מעלה רק את רשומות האיכות החדשות')
+      await sleep(0)
+    }
+
+    emit(onProgress, 'verify', 0, 1, 'מאמת ומפעיל את גרסת האיכות המצטברת')
+    const { error: activateError } = await supabase.rpc('iml_activate_dataset_version', { p_version_id:version.version_id })
+    if (activateError) throw activateError
+    emit(onProgress, 'verify', 1, 1, 'האימות הסתיים בהצלחה')
+
+    const totalRows = Number(version.total_row_count) || ((Number(meta.existingRows) || 0) + newRows.length)
+    await supabase.from('iml_upload_history').insert({
+      kind, file_name:meta.fileName || '', row_count:newRows.length, raw_row_count:meta.rawRows ?? newRows.length,
+      uploaded_by:user?.id || null, uploaded_by_email:user?.email || '', status:'success', version_id:version.version_id,
+      duration_ms:Date.now() - startedAt,
+    })
+    emit(onProgress, 'complete', 1, 1, `נוספו ${newRows.length} רשומות חדשות; סה״כ ${totalRows}`)
+    return { ...meta, rows:totalRows, newRows:newRows.length, loadedAt:new Date().toISOString(), loadedBy:user?.email || '', source:'cloud', version:version.version_no, versionId:version.version_id }
+  } catch (error) {
+    await supabase.from('iml_dataset_versions').update({ status:'failed', error_message:error.message }).eq('id', version.version_id)
+    throw error
+  }
+}

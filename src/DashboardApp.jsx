@@ -5,7 +5,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse
 } from 'lucide-react'
-import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
+import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import './styles.css'
@@ -38,7 +38,7 @@ const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1150'
-const BUILD_LABEL = 'Sprint 11.5.0 Build 3'
+const BUILD_LABEL = 'Sprint 11.5.0 Build 4'
 const isoDate = date => date.toISOString().slice(0, 10)
 const initialToDate = () => isoDate(new Date())
 const initialFromDate = () => { const date = new Date(); date.setDate(date.getDate() - 6); return isoDate(date) }
@@ -221,6 +221,36 @@ const parseTargetNumber = (value) => {
   const n = Number(text.replace(/[(),%\s]/g,'').replace(/,/g,''))
   return Number.isFinite(n) ? (negative ? -n : n) : 0
 }
+
+const qualityRowKey = (row) => [
+  normalize(row?.inspectionLot), normalize(row?.batch), normalize(row?.material),
+  normalize(row?.characteristic), row?.date ? new Date(row.date).toISOString() : '',
+  normalize(row?.value), normalize(row?.qualitative), normalize(row?.status)
+].join('|')
+
+async function filterNewQualityRows(existingRows, incomingRows, onProgress) {
+  const keys = new Set()
+  const total = existingRows.length + incomingRows.length
+  let done = 0
+  for (let i = 0; i < existingRows.length; i += 4000) {
+    existingRows.slice(i, i + 4000).forEach(row => keys.add(qualityRowKey(row)))
+    done += Math.min(4000, existingRows.length - i)
+    onProgress?.(done, total)
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+  const fresh = []
+  for (let i = 0; i < incomingRows.length; i += 4000) {
+    incomingRows.slice(i, i + 4000).forEach(row => {
+      const key = qualityRowKey(row)
+      if (!keys.has(key)) { keys.add(key); fresh.push(row) }
+    })
+    done += Math.min(4000, incomingRows.length - i)
+    onProgress?.(done, total)
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+  return fresh
+}
+
 async function readTargetWorkbook(file) {
   const buf = await file.arrayBuffer(); const wb = XLSX.read(buf, { type:'array', cellDates:true, dense:true }); const output = []
   for (const sheetName of wb.SheetNames) {
@@ -506,7 +536,18 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             line: normalize(getField(r, ['Production Line'])), remarks: normalize(getField(r, ['Charactristic Remarks', 'Characteristic Remarks', 'Batch Remarks'])),
             qualitative: normalize(getField(r, ['Qualitative'])),
           })).filter(r => r.batch || r.inspectionLot)
-          storedCount = compact.length; rowsForCloud = compact
+          setStatus(`בודק אילו רשומות איכות חדשות קיימות ב-${file.name}...`)
+          setUploadProgress({ fileName:file.name, kind, phase:'dedupe', percent:0, message:'משווה מול נתוני האיכות הקיימים' })
+          const fresh = await filterNewQualityRows(quality, compact, (completed,total) => {
+            const percent = total ? Math.round(completed / total * 100) : 100
+            setUploadProgress({ fileName:file.name, kind, phase:'dedupe', percent, message:'מסנן רשומות שכבר קיימות' })
+          })
+          storedCount = fresh.length; rowsForCloud = fresh
+          if (!fresh.length) {
+            loaded.push(`${file.name}: לא נמצאו רשומות איכות חדשות`)
+            setStatus(`${file.name}: כל ${fmt(compact.length)} הרשומות כבר קיימות — לא בוצעה העלאה`)
+            continue
+          }
         } else if (kind === 'deviations') {}
         else if (kind === 'targets') {
           const fallbackMonth = targetMonthFromTitle(file.name, new Date())
@@ -540,12 +581,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         const nextMeta = { fileName:file.name, rows:storedCount, rawRows:rows.length, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
         setStatus(`מעלה את ${file.name} למסד המשותף...`)
         setUploadProgress({ fileName:file.name, kind, phase:'prepare', percent:0, message:'מכין את הנתונים' })
-        const savedMeta = await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progress => {
+        const progressHandler = progress => {
           setUploadProgress({ fileName:file.name, kind, ...progress })
           setStatus(`${file.name}: ${progress.message} (${progress.percent}%)`)
-        })
+        }
+        const savedMeta = kind === 'quality'
+          ? await uploadCloudDatasetIncremental(kind, rowsForCloud, { ...nextMeta, existingRows:quality.length }, currentUser, progressHandler)
+          : await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progressHandler)
         if (kind === 'production') setProduction(rowsForCloud)
-        else if (kind === 'quality') setQuality(rowsForCloud)
+        else if (kind === 'quality') setQuality(current => [...current, ...rowsForCloud])
         else if (kind === 'deviations') setDeviations(rowsForCloud)
         else if (kind === 'targets') setTargets(rowsForCloud)
         setDataMeta(current => ({ ...current, [kind]: savedMeta }))
@@ -973,12 +1017,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">Sprint 11.5.0 Build 3 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">Sprint 11.5.0 Build 4 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 3 — Resource Engine & Control Tower</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 4 — Packaging Lines & Incremental Quality</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -1035,7 +1079,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         <p className="data-center-help">כל קובץ נבדק בדפדפן ולאחר מכן נשמר ב־Supabase. מרגע שהטעינה מסתיימת, אותו מידע זמין לכל המשתמשים המחוברים.</p>
         <div className="data-source-grid">
           <DataSource title="תפוקות" icon={<Factory/>} meta={dataMeta.production} count={production.length} acceptLabel="טען קובץ תפוקות" busy={busy} onFiles={files => loadFiles(files, 'production')} canManage={canManageData}/>
-          <DataSource title="תוצאות איכות" icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} acceptLabel="טען תוצאות איכות" busy={busy} onFiles={files => loadFiles(files, 'quality')} canManage={canManageData}/>
+          <DataSource title="תוצאות איכות" icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} acceptLabel="הוסף תוצאות איכות חדשות" busy={busy} onFiles={files => loadFiles(files, 'quality')} canManage={canManageData}/>
           <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
           <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')} canManage={canManageData}/>
         </div>
@@ -1241,9 +1285,9 @@ function DataSource({ title, icon, meta, count, acceptLabel, busy, onFiles, canM
 function Summary({ title, value, sub, warn }) { return <div className={`summary ${warn ? 'warn' : ''}`}><span>{title}</span><b>{value}</b><small>{sub}</small></div> }
 function Executive({ icon, title, value, sub, good, warn, bad, onClick }) { return <button type="button" className={`executive ${good?'good':''} ${warn?'warn':''} ${bad?'bad':''} ${onClick?'clickable':''}`} onClick={onClick}><div className="executive-icon">{icon}</div><div><span>{title}</span><b>{value}</b><small>{sub}</small></div></button> }
 function StatusBadge({ state, label }) { return <span className={`status-pill ${state}`}>{label}</span> }
-function ForecastCard({ facility, routingGroup, station, lineName, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
+function ForecastCard({ facility, facilities, resource, packagingType, routingGroup, station, lineName, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
   return <article className={`forecast-card ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0">
-    <div className="forecast-head"><div><small>מתקן</small><h3>{facility}</h3>{routingGroup && <div className="forecast-resource"><b>{station || routingGroup}</b><span>{lineName || routingGroup}</span><small>{routingGroup}</small></div>}</div><StatusBadge state={state} label={label}/></div>
+    <div className="forecast-head"><div><small>משאב / מתקן</small><h3>{resource || facility}</h3>{(facilities || []).includes('1542') && packagingType && <div className="forecast-packaging-type"><span>קו אריזה</span><b>{packagingType}</b></div>}{(routingGroup || station) && <div className="forecast-resource"><b>{station || routingGroup}</b><span>{lineName || routingGroup}</span>{routingGroup && <small>{routingGroup}</small>}</div>}</div><StatusBadge state={state} label={label}/></div>
     <div className="forecast-main"><div><span>ביצוע</span><b>{pctFmt(pct)}</b></div><div><span>תחזית</span><b>{target ? pctFmt(forecast / target * 100) : '—'}</b></div></div>
     <div className="bar"><i style={{width:`${Math.min(100, pct)}%`}}/></div>
     <div className="forecast-values"><span>יעד<strong>{fmt(target)}</strong></span><span>בפועל<strong>{fmt(actual)}</strong></span><span>נותר<strong>{fmt(remaining)}</strong></span></div>
