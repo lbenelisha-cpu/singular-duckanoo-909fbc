@@ -6,7 +6,10 @@ import './styles.css'
 
 export default function App() {
   const [session, setSession] = useState(null)
+  const [sessionReady, setSessionReady] = useState(false)
   const [profile, setProfile] = useState(null)
+  const [profileReady, setProfileReady] = useState(false)
+  const [startupStage, setStartupStage] = useState('בודק חיבור לשרת...')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -18,26 +21,57 @@ export default function App() {
   useEffect(() => {
     if (!cloudConfigured || configurationError) return
     testSupabaseConnection().then(setConnectionStatus)
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null))
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession))
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session || null)
+      setSessionReady(true)
+      setStartupStage(data.session ? 'בודק הרשאות משתמש...' : 'מוכן להתחברות')
+    }).catch(() => {
+      setSessionReady(true)
+      setStartupStage('מוכן להתחברות')
+    })
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession)
+      setSessionReady(true)
+      setProfile(null)
+      setProfileReady(!nextSession)
+      setStartupStage(nextSession ? 'בודק הרשאות משתמש...' : 'מוכן להתחברות')
+    })
     return () => data.subscription.unsubscribe()
   }, [])
 
   useEffect(() => {
-    if (!session?.user || !cloudConfigured) { setProfile(null); return }
+    if (!session?.user || !cloudConfigured) { setProfile(null); setProfileReady(true); return }
+    setProfileReady(false)
+    setStartupStage('בודק הרשאות משתמש...')
 
     // Anonymous Supabase users are always treated as read-only guests.
     if (session.user.is_anonymous) {
       setProfile({ email: '', full_name: 'אורח', role: 'viewer', is_active: true, is_guest: true })
+      setProfileReady(true)
+      setStartupStage('ההרשאות אומתו')
       setMessage('')
       return
     }
 
+    const cacheKey = `iml-profile-${session.user.id}`
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null')
+      if (cached?.role) setStartupStage(`מאמת הרשאת ${cached.role === 'admin' ? 'מנהל מערכת' : cached.role === 'manager' ? 'מנהל מתקן' : 'צפייה'}...`)
+    } catch {}
+
     supabase.from('profiles').select('id,email,full_name,role,is_active').eq('id', session.user.id).maybeSingle()
       .then(({ data, error }) => {
-        if (error) setMessage('המשתמש התחבר, אך פרופיל ההרשאה עדיין לא הוגדר.')
-        setProfile(data || { email: session.user.email, role: 'viewer', is_active: true })
+        if (error) {
+          setMessage('המשתמש התחבר, אך לא ניתן היה לאמת את פרופיל ההרשאה.')
+          setProfile(null)
+          return
+        }
+        const verifiedProfile = data || { email: session.user.email, role: 'viewer', is_active: true }
+        setProfile(verifiedProfile)
+        try { localStorage.setItem(cacheKey, JSON.stringify({ ...verifiedProfile, verifiedAt: Date.now() })) } catch {}
+        setStartupStage('ההרשאות אומתו')
       })
+      .finally(() => setProfileReady(true))
   }, [session])
 
   const signIn = async (event) => {
@@ -67,6 +101,7 @@ export default function App() {
   }
 
   if (!cloudConfigured || configurationError) return <SetupRequired error={configurationError} />
+  if (!sessionReady) return <StartupScreen stage={startupStage} />
   if (publicViewer) return <DashboardApp currentUser={null} userRole="viewer" isGuest={true} onSignOut={signOut}/>
   if (!session) return <div className="auth-page" dir="rtl"><form className="auth-card" onSubmit={signIn}>
     <div className="auth-brand"><img src="/icons/icon-192.png" alt="IML Control"/><div className="auth-logo">IML<span>CONTROL</span></div></div>
@@ -82,10 +117,14 @@ export default function App() {
       <UserRoundCheck size={19}/>{busy?'מתחבר...':'צפייה בלבד'}
     </button>
     <div className="guest-note"><ShieldCheck size={16}/> משתמש צפייה יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
-    <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.2.5</small>
+    <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.4.3 Build 3</small>
   </form></div>
+  if (session && !profileReady) return <StartupScreen stage={startupStage} />
+  if (session && profileReady && !profile) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>לא ניתן לאמת הרשאה</h1><p>{message || 'נסה לרענן את הדף או להתחבר מחדש.'}</p><button className="auth-submit" onClick={signOut}>חזרה לכניסה</button></div></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
-  return <DashboardApp currentUser={session.user} userRole={profile?.role || 'viewer'} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>
+  return <DashboardApp currentUser={session.user} userRole={profile.role} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>
 }
 
 function SetupRequired({ error }){ return <div className="auth-page" dir="rtl"><div className="auth-card setup-card"><div className="auth-icon"><Cloud/></div><h1>נדרש חיבור לענן</h1><p>{error || 'חסרים משתני החיבור של Supabase.'}</p><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_ANON_KEY</code><small>נתמך גם: VITE_SUPABASE_PUBLISHABLE_KEY</small><div className="setup-note">העתק את Project URL ישירות מ־Supabase, ללא /rest/v1/, ושמור ב־Netlify. לאחר מכן בצע Clear cache and deploy site.</div></div></div> }
+
+function StartupScreen({ stage }) { return <div className="auth-page startup-page" dir="rtl"><div className="auth-card startup-card"><div className="auth-brand"><img src="/icons/icon-192.png" alt="IML Control"/><div className="auth-logo">IML<span>CONTROL</span></div></div><div className="startup-spinner" aria-hidden="true"/><h1>מפעיל את המערכת</h1><p>{stage || 'בודק הרשאות...'}</p><div className="startup-progress"><i/></div><small><ShieldCheck size={15}/> הממשק יוצג רק לאחר אימות ההרשאה — ללא מעבר זמני למצב צפייה.</small></div></div> }

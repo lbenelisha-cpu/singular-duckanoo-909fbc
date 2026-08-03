@@ -129,3 +129,6 @@
 .batch-card-body{min-height:calc(100vh - 250px);grid-template-columns:minmax(0,2fr) minmax(300px,.72fr)}
 .batch-quality-table{max-height:calc(100vh - 390px)}
 @media(max-width:1100px){.batch-control-card{width:100vw!important}.batch-quality-table{max-height:520px}}
+
+/* Sprint 11.4.3 Build 3 — verified startup */
+.startup-card{text-align:center;align-items:center;max-width:430px}.startup-card .auth-brand{align-self:stretch}.startup-card p{font-weight:700;color:#335365}.startup-spinner{width:48px;height:48px;border-radius:50%;border:5px solid #dcebf0;border-top-color:#176887;animation:imlSpin .85s linear infinite}.startup-progress{width:100%;height:8px;border-radius:999px;background:#e3edf1;overflow:hidden}.startup-progress i{display:block;width:38%;height:100%;border-radius:inherit;background:#176887;animation:imlProgress 1.25s ease-in-out infinite}.startup-card small{justify-content:center}@keyframes imlSpin{to{transform:rotate(360deg)}}@keyframes imlProgress{0%{transform:translateX(180%)}50%{transform:translateX(0)}100%{transform:translateX(-180%)}}
