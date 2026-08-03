@@ -1,8 +1,21 @@
-export default function FacilityCard({ item }) {
-  const pct = Math.min(100, Math.round(item.actual/item.target*100))
-  return <div className="facility-card">
-    <div className="facility-head"><div><strong>{item.id}</strong><span>{item.name}</span></div><span className={`state ${item.status==='פעיל'?'ok':'wait'}`}>{item.status}</span></div>
-    <div className="progress"><i style={{width:`${pct}%`}}/></div>
-    <div className="facility-foot"><span>{item.actual.toLocaleString()} בפועל</span><strong>{pct}%</strong><span>{item.target.toLocaleString()} יעד</span></div>
-  </div>
+{
+  "name": "iml-control-center",
+  "private": true,
+  "version": "11.6.0-build.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "vite": "6.0.7",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "lucide-react": "0.468.0",
+    "xlsx": "0.18.5",
+    "@supabase/supabase-js": "2.49.1"
+  },
+  "devDependencies": {}
 }

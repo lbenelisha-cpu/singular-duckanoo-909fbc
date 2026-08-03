@@ -39,7 +39,7 @@ const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1150'
-const BUILD_LABEL = 'Sprint 11.5.2 Resource Mapping'
+const BUILD_LABEL = 'Sprint 11.6.2 Executive Forecast'
 const isoDate = date => date.toISOString().slice(0, 10)
 const initialToDate = () => isoDate(new Date())
 const initialFromDate = () => { const date = new Date(); date.setDate(date.getDate() - 6); return isoDate(date) }
@@ -221,6 +221,59 @@ const parseTargetNumber = (value) => {
   const text = String(value).trim(); const negative = /^\(.*\)$/.test(text)
   const n = Number(text.replace(/[(),%\s]/g,'').replace(/,/g,''))
   return Number.isFinite(n) ? (negative ? -n : n) : 0
+}
+
+
+// Sprint 11.6.1 — one decision layer for every target-driven screen.
+// The resource engine remains the source of target/actual/forecast calculations;
+// this layer adds a consistent explanation, feasibility check and recommendation.
+const enrichTargetIntelligence = (row) => {
+  const target = num(row?.target)
+  const actual = num(row?.actual)
+  const forecast = num(row?.forecast)
+  const requiredDaily = num(row?.requiredDaily)
+  const recentAverage = num(row?.recentAverage)
+  const provenMax = num(row?.provenMax)
+  const remainingWorkdays = Math.max(0, num(row?.remainingWorkdays))
+  const remaining = Math.max(0, target - actual)
+  const projectedGap = forecast - target
+  const forecastPct = target ? forecast / target * 100 : 0
+  const paceGap = Math.max(0, requiredDaily - recentAverage)
+  const maximumPossible = actual + (remainingWorkdays * provenMax)
+  const feasible = !target || remaining <= 0 || !provenMax || maximumPossible >= target
+  const confidence = !target ? 'ללא יעד' : recentAverage > 0 && provenMax > 0 ? 'גבוהה' : recentAverage > 0 ? 'בינונית' : 'נמוכה'
+
+  let statusReason = 'לא הוגדר יעד חודשי למשאב.'
+  let recommendation = 'יש לטעון או להשלים יעד חודשי.'
+  if (target && remaining <= 0) {
+    statusReason = `היעד הושג. קיים עודף של ${fmt(actual - target)} ביחס ליעד.`
+    recommendation = 'אין צורך בהגברת קצב. יש לשמור על איכות ויציבות.'
+  } else if (target && !feasible) {
+    statusReason = `גם בקצב השיא המוכח התחזית המרבית היא ${fmt(maximumPossible)}, מתחת ליעד ${fmt(target)}.`
+    recommendation = 'נדרשת החלטה ניהולית: תוספת משמרות, הגדלת קיבולת או שינוי תכנית.'
+  } else if (target && forecastPct >= 100) {
+    statusReason = `התחזית היא ${pctFmt(forecastPct)} מהיעד וצפוי עודף של ${fmt(Math.max(0, projectedGap))}.`
+    recommendation = 'להמשיך בקצב הנוכחי ולבצע מעקב יומי.'
+  } else if (target && forecastPct >= 90) {
+    statusReason = `התחזית קרובה ליעד, אך חסרים כ-${fmt(Math.abs(projectedGap))}.`
+    recommendation = paceGap > 0 ? `להגדיל את הקצב בכ-${fmt(paceGap)} ליום.` : 'להגן על תכנית העבודה ולצמצם עצירות.'
+  } else if (target) {
+    statusReason = `התחזית היא ${pctFmt(forecastPct)} בלבד, עם פער צפוי של ${fmt(Math.abs(projectedGap))}.`
+    recommendation = paceGap > 0 ? `להגדיל קצב בכ-${fmt(paceGap)} ליום ולבחון תוספת זמן עבודה.` : 'לבחון מגבלות, חומרי גלם וזמינות קו.'
+  }
+
+  return {
+    ...row,
+    remaining,
+    projectedGap,
+    forecastPct,
+    paceGap,
+    maximumPossible,
+    feasible,
+    confidence,
+    statusReason,
+    recommendation,
+  }
 }
 
 const qualityRowKey = (row) => [
@@ -837,7 +890,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     planningMonth,
     fallbackFacilities: facilities,
     mappings: resourceMappings,
-  }), [planningMonth, prod, targets, facilities, resourceMappings])
+  }).map(enrichTargetIntelligence), [planningMonth, prod, targets, facilities, resourceMappings])
 
   const unmappedProduction = useMemo(() => summarizeUnmappedRows(prod, resourceMappings), [prod, resourceMappings])
   const unmappedQty = useMemo(() => unmappedProduction.reduce((sum,row) => sum + row.qty, 0), [unmappedProduction])
@@ -937,6 +990,21 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const targetTotal = planningRows.reduce((s,r) => s + r.target, 0)
   const targetActual = planningRows.reduce((s,r) => s + r.actual, 0)
   const targetForecast = planningRows.reduce((s,r) => s + r.forecast, 0)
+  const executiveSummary = useMemo(() => {
+    const targeted = planningRows.filter(row => row.target > 0)
+    const onTrack = targeted.filter(row => row.forecast >= row.target).length
+    const atRisk = targeted.filter(row => row.forecast < row.target).length
+    const impossible = targeted.filter(row => row.feasible === false).length
+    const totalGap = targeted.reduce((sum, row) => sum + Math.min(0, row.projectedGap || (row.forecast - row.target)), 0)
+    const best = targeted.slice().sort((a,b) => (b.forecastPct || 0) - (a.forecastPct || 0))[0] || null
+    const bottleneck = targeted.slice().sort((a,b) => {
+      const aScore = (a.feasible === false ? 1000000 : 0) + Math.max(0, (a.requiredDaily || 0) - (a.recentAverage || 0))
+      const bScore = (b.feasible === false ? 1000000 : 0) + Math.max(0, (b.requiredDaily || 0) - (b.recentAverage || 0))
+      return bScore - aScore
+    })[0] || null
+    const overallPct = targetTotal ? targetForecast / targetTotal * 100 : 0
+    return { targeted:targeted.length, onTrack, atRisk, impossible, totalGap, best, bottleneck, overallPct }
+  }, [planningRows, targetTotal, targetForecast])
   const uniqueOrders = useMemo(() => new Set(filtered.map(r => r.order).filter(Boolean)).size, [filtered])
   const uniqueBatches = useMemo(() => new Set(filtered.map(r => r.batch).filter(Boolean)).size, [filtered])
   const managerInsights = useMemo(() => {
@@ -985,7 +1053,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const exportWorkbook = () => {
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filtered.map(r => ({ Date: iso(r.date), Time: r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : '', Facility: r.facility, Order: r.order, Batch: r.batch, Material: r.material, Description: r.desc, RoutingGroup: r.routingGroup, RoutingDescription: r.routingDescription, Quantity: r.qty }))), 'Production')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(planningRows.map(r => ({ Month: planningMonth, Facility: r.facility, RoutingGroup: r.routingGroup, Station: r.station, Line: r.lineName, Activity: r.activity, MonthlyTarget: r.target, Actual: r.actual, Remaining: r.remaining, RequiredDaily: r.requiredDaily, RecentAverage: r.recentAverage, ProvenMax: r.provenMax, Forecast: r.forecast, Status: r.label }))), 'Planning')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(planningRows.map(r => ({ Month: planningMonth, Facility: r.facility, RoutingGroup: r.routingGroup, Station: r.station, Line: r.lineName, Activity: r.activity, MonthlyTarget: r.target, Actual: r.actual, Remaining: r.remaining, RequiredDaily: r.requiredDaily, RecentAverage: r.recentAverage, ProvenMax: r.provenMax, Forecast: r.forecast, Status: r.label, Feasible: r.feasible ? 'Yes' : 'No', MaximumPossible: r.maximumPossible, Confidence: r.confidence, StatusReason: r.statusReason, Recommendation: r.recommendation, BottleneckGapPerDay: Math.max(0,(r.requiredDaily||0)-(r.recentAverage||0)), ImpossibleAtProvenMax: r.feasible === false ? 'Yes' : 'No' }))), 'Planning')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(qualityBad.map(r => ({ Date: iso(r.date), Facility: r.facility, InspectionLot: r.inspectionLot, Order: r.order, Batch: r.batch, Material: r.material, Status: r.status }))), 'Quality')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(openDeviations.map(r => ({ Date: iso(r.date), Facility: r.facility, Batch: r.batch, Material: r.material, Status: r.status, RejectedCount: r.rejectedCount, RejectedCharacteristics: r.rejectedCharacteristics.map(x => `${x.characteristic}: ${x.value || x.qualitative || '-'} (${[x.lower, x.upper].filter(v => v !== '').join('–')} ${x.unit || ''})`).join(' | '), ApprovedCharacteristics: r.approvedCharacteristics.map(x => `${x.characteristic}: ${x.value || x.qualitative || '-'} (${[x.lower, x.upper].filter(v => v !== '').join('–')} ${x.unit || ''})`).join(' | '), Remarks: r.remarks }))), 'Deviations')
     XLSX.writeFile(wb, `IML_Sprint8_Resource_Report_${new Date().toISOString().slice(0,10)}.xlsx`)
@@ -1052,12 +1120,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">Sprint 11.5.0 Build 4 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">{BUILD_LABEL} · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 4 — Packaging Lines & Incremental Quality</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>{BUILD_LABEL} — Target Intelligence & Recommendations</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -1087,6 +1155,22 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><TrendingUp/><span>תחזית סוף חודש</span><b>{fmt(targetForecast)}</b><small>{targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} מהיעד</small></button>
           <button onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><Gauge/><span>קצב יומי נדרש</span><b>{fmt(planningRows.reduce((sum,row)=>sum+row.requiredDaily,0))}</b><small>לכל המתקנים</small></button>
           <button className={targetForecast >= targetTotal && targetTotal ? 'good' : 'bad'} onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><AlertTriangle/><span>פער צפוי</span><b>{targetTotal ? fmt(targetForecast-targetTotal) : '—'}</b><small>{targetForecast >= targetTotal ? 'מעל היעד' : 'נדרש להגביר קצב'}</small></button>
+        </div>
+      </section>
+
+      <section className="manager-brief" id="executive-summary">
+        <div className="panel-head"><div><Activity/><h2>Executive Summary — תחזית והחלטות</h2></div><span>{planningMonth || 'ללא חודש נבחר'}</span></div>
+        <section className="executive-strip executive-six">
+          <Executive icon={<Target/>} title="תחזית כוללת" value={targetTotal ? pctFmt(executiveSummary.overallPct) : '—'} sub={`${fmt(targetForecast)} מתוך ${fmt(targetTotal)}`} good={executiveSummary.overallPct >= 100}/>
+          <Executive icon={<CheckCircle2/>} title="משאבים במסלול" value={executiveSummary.onTrack} sub={`מתוך ${executiveSummary.targeted}`} good/>
+          <Executive icon={<AlertTriangle/>} title="משאבים בסיכון" value={executiveSummary.atRisk} sub="דורשים פעולה" warn={executiveSummary.atRisk > 0}/>
+          <Executive icon={<BellRing/>} title="לא אפשרי בקצב שיא" value={executiveSummary.impossible} sub="נדרשת החלטה ניהולית" bad={executiveSummary.impossible > 0}/>
+          <Executive icon={<TrendingUp/>} title="פער כולל צפוי" value={fmt(executiveSummary.totalGap)} sub={executiveSummary.totalGap < 0 ? 'מתחת ליעד' : 'ללא פער'} bad={executiveSummary.totalGap < 0}/>
+          <Executive icon={<Gauge/>} title="צוואר בקבוק" value={executiveSummary.bottleneck ? planningName(executiveSummary.bottleneck) : '—'} sub={executiveSummary.bottleneck ? `חסר ${fmt(Math.max(0,(executiveSummary.bottleneck.requiredDaily||0)-(executiveSummary.bottleneck.recentAverage||0)))} ליום` : 'אין נתונים'} bad={Boolean(executiveSummary.bottleneck?.feasible === false)}/>
+        </section>
+        <div className="manager-insights">
+          {executiveSummary.best && <button className="manager-insight good" onClick={() => setSelectedResource(executiveSummary.best)}><strong>המשאב המוביל: {planningName(executiveSummary.best)}</strong><span>תחזית של {pctFmt(executiveSummary.best.forecastPct)} מהיעד החודשי.</span></button>}
+          {executiveSummary.bottleneck && <button className={`manager-insight ${executiveSummary.bottleneck.feasible === false ? 'risk' : 'warning'}`} onClick={() => setSelectedResource(executiveSummary.bottleneck)}><strong>צוואר הבקבוק: {planningName(executiveSummary.bottleneck)}</strong><span>{executiveSummary.bottleneck.statusReason}</span></button>}
         </div>
       </section>
 
@@ -1189,9 +1273,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
       <section className="daily-management">
         <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><span>{planningMonth}</span></div>
-        <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
-          {planningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
-          {!planningRows.length && <tr><td colSpan="14" className="empty">אין יעדים לחודש הנבחר</td></tr>}
+        <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>יכולת הגעה</th><th>המלצה</th><th>סטטוס</th></tr></thead><tbody>
+          {planningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td>{r.feasible ? 'אפשרי' : 'לא אפשרי בקצב השיא'}</td><td title={r.statusReason}>{r.recommendation}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+          {!planningRows.length && <tr><td colSpan="16" className="empty">אין יעדים לחודש הנבחר</td></tr>}
         </tbody></table></div>
       </section>
 
@@ -1351,13 +1435,14 @@ function DataSource({ title, icon, meta, count, acceptLabel, busy, onFiles, canM
 function Summary({ title, value, sub, warn }) { return <div className={`summary ${warn ? 'warn' : ''}`}><span>{title}</span><b>{value}</b><small>{sub}</small></div> }
 function Executive({ icon, title, value, sub, good, warn, bad, onClick }) { return <button type="button" className={`executive ${good?'good':''} ${warn?'warn':''} ${bad?'bad':''} ${onClick?'clickable':''}`} onClick={onClick}><div className="executive-icon">{icon}</div><div><span>{title}</span><b>{value}</b><small>{sub}</small></div></button> }
 function StatusBadge({ state, label }) { return <span className={`status-pill ${state}`}>{label}</span> }
-function ForecastCard({ facility, facilities, resource, packagingType, routingGroup, station, lineName, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
+function ForecastCard({ facility, facilities, resource, packagingType, routingGroup, station, lineName, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, feasible, confidence, recommendation, statusReason, onClick, selected }) {
   return <article className={`forecast-card ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0">
     <div className="forecast-head"><div><small>משאב / מתקן</small><h3>{resource || facility}</h3>{(facilities || []).includes('1542') && packagingType && <div className="forecast-packaging-type"><span>קו אריזה</span><b>{packagingType}</b></div>}{(routingGroup || station) && <div className="forecast-resource"><b>{station || routingGroup}</b><span>{lineName || routingGroup}</span>{routingGroup && <small>{routingGroup}</small>}</div>}</div><StatusBadge state={state} label={label}/></div>
     <div className="forecast-main"><div><span>ביצוע</span><b>{pctFmt(pct)}</b></div><div><span>תחזית</span><b>{target ? pctFmt(forecast / target * 100) : '—'}</b></div></div>
     <div className="bar"><i style={{width:`${Math.min(100, pct)}%`}}/></div>
     <div className="forecast-values"><span>יעד<strong>{fmt(target)}</strong></span><span>בפועל<strong>{fmt(actual)}</strong></span><span>נותר<strong>{fmt(remaining)}</strong></span></div>
     <div className="forecast-metrics"><div><span>ימים נותרו</span><b>{remainingWorkdays}</b></div><div><span>נדרש ליום</span><b>{fmt(requiredDaily)}</b></div><div><span>7 ימים</span><b>{fmt(recentAverage)}</b></div><div><span>שיא מוכח</span><b>{fmt(provenMax)}</b></div></div>
+    <div className="forecast-resource" title={statusReason}><b>{feasible ? `ביטחון תחזית: ${confidence || '—'}` : 'לא ניתן להגיע ליעד בקצב השיא'}</b><span>{recommendation || '—'}</span></div>
   </article>
 }
 function Facility({ id, actual, target, pct, orders, selected, onClick }) {
