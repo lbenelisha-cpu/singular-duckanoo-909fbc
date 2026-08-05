@@ -17,12 +17,61 @@ export default function App() {
   const [publicViewer, setPublicViewer] = useState(false)
 
   useEffect(() => {
-    if (!cloudConfigured || configurationError) return
-    testSupabaseConnection().then(setConnectionStatus)
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null))
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession))
-    return () => data.subscription.unsubscribe()
-  }, [])
+  if (!cloudConfigured || configurationError) return
+
+  let mounted = true
+
+  testSupabaseConnection()
+    .then(status => {
+      if (mounted) setConnectionStatus(status)
+    })
+    .catch(() => {
+      // תקלה בבדיקת החיבור לא תסתיר את האפליקציה.
+    })
+
+  supabase.auth.getSession()
+    .then(({ data, error }) => {
+      if (!mounted) return
+
+      if (error) {
+        console.error('Failed to restore session:', error)
+        setSession(null)
+        return
+      }
+
+      setSession(data.session || null)
+    })
+    .catch(error => {
+      console.error('Failed to restore session:', error)
+      if (mounted) setSession(null)
+    })
+
+  const { data: authListener } = supabase.auth.onAuthStateChange(
+    (event, nextSession) => {
+      if (!mounted) return
+
+      // רענון טוקן מתבצע ברקע ואינו מצריך בדיקת הרשאה מחדש.
+      if (event === 'TOKEN_REFRESHED') return
+
+      setSession(previousSession => {
+        const previousUserId = previousSession?.user?.id || null
+        const nextUserId = nextSession?.user?.id || null
+
+        // לא משנים state כאשר זה אותו משתמש.
+        if (previousUserId === nextUserId) {
+          return previousSession
+        }
+
+        return nextSession || null
+      })
+    }
+  )
+
+  return () => {
+    mounted = false
+    authListener.subscription.unsubscribe()
+  }
+}, [cloudConfigured, configurationError])
 
   useEffect(() => {
     if (!session?.user || !cloudConfigured) { setProfile(null); setProfileLoading(false); return }
@@ -42,7 +91,11 @@ export default function App() {
         setProfile(data || null)
         setProfileLoading(false)
       })
-  }, [session])
+  }, [
+  session?.user?.id,
+  session?.user?.is_anonymous,
+  cloudConfigured
+])
 
   const signIn = async (event) => {
     event.preventDefault(); setBusy(true); setMessage('')
@@ -88,7 +141,7 @@ export default function App() {
     <div className="guest-note"><ShieldCheck size={16}/> משתמש צפייה יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
     <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.5.0 Build 4</small>
   </form></div>
-  if (session && profileLoading) return <div className="auth-page" dir="rtl"><div className="auth-card auth-loading"><div className="auth-icon"><ShieldCheck/></div><h1>בודק הרשאות משתמש...</h1><p>המערכת מאמתת את תפקיד המשתמש לפני טעינת הדשבורד.</p></div></div>
+  if (session && !profile && profileLoading) return <div className="auth-page" dir="rtl"><div className="auth-card auth-loading"><div className="auth-icon"><ShieldCheck/></div><h1>בודק הרשאות משתמש...</h1><p>המערכת מאמתת את תפקיד המשתמש לפני טעינת הדשבורד.</p></div></div>
   if (session && !profile) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>לא נמצא פרופיל הרשאה</h1><p>יש להגדיר למשתמש פרופיל פעיל בטבלת profiles.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   return <DashboardApp currentUser={session.user} userRole={profile.role} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>
