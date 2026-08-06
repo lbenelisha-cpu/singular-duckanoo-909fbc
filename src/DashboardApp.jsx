@@ -931,7 +931,14 @@ console.log('Quality Candidates', qualityIndex.byBatch.get(batch) || [])
     quality: qualityRows,
     deviations: deviationRows,
   }
-}, [selectedBatch, prod, qualityIndex, enrichedDeviationRows])
+}, [
+  selectedBatch,
+  selectedBatchMaterial,
+  selectedBatchOrder,
+  prod,
+  qualityIndex,
+  enrichedDeviationRows,
+])
   const openBatchCard = (batch, material = '', order = '') => {
   if (!batch) return
 
