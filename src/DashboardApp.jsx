@@ -380,6 +380,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [periodQuarter, setPeriodQuarter] = useState('')
   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
   const [selectedBatch, setSelectedBatch] = useState('')
+  const [selectedBatchMaterial, setSelectedBatchMaterial] = useState('')
+const [selectedBatchOrder, setSelectedBatchOrder] = useState('')
   const [selectedResource, setSelectedResource] = useState(null)
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
@@ -887,6 +889,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       .map(row => normalize(row.order))
       .filter(Boolean)
   )
+console.log('Production Materials', [...materials])
+console.log('Production Orders', [...orders])
+console.log('Quality Candidates', qualityIndex.byBatch.get(batch) || [])
 
   const qualityRows = (qualityIndex.byBatch.get(batch) || []).filter(row => {
     const material = normalize(row.material)
@@ -927,7 +932,13 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     deviations: deviationRows,
   }
 }, [selectedBatch, prod, qualityIndex, enrichedDeviationRows])
-  const openBatchCard = (batch) => { if (batch) setSelectedBatch(normalize(batch)) }
+  const openBatchCard = (batch, material = '', order = '') => {
+  if (!batch) return
+
+  setSelectedBatch(normalize(batch))
+  setSelectedBatchMaterial(normalize(material))
+  setSelectedBatchOrder(normalize(order))
+}
 
   const dataMonths = useMemo(() => [...new Set(prod.map(r => monthKey(r.date)).filter(Boolean))].sort(), [prod])
   const targetMonths = useMemo(() => [...new Set(targets.map(r => r.month).filter(Boolean))].sort(), [targets])
