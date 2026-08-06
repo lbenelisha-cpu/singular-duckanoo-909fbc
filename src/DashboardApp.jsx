@@ -37,9 +37,18 @@ const RESOURCE_LABELS = {
 const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
-const DB_KEY = 'sprint1150'
-const BUILD_LABEL = 'Sprint 11.6.3 Wide Batch Quality & Deviations'
-const isoDate = date => date.toISOString().slice(0, 10)
+const DB_KEY = 'sprint1172-build4'
+const BUILD_LABEL = 'Sprint 11.7.2 Build 4 — Calendar Day & Product Catalog'
+const isoDate = value => {
+  if (!value) return ''
+
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const pad = number => String(number).padStart(2, '0')
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
 const initialToDate = () => isoDate(new Date())
 const initialFromDate = () => { const date = new Date(); date.setDate(date.getDate() - 6); return isoDate(date) }
 
@@ -107,6 +116,34 @@ const excelDate = (v) => {
   const d = new Date(text)
   return Number.isNaN(d.getTime()) || d.getFullYear() <= 1900 ? null : d
 }
+const localDateTimeString = date => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
+
+  const pad = value => String(value).padStart(2, '0')
+
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join('-') + 'T' + [
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join(':')
+}
+const localDateOnlyString = value => {
+  const date = excelDate(value)
+  if (!date) return ''
+  const pad = number => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+const productionDateFromDay = day => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) return null
+  const [year, month, date] = day.split('-').map(Number)
+  return new Date(year, month - 1, date, 12, 0, 0, 0)
+}
+
 const excelTime = (v) => {
   if (v === '' || v === null || v === undefined) return null
   if (v instanceof Date && !Number.isNaN(v.getTime())) return { h: v.getHours(), m: v.getMinutes(), s: v.getSeconds() }
@@ -270,7 +307,7 @@ async function readTargetWorkbook(file) {
 
 async function readWorkbook(file) {
   const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, { type: 'array', cellDates: true, dense: true })
+  const wb = XLSX.read(buf, { type: 'array', cellDates: false, dense: true })
   let rows = []
   for (const sheetName of wb.SheetNames) {
     const sheetRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '', raw: true })
@@ -342,7 +379,20 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
     const applyDataset = (kind, dataset) => {
       const rows = dataset?.rows || []
-      if (kind === 'production') setProduction(rows)
+      if (kind === 'production') {
+  setProduction(
+    rows.map(row => {
+      const sourceDate = row.finishDate || row.date
+
+      return {
+        ...row,
+        date: sourceDate
+          ? new Date(sourceDate)
+          : null,
+      }
+    })
+  )
+}
       if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
       if (kind === 'deviations') setDeviations(rows)
       if (kind === 'targets') setTargets(rows)
@@ -355,7 +405,20 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       try {
         cached = await idbGet()
         if (active && cached) {
-          setProduction(cached.production || [])
+          setProduction(
+  (cached.production || []).map(row => {
+    const sourceDate = row.finishDate || row.date
+
+    return {
+      ...row,
+      date: sourceDate
+        ? sourceDate instanceof Date
+          ? sourceDate
+          : new Date(sourceDate)
+        : null,
+    }
+  })
+)
           setQuality(cached.quality || [])
           setDeviations(cached.deviations || [])
           setTargets(cached.targets || [])
@@ -428,7 +491,20 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             setStatus(`התקבל עדכון ${kind} — מסנכרן רק את הקובץ שהשתנה...`)
             const dataset = await loadCloudDatasetOnce(kind)
             const rows = dataset?.rows || []
-            if (kind === 'production') setProduction(rows)
+            if (kind === 'production') {
+  setProduction(
+    rows.map(row => {
+      const sourceDate = row.finishDate || row.date
+
+      return {
+        ...row,
+        date: sourceDate
+          ? new Date(sourceDate)
+          : null,
+      }
+    })
+  )
+}
             if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
             if (kind === 'deviations') setDeviations(rows)
             if (kind === 'targets') setTargets(rows)
@@ -501,11 +577,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           const compact = rows.map(r => ({
             __compactProduction: true,
             facility: canonicalFacility(getField(r, ['Storage Location', 'Storage location'])),
-            finishDate: combineExcelDateTime(
-              getField(r, ['Actual finish date', 'Actual Finish Date']),
-              getField(r, ['Actual Finish Time', 'Actual finish time']),
-              getField(r, ['Release date (actual)', 'Time Stamp'])
-            )?.toISOString?.() || '',
+            productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
+            finishDate: localDateTimeString(
+  combineExcelDateTime(
+    getField(r, ['Actual finish date', 'Actual Finish Date']),
+    getField(r, ['Actual Finish Time', 'Actual finish time']),
+    getField(r, ['Release date (actual)', 'Time Stamp'])
+  )
+),
             qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
             order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
             batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -562,8 +641,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
               month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,
               activity:normalize(getField(r,['Activity','Type','סוג פעילות','Production/Packaging']))||'ייצור / אריזה',
-              capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])),
-              target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])),
+              capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])) * 1000,
+              target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])) * 1000,
               fileProduction:parseTargetNumber(getField(r,['Production','ייצור'])), fileAchievement:parseTargetNumber(getField(r,['% Achievement','Achievement'])),
               requiredPerDay:parseTargetNumber(getField(r,['Req. t/d','Required t/d'])), lastDay:parseTargetNumber(getField(r,['Last day'])),
               adjustedRequiredPerDay:parseTargetNumber(getField(r,['Adjusted Req. t/d'])), actualPerDay:parseTargetNumber(getField(r,['Actual t/d'])),
@@ -618,7 +697,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     if (r?.__compactProduction) {
       return {
         facility: canonicalFacility(r.facility),
-        date: r.finishDate ? new Date(r.finishDate) : null,
+        productionDay: normalize(r.productionDay) || iso(r.finishDate),
+        date: productionDateFromDay(r.productionDay) || (r.finishDate ? new Date(r.finishDate) : null),
         qty: num(r.qty),
         order: normalize(r.order),
         batch: normalize(r.batch),
@@ -638,7 +718,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     )
     return {
       facility: canonicalFacility(getField(r, ['Storage Location', 'Storage location'])),
-      date: finish,
+      productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
+      date: productionDateFromDay(localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date']))) || finish,
       qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
       order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
       batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -791,7 +872,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   const baseFiltered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return prod.filter(r => matchesDateRange(r.date, from, to) && (!q || [r.facility, r.order, r.batch, r.material, r.desc].some(v => v.toLowerCase().includes(q))))
+    return prod.filter(r => {
+      const day = r.productionDay || iso(r.date)
+      const inRange = (!from || day >= from) && (!to || day <= to)
+      return inRange && (!q || [r.facility, r.order, r.batch, r.material, r.desc].some(v => String(v || '').toLowerCase().includes(q)))
+    })
   }, [prod, from, to, query])
   const filtered = useMemo(() => baseFiltered.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility)), [baseFiltered, selectedFacilities])
 

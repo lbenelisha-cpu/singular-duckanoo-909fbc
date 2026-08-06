@@ -350,13 +350,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
     const applyDataset = (kind, dataset) => {
       const rows = dataset?.rows || []
-      if (kind === 'production'
-  ? setProduction(
-      rows.map(row => ({
-        ...row,
-        date: row.date || row.finishDate
-      }))
-    )
+      if (kind === 'production') {
+  setProduction(
+    rows.map(row => ({
+      ...row,
+      date: row.finishDate || row.date,
+    }))
+  )
+}
       if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
       if (kind === 'deviations') setDeviations(rows)
       if (kind === 'targets') setTargets(rows)

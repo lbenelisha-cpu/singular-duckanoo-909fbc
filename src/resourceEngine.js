@@ -45,11 +45,19 @@ const packagingTypeForTarget = target => {
 export function buildResourceRows({ production = [], targets = [], planningMonth = '', fallbackFacilities = [], now = new Date() }) {
   if (!planningMonth) return []
   const [year, month] = planningMonth.split('-').map(Number)
-  const monthRows = production.filter(row => monthOf(row.date) === planningMonth)
-  const latestDate = monthRows.reduce((latest, row) => {
-    const date = row.date instanceof Date ? row.date : new Date(row.date)
-    return Number.isNaN(date.getTime()) || (latest && latest >= date) ? latest : date
-  }, null)
+  const monthRows = production.filter(row => {
+  const sourceDate = row.productionDay || row.date || row.finishDate
+  return monthOf(sourceDate) === planningMonth
+})
+
+const latestDate = monthRows.reduce((latest, row) => {
+  const sourceDate = row.productionDay || row.date || row.finishDate
+  const date = sourceDate instanceof Date ? sourceDate : new Date(sourceDate)
+
+  return Number.isNaN(date.getTime()) || (latest && latest >= date)
+    ? latest
+    : date
+}, null)
   const currentMonth = now.getFullYear() === year && now.getMonth() + 1 === month
   const pastMonth = new Date(year, month, 0) < new Date(now.getFullYear(), now.getMonth(), 1)
   const asOfDay = currentMonth ? Math.min(now.getDate(), daysInMonth(planningMonth)) : pastMonth ? daysInMonth(planningMonth) : (latestDate?.getDate() || 0)
@@ -69,7 +77,7 @@ export function buildResourceRows({ production = [], targets = [], planningMonth
       actual += Number(row.qty) || 0
       if (row.order) orders.add(row.order)
       if (row.batch) batches.add(row.batch)
-      const day = isoDate(row.date)
+      const day = row.productionDay || isoDate(row.date || row.finishDate)
       if (day) dailyMap.set(day, (dailyMap.get(day) || 0) + (Number(row.qty) || 0))
     })
     const dailyEntries = [...dailyMap.entries()].sort((a,b) => a[0].localeCompare(b[0]))
