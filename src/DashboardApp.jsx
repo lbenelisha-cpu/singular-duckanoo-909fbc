@@ -869,16 +869,64 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   // Batch intelligence is now assembled only after the user opens a batch.
   // This avoids building a giant index for every batch during application startup.
   const selectedBatchData = useMemo(() => {
-    const batch = normalize(selectedBatch)
-    if (!batch) return null
-    return {
-      batch,
-      production: prod.filter(row => normalize(row.batch) === batch),
-      quality: qualityIndex.byBatch.get(batch) || [],
-      deviations: enrichedDeviationRows.filter(row => normalize(row.batch) === batch),
-    }
-  }, [selectedBatch, prod, qualityIndex, enrichedDeviationRows])
+  const batch = normalize(selectedBatch)
+  if (!batch) return null
 
+  const productionRows = prod.filter(
+    row => normalize(row.batch) === batch
+  )
+
+  const materials = new Set(
+    productionRows
+      .map(row => normalize(row.material))
+      .filter(Boolean)
+  )
+
+  const orders = new Set(
+    productionRows
+      .map(row => normalize(row.order))
+      .filter(Boolean)
+  )
+
+  const qualityRows = (qualityIndex.byBatch.get(batch) || []).filter(row => {
+    const material = normalize(row.material)
+    const order = normalize(row.order)
+
+    if (materials.size > 0 && material) {
+      return materials.has(material)
+    }
+
+    if (orders.size > 0 && order) {
+      return orders.has(order)
+    }
+
+    return false
+  })
+
+  const deviationRows = enrichedDeviationRows.filter(row => {
+    if (normalize(row.batch) !== batch) return false
+
+    const material = normalize(row.material)
+    const order = normalize(row.order)
+
+    if (materials.size > 0 && material) {
+      return materials.has(material)
+    }
+
+    if (orders.size > 0 && order) {
+      return orders.has(order)
+    }
+
+    return false
+  })
+
+  return {
+    batch,
+    production: productionRows,
+    quality: qualityRows,
+    deviations: deviationRows,
+  }
+}, [selectedBatch, prod, qualityIndex, enrichedDeviationRows])
   const openBatchCard = (batch) => { if (batch) setSelectedBatch(normalize(batch)) }
 
   const dataMonths = useMemo(() => [...new Set(prod.map(r => monthKey(r.date)).filter(Boolean))].sort(), [prod])
