@@ -8,7 +8,6 @@ import {
 import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
-import { productionMappingKey, stationFamily } from './mappingEngine'
 import './styles.css'
 
 const LEGACY_DAILY_TARGETS = {
@@ -35,27 +34,12 @@ const RESOURCE_LABELS = {
   '1542|LQ-P-5': { station: 'P-03', line: '5 ליטר' },
   '1542|LQ-P-10': { station: 'P-04', line: '10/20 ליטר' },
 }
-const STORAGE_KEY = 'iml-control-center-sprint7'
+const STORAGE_KEY = 'iml-control-center-sprint1182'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
-const DB_KEY = 'sprint1181-build1'
-const BUILD_LABEL = 'Sprint 11.8.1 Build 1 — Mapping Control Center'
-const isoDate = value => {
-  if (!value) return ''
-
-  const date = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-
-  const pad = number => String(number).padStart(2, '0')
-
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-}
-const MAPPING_STORAGE_KEY = 'iml-product-mappings-sprint1181'
-const MAPPING_TIMELINE_KEY = 'iml-product-mapping-timeline-sprint1181'
-const readLocalJson = (key, fallback = []) => {
-  try { return JSON.parse(localStorage.getItem(key) || '') || fallback } catch { return fallback }
-}
-
+const DB_KEY = 'sprint1182'
+const BUILD_LABEL = 'Sprint 11.8.2 Build 1 · Data Health Center'
+const isoDate = date => date.toISOString().slice(0, 10)
 const initialToDate = () => isoDate(new Date())
 const initialFromDate = () => { const date = new Date(); date.setDate(date.getDate() - 6); return isoDate(date) }
 
@@ -123,34 +107,6 @@ const excelDate = (v) => {
   const d = new Date(text)
   return Number.isNaN(d.getTime()) || d.getFullYear() <= 1900 ? null : d
 }
-const localDateTimeString = date => {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
-
-  const pad = value => String(value).padStart(2, '0')
-
-  return [
-    date.getFullYear(),
-    pad(date.getMonth() + 1),
-    pad(date.getDate()),
-  ].join('-') + 'T' + [
-    pad(date.getHours()),
-    pad(date.getMinutes()),
-    pad(date.getSeconds()),
-  ].join(':')
-}
-const localDateOnlyString = value => {
-  const date = excelDate(value)
-  if (!date) return ''
-  const pad = number => String(number).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-}
-
-const productionDateFromDay = day => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) return null
-  const [year, month, date] = day.split('-').map(Number)
-  return new Date(year, month - 1, date, 12, 0, 0, 0)
-}
-
 const excelTime = (v) => {
   if (v === '' || v === null || v === undefined) return null
   if (v instanceof Date && !Number.isNaN(v.getTime())) return { h: v.getHours(), m: v.getMinutes(), s: v.getSeconds() }
@@ -314,7 +270,7 @@ async function readTargetWorkbook(file) {
 
 async function readWorkbook(file) {
   const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, { type: 'array', cellDates: false, dense: true })
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true, dense: true })
   let rows = []
   for (const sheetName of wb.SheetNames) {
     const sheetRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '', raw: true })
@@ -367,12 +323,6 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [to, setTo] = useState(initialToDate)
   const [selectedFacilities, setSelectedFacilities] = useState([])
   const [activeTab, setActiveTab] = useState('production')
-  const [simulatorOnlyIssues, setSimulatorOnlyIssues] = useState(true)
-  const [manualMappings, setManualMappings] = useState(() => readLocalJson(MAPPING_STORAGE_KEY, []))
-  const [mappingTimeline, setMappingTimeline] = useState(() => readLocalJson(MAPPING_TIMELINE_KEY, []))
-  const [mappingDialog, setMappingDialog] = useState(null)
-  const [mappingTargetKey, setMappingTargetKey] = useState('')
-  const [mappingMessage, setMappingMessage] = useState('')
   const [planningMonth, setPlanningMonth] = useState('')
   const [additionalFacilities, setAdditionalFacilities] = useState([])
   const [facilityToAdd, setFacilityToAdd] = useState('')
@@ -385,25 +335,6 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [uploadProgress, setUploadProgress] = useState(null)
   const [perfStats, setPerformance] = useState({ startedAt:0, cache:'MISS', queries:0, rows:0, loadMs:0, phase:'אתחול' })
 
-  useEffect(() => { localStorage.setItem(MAPPING_STORAGE_KEY, JSON.stringify(manualMappings)) }, [manualMappings])
-  useEffect(() => { localStorage.setItem(MAPPING_TIMELINE_KEY, JSON.stringify(mappingTimeline.slice(0,500))) }, [mappingTimeline])
-
-  useEffect(() => {
-    if (!supabase || !currentUser?.id) return
-    let active = true
-    supabase.from('iml_product_mappings').select('*').order('created_at', { ascending:false })
-      .then(({ data, error }) => {
-        if (!active || error || !data?.length) return
-        setManualMappings(data.map(row => ({
-          id:row.id, rowKey:row.row_key, material:row.material || '', description:row.description || '',
-          family:row.facility_family, targetKey:row.target_key, targetResource:row.target_resource,
-          status:row.status, active:row.active !== false, createdBy:row.created_by_email || '',
-          createdAt:row.created_at, approvedAt:row.approved_at || null, cloud:true,
-        })))
-      })
-    return () => { active = false }
-  }, [currentUser?.id])
-
   useEffect(() => {
     let active = true
     const startedAt = performance.now()
@@ -411,20 +342,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
     const applyDataset = (kind, dataset) => {
       const rows = dataset?.rows || []
-      if (kind === 'production') {
-  setProduction(
-    rows.map(row => {
-      const sourceDate = row.finishDate || row.date
-
-      return {
-        ...row,
-        date: sourceDate
-          ? new Date(sourceDate)
-          : null,
-      }
-    })
-  )
-}
+      if (kind === 'production') setProduction(rows)
       if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
       if (kind === 'deviations') setDeviations(rows)
       if (kind === 'targets') setTargets(rows)
@@ -437,20 +355,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       try {
         cached = await idbGet()
         if (active && cached) {
-          setProduction(
-  (cached.production || []).map(row => {
-    const sourceDate = row.finishDate || row.date
-
-    return {
-      ...row,
-      date: sourceDate
-        ? sourceDate instanceof Date
-          ? sourceDate
-          : new Date(sourceDate)
-        : null,
-    }
-  })
-)
+          setProduction(cached.production || [])
           setQuality(cached.quality || [])
           setDeviations(cached.deviations || [])
           setTargets(cached.targets || [])
@@ -523,20 +428,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             setStatus(`התקבל עדכון ${kind} — מסנכרן רק את הקובץ שהשתנה...`)
             const dataset = await loadCloudDatasetOnce(kind)
             const rows = dataset?.rows || []
-            if (kind === 'production') {
-  setProduction(
-    rows.map(row => {
-      const sourceDate = row.finishDate || row.date
-
-      return {
-        ...row,
-        date: sourceDate
-          ? new Date(sourceDate)
-          : null,
-      }
-    })
-  )
-}
+            if (kind === 'production') setProduction(rows)
             if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
             if (kind === 'deviations') setDeviations(rows)
             if (kind === 'targets') setTargets(rows)
@@ -609,14 +501,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           const compact = rows.map(r => ({
             __compactProduction: true,
             facility: canonicalFacility(getField(r, ['Storage Location', 'Storage location'])),
-            productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
-            finishDate: localDateTimeString(
-  combineExcelDateTime(
-    getField(r, ['Actual finish date', 'Actual Finish Date']),
-    getField(r, ['Actual Finish Time', 'Actual finish time']),
-    getField(r, ['Release date (actual)', 'Time Stamp'])
-  )
-),
+            finishDate: combineExcelDateTime(
+              getField(r, ['Actual finish date', 'Actual Finish Date']),
+              getField(r, ['Actual Finish Time', 'Actual finish time']),
+              getField(r, ['Release date (actual)', 'Time Stamp'])
+            )?.toISOString?.() || '',
             qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
             order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
             batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -673,8 +562,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
               month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,
               activity:normalize(getField(r,['Activity','Type','סוג פעילות','Production/Packaging']))||'ייצור / אריזה',
-              capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])) * 1000,
-              target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])) * 1000,
+              capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])),
+              target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])),
               fileProduction:parseTargetNumber(getField(r,['Production','ייצור'])), fileAchievement:parseTargetNumber(getField(r,['% Achievement','Achievement'])),
               requiredPerDay:parseTargetNumber(getField(r,['Req. t/d','Required t/d'])), lastDay:parseTargetNumber(getField(r,['Last day'])),
               adjustedRequiredPerDay:parseTargetNumber(getField(r,['Adjusted Req. t/d'])), actualPerDay:parseTargetNumber(getField(r,['Actual t/d'])),
@@ -729,8 +618,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     if (r?.__compactProduction) {
       return {
         facility: canonicalFacility(r.facility),
-        productionDay: normalize(r.productionDay) || iso(r.finishDate),
-        date: productionDateFromDay(r.productionDay) || (r.finishDate ? new Date(r.finishDate) : null),
+        date: r.finishDate ? new Date(r.finishDate) : null,
         qty: num(r.qty),
         order: normalize(r.order),
         batch: normalize(r.batch),
@@ -750,8 +638,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     )
     return {
       facility: canonicalFacility(getField(r, ['Storage Location', 'Storage location'])),
-      productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
-      date: productionDateFromDay(localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date']))) || finish,
+      date: finish,
       qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
       order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
       batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -904,11 +791,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   const baseFiltered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return prod.filter(r => {
-      const day = r.productionDay || iso(r.date)
-      const inRange = (!from || day >= from) && (!to || day <= to)
-      return inRange && (!q || [r.facility, r.order, r.batch, r.material, r.desc].some(v => String(v || '').toLowerCase().includes(q)))
-    })
+    return prod.filter(r => matchesDateRange(r.date, from, to) && (!q || [r.facility, r.order, r.batch, r.material, r.desc].some(v => v.toLowerCase().includes(q))))
   }, [prod, from, to, query])
   const filtered = useMemo(() => baseFiltered.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility)), [baseFiltered, selectedFacilities])
 
@@ -917,171 +800,22 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
   const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
 
+  const planningReferenceDate = useMemo(() => {
+    if (to) return new Date(`${to}T12:00:00`)
+    const latest = prod.reduce((max, row) => {
+      const value = row.date instanceof Date ? row.date : new Date(row.date || 0)
+      return Number.isNaN(value.getTime()) || (max && max >= value) ? max : value
+    }, null)
+    return latest || new Date()
+  }, [to, prod])
+
   const planningRows = useMemo(() => buildResourceRows({
     production: prod,
     targets,
     planningMonth,
     fallbackFacilities: facilities,
-    manualMappings,
-  }), [planningMonth, prod, targets, facilities, manualMappings])
-
-
-  const mappingTargets = useMemo(() => planningRows.map(row => ({
-    key: row.targetKey,
-    resource: row.resource,
-    facility: row.facility,
-    facilities: row.facilities,
-    target: row.target,
-    actual: row.actual,
-    pct: row.pct,
-  })), [planningRows])
-
-  const addMappingEvent = (action, mapping, note = '') => {
-    setMappingTimeline(current => [{
-      id:`${Date.now()}-${Math.random()}`,
-      at:new Date().toISOString(), action, note,
-      mappingId:mapping?.id || '', material:mapping?.material || '',
-      family:mapping?.family || '', targetResource:mapping?.targetResource || '',
-      user:currentUser?.email || currentUser?.user_metadata?.full_name || 'מנהל',
-    }, ...current].slice(0,500))
-  }
-
-  const syncMappingToCloud = async mapping => {
-    if (!supabase || !currentUser?.id) return null
-    const payload = {
-      row_key:mapping.rowKey, material:mapping.material || '', description:mapping.description || '',
-      facility_family:mapping.family, target_key:mapping.targetKey, target_resource:mapping.targetResource,
-      status:mapping.status, active:mapping.active !== false, created_by:currentUser.id,
-      created_by_email:currentUser.email || '', approved_by:mapping.status === 'approved' ? currentUser.id : null,
-      approved_at:mapping.status === 'approved' ? new Date().toISOString() : null,
-      updated_at:new Date().toISOString(),
-    }
-    if (mapping.id?.length === 36) payload.id = mapping.id
-    const { data, error } = await supabase.from('iml_product_mappings').upsert(payload).select().maybeSingle()
-    if (error) return null
-    return data
-  }
-
-  const openMappingDialog = item => {
-    const candidates = mappingTargets.filter(target => (target.facilities || []).map(stationFamily).includes(item.family))
-    setMappingDialog({ ...item, candidates })
-    setMappingTargetKey(candidates[0]?.key || '')
-    setMappingMessage('')
-  }
-
-  const savePendingMapping = async () => {
-    if (!mappingDialog || !mappingTargetKey) return
-    const target = mappingTargets.find(item => item.key === mappingTargetKey)
-    if (!target) return
-    const row = mappingDialog.row
-    const mapping = {
-      id:globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
-      rowKey:productionMappingKey(row), material:row.material || '', description:row.desc || '',
-      family:mappingDialog.family, targetKey:mappingTargetKey, targetResource:target.resource,
-      status:'pending', active:true, createdBy:currentUser?.email || '', createdAt:new Date().toISOString(),
-    }
-    setManualMappings(current => [mapping, ...current.filter(item => item.rowKey !== mapping.rowKey || item.status === 'rejected')])
-    addMappingEvent('created', mapping, 'נוצר שיוך ממתין לאישור')
-    const cloudRow = await syncMappingToCloud(mapping)
-    if (cloudRow?.id) setManualMappings(current => current.map(item => item.id === mapping.id ? { ...item, id:cloudRow.id, cloud:true } : item))
-    setMappingDialog(null)
-    setMappingMessage('השיוך נשמר כממתין לאישור')
-  }
-
-  const updateMappingStatus = async (mapping, status) => {
-    const updated = { ...mapping, status, active:status !== 'rejected', approvedAt:status === 'approved' ? new Date().toISOString() : mapping.approvedAt }
-    setManualMappings(current => current.map(item => item.id === mapping.id ? updated : item))
-    addMappingEvent(status, updated, status === 'approved' ? 'השיוך אושר והשפיע על הדשבורד' : 'השיוך נדחה')
-    await syncMappingToCloud(updated)
-  }
-
-  const rollbackMapping = async mapping => {
-    const updated = { ...mapping, active:false, status:'rejected' }
-    setManualMappings(current => current.map(item => item.id === mapping.id ? updated : item))
-    addMappingEvent('rollback', updated, 'השיוך בוטל והחישוב חזר למצב הקודם')
-    await syncMappingToCloud(updated)
-  }
-
-
-  const mappingSimulation = useMemo(() => {
-    const assignments = new Map()
-    planningRows.forEach(targetRow => {
-      ;(targetRow.productionRows || []).forEach(row => {
-        const list = assignments.get(row) || []
-        list.push({
-          resource: targetRow.resource,
-          facility: targetRow.facility,
-          station: targetRow.station,
-          routingGroup: targetRow.routingGroup,
-        })
-        assignments.set(row, list)
-      })
-    })
-
-    const rows = filtered.map((row, index) => {
-      const matches = assignments.get(row) || []
-      const rowKey = productionMappingKey(row)
-      const approvedManual = manualMappings.find(mapping => mapping.active !== false && mapping.status === 'approved' && mapping.rowKey === rowKey)
-      const pendingManual = manualMappings.find(mapping => mapping.active !== false && mapping.status === 'pending' && mapping.rowKey === rowKey)
-      const status = matches.length === 0 ? 'unmatched' : matches.length > 1 ? 'duplicate' : 'matched'
-      const stationDigits = String(row.facility || '').replace(/\D/g, '')
-      const suffix = stationDigits.length >= 2 ? stationDigits.slice(-2) : ''
-      const family = suffix ? `15${suffix}` : row.facility || ''
-      return {
-        key: `${row.order || ''}-${row.batch || ''}-${index}`,
-        row,
-        matches,
-        status,
-        family,
-        assignedResource: matches.map(item => item.resource).filter(Boolean).join(' | '),
-        approvedManual, pendingManual,
-        explanation: status === 'matched'
-          ? `שויך ליעד אחד: ${matches[0].resource || matches[0].facility || 'ללא שם'}`
-          : status === 'duplicate'
-            ? `שויך ל-${matches.length} יעדים — חשש לספירה כפולה`
-            : 'לא נמצא יעד תואם לפי כללי המנוע הנוכחיים',
-      }
-    })
-
-    const summary = rows.reduce((acc, item) => {
-      acc.rows += 1
-      acc.quantity += Number(item.row.qty) || 0
-      if (item.status === 'matched') { acc.matched += 1; acc.matchedQty += Number(item.row.qty) || 0 }
-      if (item.status === 'unmatched') { acc.unmatched += 1; acc.unmatchedQty += Number(item.row.qty) || 0 }
-      if (item.status === 'duplicate') { acc.duplicate += 1; acc.duplicateQty += Number(item.row.qty) || 0 }
-      return acc
-    }, { rows:0, quantity:0, matched:0, matchedQty:0, unmatched:0, unmatchedQty:0, duplicate:0, duplicateQty:0 })
-
-    return { rows, summary }
-  }, [filtered, planningRows, manualMappings])
-
-  const visibleMappingSimulation = useMemo(() => (
-    simulatorOnlyIssues
-      ? mappingSimulation.rows.filter(item => item.status !== 'matched')
-      : mappingSimulation.rows
-  ), [mappingSimulation, simulatorOnlyIssues])
-
-  const exportMappingSimulation = () => {
-    const rows = mappingSimulation.rows.map(item => ({
-      Date: item.row.productionDay || iso(item.row.date),
-      Time: item.row.date ? new Date(item.row.date).toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'}) : '',
-      StorageLocation: item.row.facility,
-      FacilityFamily: item.family,
-      RoutingGroup: item.row.routingGroup,
-      OrderType: item.row.orderType,
-      Order: item.row.order,
-      Batch: item.row.batch,
-      Material: item.row.material,
-      Description: item.row.desc,
-      Quantity: item.row.qty,
-      MatchStatus: item.status,
-      AssignedResource: item.assignedResource,
-      Explanation: item.explanation,
-    }))
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Mapping Simulator')
-    XLSX.writeFile(wb, `IML_Production_Mapping_Simulator_${new Date().toISOString().slice(0,10)}.xlsx`)
-  }
+    now: planningReferenceDate,
+  }), [planningMonth, prod, targets, facilities, planningReferenceDate])
 
   const facilityStats = useMemo(() => facilities.map(id => {
     let rows = baseFiltered.filter(r => r.facility === id)
@@ -1171,6 +905,70 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     return !st || !['approved', 'closed', 'מאושר', 'סגור'].some(x => st.includes(x))
   }).sort((a,b) => new Date(b.sampleDate || b.date || 0) - new Date(a.sampleDate || a.date || 0)), [filteredDeviationRows])
 
+  const dataHealth = useMemo(() => {
+    const matchesByRow = new Map()
+    planningRows.forEach(targetRow => {
+      ;(targetRow.productionRows || []).forEach(row => {
+        const list = matchesByRow.get(row) || []
+        list.push(targetRow)
+        matchesByRow.set(row, list)
+      })
+    })
+
+    const rows = filtered.map((row, index) => {
+      const matches = matchesByRow.get(row) || []
+      const validDate = Boolean(iso(row.date))
+      const validFacility = Boolean(row.facility)
+      const validMaterial = Boolean(row.material || row.desc)
+      const status = matches.length === 1 ? 'mapped' : matches.length > 1 ? 'duplicate' : 'unmapped'
+      const explanation = status === 'mapped'
+        ? `שויך ל-${planningName(matches[0])}`
+        : status === 'duplicate'
+          ? `נמצא ביותר מיעד אחד: ${matches.map(planningName).join(' | ')}`
+          : !validDate
+            ? 'תאריך סיום בפועל חסר או לא תקין'
+            : !validFacility
+              ? 'תחנה / Storage Location חסרה'
+              : !validMaterial
+                ? 'מק״ט ותיאור מוצר חסרים'
+                : 'לא נמצא יעד מתאים לפי המתקן ותיאור המוצר'
+
+      return {
+        ...row,
+        _healthKey: `${row.order || ''}|${row.batch || ''}|${row.material || ''}|${index}`,
+        mappingStatus: status,
+        mappingTargets: matches.map(planningName),
+        validDate,
+        validFacility,
+        validMaterial,
+        explanation,
+      }
+    })
+
+    const totalQty = rows.reduce((sum, row) => sum + num(row.qty), 0)
+    const mappedRows = rows.filter(row => row.mappingStatus === 'mapped')
+    const unmappedRows = rows.filter(row => row.mappingStatus === 'unmapped')
+    const duplicateRows = rows.filter(row => row.mappingStatus === 'duplicate')
+    const mappedQty = mappedRows.reduce((sum, row) => sum + num(row.qty), 0)
+    const unmappedQty = unmappedRows.reduce((sum, row) => sum + num(row.qty), 0)
+    const duplicateQty = duplicateRows.reduce((sum, row) => sum + num(row.qty), 0)
+    const validDateCount = rows.filter(row => row.validDate).length
+    const validFacilityCount = rows.filter(row => row.validFacility).length
+    const validMaterialCount = rows.filter(row => row.validMaterial).length
+    const denominator = Math.max(1, rows.length)
+    const structureScore = (validDateCount + validFacilityCount + validMaterialCount) / (denominator * 3) * 40
+    const mappingScore = mappedRows.length / denominator * 60
+    const score = Math.max(0, Math.min(100, Math.round(structureScore + mappingScore)))
+    const state = score >= 99 && !unmappedRows.length && !duplicateRows.length ? 'good' : score >= 95 ? 'warning' : 'risk'
+
+    return {
+      rows, totalQty, mappedRows, unmappedRows, duplicateRows,
+      mappedQty, unmappedQty, duplicateQty,
+      validDateCount, validFacilityCount, validMaterialCount,
+      score, state,
+    }
+  }, [filtered, planningRows])
+
   const alerts = useMemo(() => planningRows.filter(r => ['risk', 'warning'].includes(r.state)).sort((a,b) => ({ risk:0, warning:1 }[a.state] - { risk:0, warning:1 }[b.state])), [planningRows])
   const achievedCount = planningRows.filter(r => ['achieved', 'good'].includes(r.state)).length
   const riskCount = planningRows.filter(r => r.state === 'risk').length
@@ -1239,6 +1037,29 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Monthly Targets'); XLSX.writeFile(wb,'IML_Monthly_Targets_Template.xlsx')
   }
 
+  const exportDataHealth = () => {
+    const rows = dataHealth.rows.map(row => ({
+      Date: iso(row.date),
+      Time: row.date ? new Date(row.date).toLocaleTimeString('he-IL', { hour:'2-digit', minute:'2-digit' }) : '',
+      Facility: row.facility,
+      RoutingGroup: row.routingGroup,
+      Order: row.order,
+      Batch: row.batch,
+      Material: row.material,
+      Description: row.desc,
+      Quantity: row.qty,
+      MappingStatus: row.mappingStatus,
+      Targets: row.mappingTargets.join(' | '),
+      Explanation: row.explanation,
+      ValidDate: row.validDate ? 'Yes' : 'No',
+      ValidFacility: row.validFacility ? 'Yes' : 'No',
+      ValidMaterial: row.validMaterial ? 'Yes' : 'No',
+    }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Data Health')
+    XLSX.writeFile(wb, `IML_Data_Health_${new Date().toISOString().slice(0,10)}.xlsx`)
+  }
+
   const clearAllData = async () => {
     if (!window.confirm('למחוק את כל הנתונים המשותפים מהענן? הפעולה תשפיע על כל המשתמשים.')) return
     setBusy(true)
@@ -1293,12 +1114,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
-      <div className="side-note">{BUILD_LABEL} · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
+      <div className="side-note">Sprint 11.5.0 Build 4 · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
     <main className="main">
       <header className="header">
-        <div><h1>חדר בקרה — מתקני אריזה</h1><p>{BUILD_LABEL}</p></div>
+        <div><h1>חדר בקרה — מתקני אריזה</h1><p>Sprint 11.5.0 Build 4 — Packaging Lines & Incremental Quality</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
@@ -1423,7 +1244,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       </section>
 
       <section className="daily-management">
-        <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><span>{planningMonth}</span></div>
+        <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><span>{planningMonth} · תאריך ייחוס: {iso(planningReferenceDate)}</span></div>
         <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
           {planningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
           {!planningRows.length && <tr><td colSpan="14" className="empty">אין יעדים לחודש הנבחר</td></tr>}
@@ -1440,29 +1261,38 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
       <section className="tabs" id="details-section">
         <button className={activeTab === 'production' ? 'active' : ''} onClick={() => setActiveTab('production')}><BarChart3 size={16}/> תפוקה</button>
+        <button className={activeTab === 'data-health' ? 'active' : ''} onClick={() => setActiveTab('data-health')}><ShieldCheck size={16}/> בריאות נתונים ({dataHealth.score}%)</button>
         <button className={activeTab === 'shifts' ? 'active' : ''} onClick={() => setActiveTab('shifts')}><Clock3 size={16}/> ניתוח משמרות</button>
         <button className={activeTab === 'quality' ? 'active' : ''} onClick={() => setActiveTab('quality')}><FlaskConical size={16}/> איכות ({qualityBad.length})</button>
         <button className={activeTab === 'deviations' ? 'active' : ''} onClick={() => setActiveTab('deviations')}><AlertTriangle size={16}/> מנות חריגות ({openDeviations.length})</button>
-        {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.unmatched + mappingSimulation.summary.duplicate})</button>}
-        {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
       {activeTab === 'production' && <section className="details"><h2>רשומות תפוקה אחרונות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>הזמנה</th><th>Batch</th><th>מק״ט חומר</th><th>תיאור חומר</th><th>כמות</th></tr></thead><tbody>{filtered.slice(-200).reverse().map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : ''}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="9" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
-      {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
-        <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מציג לאיזה יעד כל רשומת SAP נכנסת. בשורה בעייתית לחץ "שייך" כדי לראות את ההשפעה לפני שמירה.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
-        {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
-        <div className="mapping-summary-grid"><article><span>רשומות בטווח</span><b>{fmt(mappingSimulation.summary.rows)}</b><small>{fmt(mappingSimulation.summary.quantity)} כמות</small></article><article className="mapping-ok"><span>שויכו תקין</span><b>{fmt(mappingSimulation.summary.matched)}</b><small>{fmt(mappingSimulation.summary.matchedQty)} כמות</small></article><article className="mapping-unmatched"><span>לא שויכו</span><b>{fmt(mappingSimulation.summary.unmatched)}</b><small>{fmt(mappingSimulation.summary.unmatchedQty)} כמות</small></article><article className="mapping-duplicate"><span>שיוך כפול</span><b>{fmt(mappingSimulation.summary.duplicate)}</b><small>{fmt(mappingSimulation.summary.duplicateQty)} כמות</small></article></div>
-        <div className="table-wrap mapping-table-wrap"><table><thead><tr><th>סטטוס</th><th>תאריך</th><th>תחנה</th><th>משפחה</th><th>Order</th><th>Batch</th><th>מק״ט</th><th>תיאור מוצר</th><th>כמות</th><th>יעד</th><th>מקור</th><th>פעולה</th></tr></thead><tbody>{visibleMappingSimulation.slice(0,1000).map(item => <tr key={item.key} className={`mapping-row mapping-${item.status}`}><td><span className={`mapping-status mapping-status-${item.status}`}>{item.status === 'matched' ? 'תקין' : item.status === 'duplicate' ? 'כפול' : 'לא שויך'}</span></td><td>{item.row.productionDay || iso(item.row.date)}</td><td>{item.row.facility || '—'}</td><td>{item.family || '—'}</td><td>{item.row.order || '—'}</td><td>{item.row.batch || '—'}</td><td>{item.row.material || '—'}</td><td>{item.row.desc || '—'}</td><td>{fmt(item.row.qty)}</td><td>{item.assignedResource || item.pendingManual?.targetResource || '—'}</td><td>{item.approvedManual ? 'מיפוי ידני מאושר' : item.pendingManual ? 'ממתין לאישור' : item.explanation}</td><td>{item.family !== '1542' && item.status !== 'matched' && !item.pendingManual ? <button className="mapping-assign-btn" onClick={() => openMappingDialog(item)}>שייך</button> : item.pendingManual ? <span className="mapping-pending-chip">ממתין</span> : '—'}</td></tr>)}{!visibleMappingSimulation.length && <tr><td colSpan="12" className="empty">לא נמצאו בעיות שיוך בטווח שנבחר</td></tr>}</tbody></table></div>
+      {activeTab === 'data-health' && <section className="details data-health-center">
+        <div className="data-health-head">
+          <div><h2>Data Health Center</h2><p>בדיקת התאמה בין רשומות SAP, יעדים והכמות שנכנסה לדשבורד.</p></div>
+          <button type="button" className="secondary-button" onClick={exportDataHealth}><Download size={16}/> ייצוא בדיקה</button>
+        </div>
+        <div className={`data-health-score health-${dataHealth.state}`}>
+          <div><span>איכות הטעינה</span><strong>{dataHealth.score}%</strong></div>
+          <p>{dataHealth.state === 'good' ? 'כל הרשומות בטווח משויכות בצורה תקינה.' : dataHealth.state === 'warning' ? 'יש מעט רשומות שדורשות בדיקה.' : 'קיים פער משמעותי שדורש טיפול לפני הסתמכות על הדשבורד.'}</p>
+        </div>
+        <div className="data-health-grid">
+          <article><span>רשומות בטווח</span><b>{fmt(dataHealth.rows.length)}</b><small>כמות: {fmt(dataHealth.totalQty)}</small></article>
+          <article className="health-good"><span>שויכו ליעד אחד</span><b>{fmt(dataHealth.mappedRows.length)}</b><small>כמות: {fmt(dataHealth.mappedQty)}</small></article>
+          <article className="health-risk"><span>לא שויכו</span><b>{fmt(dataHealth.unmappedRows.length)}</b><small>כמות חסרה: {fmt(dataHealth.unmappedQty)}</small></article>
+          <article className="health-warning"><span>שיוך כפול</span><b>{fmt(dataHealth.duplicateRows.length)}</b><small>כמות בסיכון לכפל: {fmt(dataHealth.duplicateQty)}</small></article>
+          <article><span>תאריך תקין</span><b>{fmt(dataHealth.validDateCount)}</b><small>מתוך {fmt(dataHealth.rows.length)}</small></article>
+          <article><span>תחנה תקינה</span><b>{fmt(dataHealth.validFacilityCount)}</b><small>מתוך {fmt(dataHealth.rows.length)}</small></article>
+        </div>
+        <div className="data-health-alert">
+          <AlertTriangle size={18}/>
+          <div><b>פער כמות שאינה משויכת: {fmt(dataHealth.unmappedQty)}</b><span>הרשומות למטה מסבירות בדיוק למה הכמות לא נכנסה ליעד.</span></div>
+        </div>
+        <div className="table-wrap"><table><thead><tr><th>סטטוס</th><th>תאריך</th><th>שעה</th><th>תחנה</th><th>Routing Group</th><th>Order</th><th>Batch</th><th>מק״ט</th><th>מוצר</th><th>כמות</th><th>יעד שזוהה</th><th>הסבר</th></tr></thead><tbody>
+          {dataHealth.rows.filter(row => row.mappingStatus !== 'mapped').slice(0,500).map(row => <tr key={row._healthKey} className={`health-row-${row.mappingStatus}`}><td><span className={`mapping-status ${row.mappingStatus}`}>{row.mappingStatus === 'unmapped' ? 'לא שויך' : 'שיוך כפול'}</span></td><td>{iso(row.date) || '—'}</td><td>{row.date ? new Date(row.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{row.facility || '—'}</td><td>{row.routingGroup || '—'}</td><td>{row.order || '—'}</td><td>{row.batch || '—'}</td><td>{row.material || '—'}</td><td>{row.desc || '—'}</td><td>{fmt(row.qty)}</td><td>{row.mappingTargets.join(' | ') || '—'}</td><td className="health-explanation">{row.explanation}</td></tr>)}
+          {!dataHealth.rows.some(row => row.mappingStatus !== 'mapped') && <tr><td colSpan="12" className="empty">כל הרשומות בטווח משויכות בצורה תקינה.</td></tr>}
+        </tbody></table></div>
       </section>}
-
-      {activeTab === 'mapping-center' && canManageData && <section className="details mapping-center">
-        <div className="mapping-simulator-head"><div><h2>מרכז בקרת מיפויים</h2><p className="details-note">אישור, דחייה וביטול של שיוכים. שיוך משפיע על הדשבורד רק לאחר אישור.</p></div></div>
-        <div className="mapping-summary-grid"><article className="mapping-duplicate"><span>ממתינים לאישור</span><b>{manualMappings.filter(item => item.active !== false && item.status === 'pending').length}</b></article><article className="mapping-ok"><span>מאושרים</span><b>{manualMappings.filter(item => item.active !== false && item.status === 'approved').length}</b></article><article className="mapping-unmatched"><span>נדחו / בוטלו</span><b>{manualMappings.filter(item => item.status === 'rejected' || item.active === false).length}</b></article><article><span>אירועי היסטוריה</span><b>{mappingTimeline.length}</b></article></div>
-        <div className="table-wrap"><table><thead><tr><th>סטטוס</th><th>מתקן</th><th>מק״ט</th><th>תיאור</th><th>יעד</th><th>נוצר ע״י</th><th>תאריך</th><th>פעולות</th></tr></thead><tbody>{manualMappings.map(mapping => <tr key={mapping.id}><td><span className={`mapping-status mapping-status-${mapping.status === 'approved' ? 'matched' : mapping.status === 'pending' ? 'duplicate' : 'unmatched'}`}>{mapping.status === 'approved' ? 'מאושר' : mapping.status === 'pending' ? 'ממתין' : 'נדחה'}</span></td><td>{mapping.family}</td><td>{mapping.material || '—'}</td><td>{mapping.description || '—'}</td><td>{mapping.targetResource}</td><td>{mapping.createdBy || 'מנהל'}</td><td>{mapping.createdAt ? new Date(mapping.createdAt).toLocaleString('he-IL') : '—'}</td><td><div className="mapping-row-actions">{mapping.status === 'pending' && <><button onClick={() => updateMappingStatus(mapping,'approved')}>אשר</button><button className="danger" onClick={() => updateMappingStatus(mapping,'rejected')}>דחה</button></>}{mapping.status === 'approved' && mapping.active !== false && <button className="danger" onClick={() => rollbackMapping(mapping)}>בטל שיוך</button>}</div></td></tr>)}{!manualMappings.length && <tr><td colSpan="8" className="empty">עדיין לא נוצרו מיפויים ידניים</td></tr>}</tbody></table></div>
-        <div className="mapping-timeline"><h3>Timeline החלטות</h3>{mappingTimeline.slice(0,30).map(event => <div key={event.id}><time>{new Date(event.at).toLocaleString('he-IL')}</time><b>{event.action}</b><span>{event.material || '—'} → {event.targetResource || '—'}</span><small>{event.user} · {event.note}</small></div>)}</div>
-      </section>}
-
-      {mappingDialog && <div className="mapping-dialog-backdrop"><div className="mapping-dialog"><button className="mapping-dialog-close" onClick={() => setMappingDialog(null)}><X/></button><h2>שיוך חומר ליעד</h2><div className="mapping-source-card"><b>{mappingDialog.row.material || 'ללא מק״ט'}</b><span>{mappingDialog.row.desc || 'ללא תיאור'}</span><small>תחנה {mappingDialog.row.facility} · משפחה {mappingDialog.family} · כמות {fmt(mappingDialog.row.qty)}</small></div><label>בחר יעד<select value={mappingTargetKey} onChange={event => setMappingTargetKey(event.target.value)}><option value="">בחר יעד...</option>{mappingDialog.candidates.map(target => <option key={target.key} value={target.key}>{target.resource} — יעד {fmt(target.target)} — בוצע {fmt(target.actual)}</option>)}</select></label>{(() => { const target=mappingTargets.find(item => item.key===mappingTargetKey); if(!target) return null; const impacted=mappingSimulation.rows.filter(item => item.family===mappingDialog.family && productionMappingKey(item.row)===productionMappingKey(mappingDialog.row)); const qty=impacted.reduce((sum,item)=>sum+(Number(item.row.qty)||0),0); const before=target.actual||0; const after=before+qty; return <div className="mapping-impact"><h3>סימולציית השפעה</h3><div><span>כמות שתשויך</span><b>{fmt(qty)}</b></div><div><span>ביצוע לפני</span><b>{fmt(before)}</b></div><div><span>ביצוע אחרי</span><b>{fmt(after)}</b></div><div><span>עמידה ביעד</span><b>{target.target ? `${Math.round(before/target.target*100)}% → ${Math.round(after/target.target*100)}%` : 'ללא יעד'}</b></div><p>השינוי לא ישפיע על הדשבורד עד לאישור במרכז המיפויים.</p></div> })()}<button className="mapping-save-btn" disabled={!mappingTargetKey} onClick={savePendingMapping}><Save size={17}/> שמור כממתין לאישור</button></div></div>}
-
       {activeTab === 'shifts' && <section className="details shift-intelligence"><h2>ניתוח משמרות — בוקר, ערב ולילה</h2><p className="details-note">החלפות מוצר מזוהות לפי שינוי מק״ט באותו מתקן ו-Routing group. זמן המעבר הוא פער זמן משוער בין שני דיווחים עוקבים.</p><div className="shift-card-grid">{shiftAnalysis.map(item => <article className={`shift-analysis-card shift-${item.key}`} key={item.key}><div className="shift-card-head"><div><h3>{item.label}</h3><span>{item.hours}</span></div><strong>{fmt(item.total)}</strong></div><div className="shift-metrics"><div><span>קצב ממוצע לשעה</span><b>{fmt(item.avgPerHour)}</b></div><div><span>Orders</span><b>{item.orders}</b></div><div><span>Batch</span><b>{item.batches}</b></div><div><span>מק״טים</span><b>{item.materials}</b></div><div><span>החלפות מוצר</span><b>{item.changeovers.length}</b></div><div><span>חריגות איכות</span><b>{item.deviations}</b></div><div><span>ממוצע מעבר</span><b>{fmt(item.avgChangeover)} דק׳</b></div><div><span>תרומה לתפוקה</span><b>{pctFmt(item.share)}</b></div></div></article>)}</div><h3 className="shift-subtitle">פירוט החלפות מוצר</h3><div className="table-wrap"><table><thead><tr><th>משמרת</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>מוצר קודם</th><th>מוצר חדש</th><th>פער דיווח משוער</th></tr></thead><tbody>{shiftAnalysis.flatMap(item => item.changeovers.map((c,i) => <tr key={`${item.key}-${i}`}><td>{item.label}</td><td>{c.at?.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})}</td><td>{c.facility}</td><td>{c.routingGroup || '—'}</td><td>{c.fromMaterial}{c.fromDesc ? ` · ${c.fromDesc}` : ''}</td><td>{c.toMaterial}{c.toDesc ? ` · ${c.toDesc}` : ''}</td><td>{fmt(c.minutes)} דקות</td></tr>))}{!shiftAnalysis.some(item => item.changeovers.length) && <tr><td colSpan="7" className="empty">לא זוהו החלפות מוצר בטווח שנבחר</td></tr>}</tbody></table></div></section>}
       {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="8" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch.</p><div className="table-wrap"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{iso(r.sampleDate) || '—'}</td><td>{r.sampleDate ? new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="10" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
@@ -1501,36 +1331,8 @@ function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
   </div>
 }
 
-const BATCH_MODAL_WIDE_STYLES = `
-.batch-modal-backdrop{padding:10px!important;align-items:stretch!important;justify-content:stretch!important}
-.batch-control-card.batch-control-card-wide{width:calc(100vw - 20px)!important;max-width:none!important;height:calc(100vh - 20px)!important;max-height:none!important;margin:0!important;border-radius:22px!important;display:flex!important;flex-direction:column!important;overflow:hidden!important}
-.batch-control-card-wide .batch-card-head{flex:0 0 auto}
-.batch-control-card-wide .batch-summary-grid{grid-template-columns:repeat(8,minmax(130px,1fr))!important;gap:10px!important;padding-inline:18px!important}
-.batch-control-card-wide .batch-kpi-row{grid-template-columns:repeat(4,minmax(170px,1fr))!important;padding-inline:18px!important}
-.batch-control-card-wide .batch-card-body.batch-card-body-wide{display:block!important;flex:1 1 auto!important;min-height:0!important;padding:0 18px 18px!important;overflow:hidden!important}
-.batch-workspace-tabs{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 0 12px;border-bottom:1px solid #dce7ec;margin-bottom:12px}
-.batch-workspace-tabs button{border:1px solid #cbdbe2;background:#fff;color:#24445a;border-radius:12px;padding:10px 18px;font-weight:800;cursor:pointer;display:flex;align-items:center;gap:8px}
-.batch-workspace-tabs button.active{background:#0d766f;color:#fff;border-color:#0d766f;box-shadow:0 8px 18px rgba(13,118,111,.18)}
-.batch-workspace-tabs button.bad.active{background:#c93636;border-color:#c93636}
-.batch-workspace{height:calc(100% - 58px);min-height:0;overflow:auto}
-.batch-workspace .batch-panel{height:auto;min-height:100%;margin:0!important}
-.batch-workspace .table-wrap{max-height:none!important;height:auto!important;overflow:auto!important}
-.batch-workspace table{width:100%!important;min-width:1380px!important;table-layout:auto!important}
-.batch-workspace th,.batch-workspace td{padding:12px 14px!important;white-space:nowrap;vertical-align:top}
-.batch-workspace th:nth-child(2),.batch-workspace td:nth-child(2){min-width:300px;white-space:normal}
-.batch-workspace th:last-child,.batch-workspace td:last-child{min-width:260px;white-space:normal}
-.batch-deviation-table th:nth-child(7),.batch-deviation-table td:nth-child(7){min-width:360px;white-space:normal}
-.batch-deviation-table th:nth-child(8),.batch-deviation-table td:nth-child(8){min-width:320px;white-space:normal}
-.batch-deviation-table .deviation-characteristic{margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#fff6f6;border:1px solid #ffd7d7}
-.batch-deviation-table .deviation-characteristic strong{display:block;margin-bottom:4px}
-.batch-support-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
-.batch-support-grid .batch-panel{min-height:0!important}
-@media(max-width:1200px){.batch-control-card-wide .batch-summary-grid{grid-template-columns:repeat(4,minmax(130px,1fr))!important}.batch-support-grid{grid-template-columns:1fr}.batch-workspace table{min-width:1100px!important}}
-`;
-
 function BatchControlCard({ data, onClose }) {
   const [qualityFilter, setQualityFilter] = useState('all')
-  const [activeBatchTab, setActiveBatchTab] = useState('quality')
   useEffect(() => {
     const previous = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -1577,29 +1379,16 @@ function BatchControlCard({ data, onClose }) {
     XLSX.writeFile(wb, `Batch_${data.batch}.xlsx`)
   }
   return <div className="batch-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget) onClose()}}>
-    <style>{BATCH_MODAL_WIDE_STYLES}</style>
-    <section className="batch-control-card batch-control-card-wide" role="dialog" aria-modal="true" aria-label={`כרטיס מנה ${data.batch}`}>
+    <section className="batch-control-card" role="dialog" aria-modal="true" aria-label={`כרטיס מנה ${data.batch}`}>
       <header className="batch-card-head"><div><span className="batch-eyebrow">BATCH CONTROL CENTER</span><h2>כרטיס מנה — {data.batch}</h2><p>{descriptions.join(' · ') || materials.join(', ') || 'ללא תיאור חומר'}</p></div><div className="batch-head-actions"><button type="button" className="batch-export" onClick={exportBatch}><Download size={17}/> ייצוא מנה</button><button type="button" className="batch-close" onClick={onClose} aria-label="סגירה"><X/></button></div></header>
       <div className="batch-summary-grid">
         <BatchMetric label="Batch" value={data.batch}/><BatchMetric label="Order" value={orders.join(', ') || '—'}/><BatchMetric label="מק״ט חומר" value={materials.join(', ') || '—'}/><BatchMetric label="מתקן" value={facilities.join(', ') || '—'}/><BatchMetric label="Routing group" value={routingGroups.join(', ') || '—'}/><BatchMetric label="כמות ארוזה" value={fmt(totalQty)}/><BatchMetric label="Inspection Lot" value={inspectionLots.join(', ') || '—'}/><BatchMetric label="QA" value={qaApprovals.join(', ') || 'טרם התקבלה החלטה'}/>
       </div>
       <div className="batch-kpi-row"><div className="batch-kpi good"><span>מאפיינים תקינים</span><b>{goodCount}</b></div><div className="batch-kpi bad"><span>מאפיינים חריגים</span><b>{badCount}</b></div><div className="batch-kpi"><span>אחוז הצלחה</span><b>{qualityPct}%</b></div><div className="batch-kpi"><span>חריגות פתוחות</span><b>{deviationRows.length}</b></div></div>
-      <div className="batch-card-body batch-card-body-wide">
-        <nav className="batch-workspace-tabs" aria-label="לשוניות כרטיס מנה">
-          <button type="button" className={activeBatchTab==='quality'?'active':''} onClick={()=>setActiveBatchTab('quality')}><FlaskConical size={17}/> תוצאות איכות ({allQuality.length})</button>
-          <button type="button" className={`bad ${activeBatchTab==='deviations'?'active':''}`} onClick={()=>setActiveBatchTab('deviations')}><AlertTriangle size={17}/> חריגים ({deviationRows.length})</button>
-          <button type="button" className={activeBatchTab==='production'?'active':''} onClick={()=>setActiveBatchTab('production')}><Factory size={17}/> ייצור ואריזה ({productionRows.length})</button>
-          <button type="button" className={activeBatchTab==='timeline'?'active':''} onClick={()=>setActiveBatchTab('timeline')}><Clock3 size={17}/> Timeline והערות</button>
-        </nav>
-        <div className="batch-workspace">
-          {activeBatchTab==='quality' && <section className="batch-panel quality-panel"><div className="batch-panel-title"><div><h3>תוצאות איכות</h3><p>תצוגה רחבה של כל המאפיינים שנמצאו למנה בקובץ האיכות</p></div><div className="quality-filter"><button className={qualityFilter==='all'?'active':''} onClick={()=>setQualityFilter('all')}>הכול {allQuality.length}</button><button className={qualityFilter==='good'?'active good':''} onClick={()=>setQualityFilter('good')}>תקינים {goodCount}</button><button className={qualityFilter==='bad'?'active bad':''} onClick={()=>setQualityFilter('bad')}>חריגים {badCount}</button></div></div><div className="table-wrap batch-quality-table"><table><thead><tr><th>מק״ט חומר</th><th>מאפיין</th><th>תוצאה</th><th>גבול תחתון</th><th>גבול עליון</th><th>יחידה</th><th>סטטוס</th><th>הערה</th></tr></thead><tbody>{shownQuality.map(r=><tr key={r._key} className={r.rejected?'quality-row-bad':''}><td>{r.material || materials.join(', ') || '—'}</td><td><b>{r.characteristic}</b></td><td>{r.value||r.qualitative||'—'}</td><td>{r.lower||'—'}</td><td>{r.upper||'—'}</td><td>{r.unit||'—'}</td><td><span className={`quality-status ${r.rejected?'bad':'good'}`}>{r.rejected?'חריג':'תקין'}</span></td><td>{r.remarks||'—'}</td></tr>)}{!shownQuality.length&&<tr><td colSpan="8" className="empty">לא נמצאו תוצאות במסנן שנבחר</td></tr>}</tbody></table></div></section>}
-
-          {activeBatchTab==='deviations' && <section className="batch-panel deviation-panel"><div className="batch-panel-title"><div><h3>חריגים</h3><p>תצוגה רחבה של כל החריגות, המאפיינים החריגים וההערות המקושרות למנה</p></div><span className="production-record-count">{deviationRows.length} חריגים</span></div><div className="table-wrap batch-deviation-table"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>סטטוס</th><th>UD Code</th><th>מאפייני חריגה</th><th>הערות</th></tr></thead><tbody>{deviationRows.map((r,i)=><tr key={`${r.batch}-${r.inspectionLot||i}-${i}`} className="quality-row-bad"><td>{iso(r.date)||'—'}</td><td>{iso(r.sampleDate)||'—'}</td><td>{r.sampleDate?new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'—'}</td><td>{r.facility||facilities.join(', ')||'—'}</td><td><span className="quality-status bad">{r.status||'פתוח'}</span></td><td>{r.udCode||'—'}</td><td>{r.rejectedCharacteristics?.length ? r.rejectedCharacteristics.map((c,j)=><div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value||c.qualitative||'—'}{c.unit?` ${c.unit}`:''}</b></span><span>מפרט: {c.lower!==''||c.upper!==''?`${c.lower||'—'} עד ${c.upper||'—'}${c.unit?` ${c.unit}`:''}`:'—'}</span>{c.remarks&&c.remarks!=='N/A'&&<small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount?` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})`:''}</span>}</td><td>{r.remarks||'—'}</td></tr>)}{!deviationRows.length&&<tr><td colSpan="8" className="empty">לא נמצאו חריגות למנה</td></tr>}</tbody></table></div></section>}
-
-          {activeBatchTab==='production' && <section className="batch-panel production-panel"><div className="batch-panel-title"><div><h3>נתוני ייצור ואריזה</h3><p>כל דיווחי התפוקה המקושרים למנה</p></div><span className="production-record-count">{productionRows.length} דיווחים</span></div><div className="table-wrap batch-production-table"><table><thead><tr><th>תאריך</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>Order</th><th>מק״ט</th><th>תיאור</th><th>כמות</th><th>משמרת</th></tr></thead><tbody>{productionRows.slice().sort((a,b)=>new Date(b.date||0)-new Date(a.date||0)).map((r,index)=><tr key={`${r.order}-${r.date?.getTime?.()||index}-${index}`}><td>{iso(r.date)||'—'}</td><td>{r.date?new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'—'}</td><td>{r.facility||'—'}</td><td>{r.routingGroup||'—'}</td><td>{r.order||'—'}</td><td>{r.material||'—'}</td><td>{r.desc||'—'}</td><td><b>{fmt(r.qty)}</b></td><td>{shiftInfo(r.date).label}</td></tr>)}{!productionRows.length&&<tr><td colSpan="9" className="empty">לא נמצאו דיווחי ייצור או אריזה למנה</td></tr>}</tbody></table></div></section>}
-
-          {activeBatchTab==='timeline' && <div className="batch-support-grid"><section className="batch-panel"><div className="batch-panel-title"><div><h3>Timeline</h3><p>מצב התקדמות המנה</p></div></div><div className="batch-timeline">{steps.map((step,i)=><div className={`timeline-step ${step.done?'done':''}`} key={step.label}><i>{step.done?<CheckCircle2 size={18}/>:<Clock3 size={18}/>}</i><div><b>{step.label}</b><span>{step.date?`${iso(step.date)} ${new Date(step.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})}`:'טרם הושלם'}</span></div>{i<steps.length-1&&<em/>}</div>)}</div></section><section className="batch-panel"><div className="batch-panel-title"><div><h3>חריגות והערות</h3><p>{deviationRows.length} רשומות מקושרות למנה</p></div></div><div className="batch-deviations">{deviationRows.map((r,i)=><article key={i}><div><span className="quality-status bad">{r.status||'חריגה'}</span>{r.udCode&&<b>{r.udCode}</b>}</div><p><b>מק״ט חומר: {r.material || materials.join(', ') || '—'}</b></p><p>{r.remarks||'לא הוזנה הערה'}</p><small>{iso(r.date)||'ללא תאריך'}</small></article>)}{!deviationRows.length&&<div className="batch-empty-good"><CheckCircle2/> לא נמצאו חריגות למנה</div>}</div></section></div>}
-        </div>
+      <div className="batch-card-body">
+        <section className="batch-panel quality-panel"><div className="batch-panel-title"><div><h3>תוצאות איכות</h3><p>כל המאפיינים שנמצאו למנה בקובץ האיכות</p></div><div className="quality-filter"><button className={qualityFilter==='all'?'active':''} onClick={()=>setQualityFilter('all')}>הכול {allQuality.length}</button><button className={qualityFilter==='good'?'active good':''} onClick={()=>setQualityFilter('good')}>תקינים {goodCount}</button><button className={qualityFilter==='bad'?'active bad':''} onClick={()=>setQualityFilter('bad')}>חריגים {badCount}</button></div></div><div className="table-wrap batch-quality-table"><table><thead><tr><th>מק״ט חומר</th><th>מאפיין</th><th>תוצאה</th><th>גבול תחתון</th><th>גבול עליון</th><th>יחידה</th><th>סטטוס</th><th>הערה</th></tr></thead><tbody>{shownQuality.map(r=><tr key={r._key} className={r.rejected?'quality-row-bad':''}><td>{r.material || materials.join(', ') || '—'}</td><td><b>{r.characteristic}</b></td><td>{r.value||r.qualitative||'—'}</td><td>{r.lower||'—'}</td><td>{r.upper||'—'}</td><td>{r.unit||'—'}</td><td><span className={`quality-status ${r.rejected?'bad':'good'}`}>{r.rejected?'חריג':'תקין'}</span></td><td>{r.remarks||'—'}</td></tr>)}{!shownQuality.length&&<tr><td colSpan="8" className="empty">לא נמצאו תוצאות במסנן שנבחר</td></tr>}</tbody></table></div></section>
+        <section className="batch-panel production-panel"><div className="batch-panel-title"><div><h3>נתוני ייצור ואריזה</h3><p>כל דיווחי התפוקה המקושרים למנה</p></div><span className="production-record-count">{productionRows.length} דיווחים</span></div><div className="table-wrap batch-production-table"><table><thead><tr><th>תאריך</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>Order</th><th>מק״ט</th><th>תיאור</th><th>כמות</th><th>משמרת</th></tr></thead><tbody>{productionRows.slice().sort((a,b)=>new Date(b.date||0)-new Date(a.date||0)).map((r,index)=><tr key={`${r.order}-${r.date?.getTime?.()||index}-${index}`}><td>{iso(r.date)||'—'}</td><td>{r.date?new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'—'}</td><td>{r.facility||'—'}</td><td>{r.routingGroup||'—'}</td><td>{r.order||'—'}</td><td>{r.material||'—'}</td><td>{r.desc||'—'}</td><td><b>{fmt(r.qty)}</b></td><td>{shiftInfo(r.date).label}</td></tr>)}{!productionRows.length&&<tr><td colSpan="9" className="empty">לא נמצאו דיווחי ייצור או אריזה למנה</td></tr>}</tbody></table></div></section>
+        <aside className="batch-side-column"><section className="batch-panel"><div className="batch-panel-title"><div><h3>Timeline</h3><p>מצב התקדמות המנה</p></div></div><div className="batch-timeline">{steps.map((step,i)=><div className={`timeline-step ${step.done?'done':''}`} key={step.label}><i>{step.done?<CheckCircle2 size={18}/>:<Clock3 size={18}/>}</i><div><b>{step.label}</b><span>{step.date?`${iso(step.date)} ${new Date(step.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})}`:'טרם הושלם'}</span></div>{i<steps.length-1&&<em/>}</div>)}</div></section><section className="batch-panel"><div className="batch-panel-title"><div><h3>חריגות והערות</h3><p>{deviationRows.length} רשומות מקושרות למנה</p></div></div><div className="batch-deviations">{deviationRows.map((r,i)=><article key={i}><div><span className="quality-status bad">{r.status||'חריגה'}</span>{r.udCode&&<b>{r.udCode}</b>}</div><p><b>מק״ט חומר: {r.material || materials.join(', ') || '—'}</b></p><p>{r.remarks||'לא הוזנה הערה'}</p><small>{iso(r.date)||'ללא תאריך'}</small></article>)}{!deviationRows.length&&<div className="batch-empty-good"><CheckCircle2/> לא נמצאו חריגות למנה</div>}</div></section></aside>
       </div>
     </section>
   </div>
