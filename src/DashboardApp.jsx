@@ -8,6 +8,7 @@ import {
 import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
+import { productionMappingKey, stationFamily } from './mappingEngine'
 import './styles.css'
 
 const LEGACY_DAILY_TARGETS = {
@@ -37,8 +38,8 @@ const RESOURCE_LABELS = {
 const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
-const DB_KEY = 'sprint1172-build4'
-const BUILD_LABEL = 'Sprint 11.7.2 Build 4 — Calendar Day & Product Catalog'
+const DB_KEY = 'sprint1181-build1'
+const BUILD_LABEL = 'Sprint 11.8.1 Build 1 — Mapping Control Center'
 const isoDate = value => {
   if (!value) return ''
 
@@ -49,6 +50,12 @@ const isoDate = value => {
 
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
+const MAPPING_STORAGE_KEY = 'iml-product-mappings-sprint1181'
+const MAPPING_TIMELINE_KEY = 'iml-product-mapping-timeline-sprint1181'
+const readLocalJson = (key, fallback = []) => {
+  try { return JSON.parse(localStorage.getItem(key) || '') || fallback } catch { return fallback }
+}
+
 const initialToDate = () => isoDate(new Date())
 const initialFromDate = () => { const date = new Date(); date.setDate(date.getDate() - 6); return isoDate(date) }
 
@@ -360,6 +367,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [to, setTo] = useState(initialToDate)
   const [selectedFacilities, setSelectedFacilities] = useState([])
   const [activeTab, setActiveTab] = useState('production')
+  const [simulatorOnlyIssues, setSimulatorOnlyIssues] = useState(true)
+  const [manualMappings, setManualMappings] = useState(() => readLocalJson(MAPPING_STORAGE_KEY, []))
+  const [mappingTimeline, setMappingTimeline] = useState(() => readLocalJson(MAPPING_TIMELINE_KEY, []))
+  const [mappingDialog, setMappingDialog] = useState(null)
+  const [mappingTargetKey, setMappingTargetKey] = useState('')
+  const [mappingMessage, setMappingMessage] = useState('')
   const [planningMonth, setPlanningMonth] = useState('')
   const [additionalFacilities, setAdditionalFacilities] = useState([])
   const [facilityToAdd, setFacilityToAdd] = useState('')
@@ -371,6 +384,25 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
   const [perfStats, setPerformance] = useState({ startedAt:0, cache:'MISS', queries:0, rows:0, loadMs:0, phase:'אתחול' })
+
+  useEffect(() => { localStorage.setItem(MAPPING_STORAGE_KEY, JSON.stringify(manualMappings)) }, [manualMappings])
+  useEffect(() => { localStorage.setItem(MAPPING_TIMELINE_KEY, JSON.stringify(mappingTimeline.slice(0,500))) }, [mappingTimeline])
+
+  useEffect(() => {
+    if (!supabase || !currentUser?.id) return
+    let active = true
+    supabase.from('iml_product_mappings').select('*').order('created_at', { ascending:false })
+      .then(({ data, error }) => {
+        if (!active || error || !data?.length) return
+        setManualMappings(data.map(row => ({
+          id:row.id, rowKey:row.row_key, material:row.material || '', description:row.description || '',
+          family:row.facility_family, targetKey:row.target_key, targetResource:row.target_resource,
+          status:row.status, active:row.active !== false, createdBy:row.created_by_email || '',
+          createdAt:row.created_at, approvedAt:row.approved_at || null, cloud:true,
+        })))
+      })
+    return () => { active = false }
+  }, [currentUser?.id])
 
   useEffect(() => {
     let active = true
@@ -890,7 +922,166 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     targets,
     planningMonth,
     fallbackFacilities: facilities,
-  }), [planningMonth, prod, targets, facilities])
+    manualMappings,
+  }), [planningMonth, prod, targets, facilities, manualMappings])
+
+
+  const mappingTargets = useMemo(() => planningRows.map(row => ({
+    key: row.targetKey,
+    resource: row.resource,
+    facility: row.facility,
+    facilities: row.facilities,
+    target: row.target,
+    actual: row.actual,
+    pct: row.pct,
+  })), [planningRows])
+
+  const addMappingEvent = (action, mapping, note = '') => {
+    setMappingTimeline(current => [{
+      id:`${Date.now()}-${Math.random()}`,
+      at:new Date().toISOString(), action, note,
+      mappingId:mapping?.id || '', material:mapping?.material || '',
+      family:mapping?.family || '', targetResource:mapping?.targetResource || '',
+      user:currentUser?.email || currentUser?.user_metadata?.full_name || 'מנהל',
+    }, ...current].slice(0,500))
+  }
+
+  const syncMappingToCloud = async mapping => {
+    if (!supabase || !currentUser?.id) return null
+    const payload = {
+      row_key:mapping.rowKey, material:mapping.material || '', description:mapping.description || '',
+      facility_family:mapping.family, target_key:mapping.targetKey, target_resource:mapping.targetResource,
+      status:mapping.status, active:mapping.active !== false, created_by:currentUser.id,
+      created_by_email:currentUser.email || '', approved_by:mapping.status === 'approved' ? currentUser.id : null,
+      approved_at:mapping.status === 'approved' ? new Date().toISOString() : null,
+      updated_at:new Date().toISOString(),
+    }
+    if (mapping.id?.length === 36) payload.id = mapping.id
+    const { data, error } = await supabase.from('iml_product_mappings').upsert(payload).select().maybeSingle()
+    if (error) return null
+    return data
+  }
+
+  const openMappingDialog = item => {
+    const candidates = mappingTargets.filter(target => (target.facilities || []).map(stationFamily).includes(item.family))
+    setMappingDialog({ ...item, candidates })
+    setMappingTargetKey(candidates[0]?.key || '')
+    setMappingMessage('')
+  }
+
+  const savePendingMapping = async () => {
+    if (!mappingDialog || !mappingTargetKey) return
+    const target = mappingTargets.find(item => item.key === mappingTargetKey)
+    if (!target) return
+    const row = mappingDialog.row
+    const mapping = {
+      id:globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+      rowKey:productionMappingKey(row), material:row.material || '', description:row.desc || '',
+      family:mappingDialog.family, targetKey:mappingTargetKey, targetResource:target.resource,
+      status:'pending', active:true, createdBy:currentUser?.email || '', createdAt:new Date().toISOString(),
+    }
+    setManualMappings(current => [mapping, ...current.filter(item => item.rowKey !== mapping.rowKey || item.status === 'rejected')])
+    addMappingEvent('created', mapping, 'נוצר שיוך ממתין לאישור')
+    const cloudRow = await syncMappingToCloud(mapping)
+    if (cloudRow?.id) setManualMappings(current => current.map(item => item.id === mapping.id ? { ...item, id:cloudRow.id, cloud:true } : item))
+    setMappingDialog(null)
+    setMappingMessage('השיוך נשמר כממתין לאישור')
+  }
+
+  const updateMappingStatus = async (mapping, status) => {
+    const updated = { ...mapping, status, active:status !== 'rejected', approvedAt:status === 'approved' ? new Date().toISOString() : mapping.approvedAt }
+    setManualMappings(current => current.map(item => item.id === mapping.id ? updated : item))
+    addMappingEvent(status, updated, status === 'approved' ? 'השיוך אושר והשפיע על הדשבורד' : 'השיוך נדחה')
+    await syncMappingToCloud(updated)
+  }
+
+  const rollbackMapping = async mapping => {
+    const updated = { ...mapping, active:false, status:'rejected' }
+    setManualMappings(current => current.map(item => item.id === mapping.id ? updated : item))
+    addMappingEvent('rollback', updated, 'השיוך בוטל והחישוב חזר למצב הקודם')
+    await syncMappingToCloud(updated)
+  }
+
+
+  const mappingSimulation = useMemo(() => {
+    const assignments = new Map()
+    planningRows.forEach(targetRow => {
+      ;(targetRow.productionRows || []).forEach(row => {
+        const list = assignments.get(row) || []
+        list.push({
+          resource: targetRow.resource,
+          facility: targetRow.facility,
+          station: targetRow.station,
+          routingGroup: targetRow.routingGroup,
+        })
+        assignments.set(row, list)
+      })
+    })
+
+    const rows = filtered.map((row, index) => {
+      const matches = assignments.get(row) || []
+      const rowKey = productionMappingKey(row)
+      const approvedManual = manualMappings.find(mapping => mapping.active !== false && mapping.status === 'approved' && mapping.rowKey === rowKey)
+      const pendingManual = manualMappings.find(mapping => mapping.active !== false && mapping.status === 'pending' && mapping.rowKey === rowKey)
+      const status = matches.length === 0 ? 'unmatched' : matches.length > 1 ? 'duplicate' : 'matched'
+      const stationDigits = String(row.facility || '').replace(/\D/g, '')
+      const suffix = stationDigits.length >= 2 ? stationDigits.slice(-2) : ''
+      const family = suffix ? `15${suffix}` : row.facility || ''
+      return {
+        key: `${row.order || ''}-${row.batch || ''}-${index}`,
+        row,
+        matches,
+        status,
+        family,
+        assignedResource: matches.map(item => item.resource).filter(Boolean).join(' | '),
+        approvedManual, pendingManual,
+        explanation: status === 'matched'
+          ? `שויך ליעד אחד: ${matches[0].resource || matches[0].facility || 'ללא שם'}`
+          : status === 'duplicate'
+            ? `שויך ל-${matches.length} יעדים — חשש לספירה כפולה`
+            : 'לא נמצא יעד תואם לפי כללי המנוע הנוכחיים',
+      }
+    })
+
+    const summary = rows.reduce((acc, item) => {
+      acc.rows += 1
+      acc.quantity += Number(item.row.qty) || 0
+      if (item.status === 'matched') { acc.matched += 1; acc.matchedQty += Number(item.row.qty) || 0 }
+      if (item.status === 'unmatched') { acc.unmatched += 1; acc.unmatchedQty += Number(item.row.qty) || 0 }
+      if (item.status === 'duplicate') { acc.duplicate += 1; acc.duplicateQty += Number(item.row.qty) || 0 }
+      return acc
+    }, { rows:0, quantity:0, matched:0, matchedQty:0, unmatched:0, unmatchedQty:0, duplicate:0, duplicateQty:0 })
+
+    return { rows, summary }
+  }, [filtered, planningRows, manualMappings])
+
+  const visibleMappingSimulation = useMemo(() => (
+    simulatorOnlyIssues
+      ? mappingSimulation.rows.filter(item => item.status !== 'matched')
+      : mappingSimulation.rows
+  ), [mappingSimulation, simulatorOnlyIssues])
+
+  const exportMappingSimulation = () => {
+    const rows = mappingSimulation.rows.map(item => ({
+      Date: item.row.productionDay || iso(item.row.date),
+      Time: item.row.date ? new Date(item.row.date).toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'}) : '',
+      StorageLocation: item.row.facility,
+      FacilityFamily: item.family,
+      RoutingGroup: item.row.routingGroup,
+      OrderType: item.row.orderType,
+      Order: item.row.order,
+      Batch: item.row.batch,
+      Material: item.row.material,
+      Description: item.row.desc,
+      Quantity: item.row.qty,
+      MatchStatus: item.status,
+      AssignedResource: item.assignedResource,
+      Explanation: item.explanation,
+    }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Mapping Simulator')
+    XLSX.writeFile(wb, `IML_Production_Mapping_Simulator_${new Date().toISOString().slice(0,10)}.xlsx`)
+  }
 
   const facilityStats = useMemo(() => facilities.map(id => {
     let rows = baseFiltered.filter(r => r.facility === id)
@@ -1252,8 +1443,26 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         <button className={activeTab === 'shifts' ? 'active' : ''} onClick={() => setActiveTab('shifts')}><Clock3 size={16}/> ניתוח משמרות</button>
         <button className={activeTab === 'quality' ? 'active' : ''} onClick={() => setActiveTab('quality')}><FlaskConical size={16}/> איכות ({qualityBad.length})</button>
         <button className={activeTab === 'deviations' ? 'active' : ''} onClick={() => setActiveTab('deviations')}><AlertTriangle size={16}/> מנות חריגות ({openDeviations.length})</button>
+        {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.unmatched + mappingSimulation.summary.duplicate})</button>}
+        {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
       {activeTab === 'production' && <section className="details"><h2>רשומות תפוקה אחרונות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>הזמנה</th><th>Batch</th><th>מק״ט חומר</th><th>תיאור חומר</th><th>כמות</th></tr></thead><tbody>{filtered.slice(-200).reverse().map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : ''}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="9" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
+        <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מציג לאיזה יעד כל רשומת SAP נכנסת. בשורה בעייתית לחץ "שייך" כדי לראות את ההשפעה לפני שמירה.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
+        {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
+        <div className="mapping-summary-grid"><article><span>רשומות בטווח</span><b>{fmt(mappingSimulation.summary.rows)}</b><small>{fmt(mappingSimulation.summary.quantity)} כמות</small></article><article className="mapping-ok"><span>שויכו תקין</span><b>{fmt(mappingSimulation.summary.matched)}</b><small>{fmt(mappingSimulation.summary.matchedQty)} כמות</small></article><article className="mapping-unmatched"><span>לא שויכו</span><b>{fmt(mappingSimulation.summary.unmatched)}</b><small>{fmt(mappingSimulation.summary.unmatchedQty)} כמות</small></article><article className="mapping-duplicate"><span>שיוך כפול</span><b>{fmt(mappingSimulation.summary.duplicate)}</b><small>{fmt(mappingSimulation.summary.duplicateQty)} כמות</small></article></div>
+        <div className="table-wrap mapping-table-wrap"><table><thead><tr><th>סטטוס</th><th>תאריך</th><th>תחנה</th><th>משפחה</th><th>Order</th><th>Batch</th><th>מק״ט</th><th>תיאור מוצר</th><th>כמות</th><th>יעד</th><th>מקור</th><th>פעולה</th></tr></thead><tbody>{visibleMappingSimulation.slice(0,1000).map(item => <tr key={item.key} className={`mapping-row mapping-${item.status}`}><td><span className={`mapping-status mapping-status-${item.status}`}>{item.status === 'matched' ? 'תקין' : item.status === 'duplicate' ? 'כפול' : 'לא שויך'}</span></td><td>{item.row.productionDay || iso(item.row.date)}</td><td>{item.row.facility || '—'}</td><td>{item.family || '—'}</td><td>{item.row.order || '—'}</td><td>{item.row.batch || '—'}</td><td>{item.row.material || '—'}</td><td>{item.row.desc || '—'}</td><td>{fmt(item.row.qty)}</td><td>{item.assignedResource || item.pendingManual?.targetResource || '—'}</td><td>{item.approvedManual ? 'מיפוי ידני מאושר' : item.pendingManual ? 'ממתין לאישור' : item.explanation}</td><td>{item.family !== '1542' && item.status !== 'matched' && !item.pendingManual ? <button className="mapping-assign-btn" onClick={() => openMappingDialog(item)}>שייך</button> : item.pendingManual ? <span className="mapping-pending-chip">ממתין</span> : '—'}</td></tr>)}{!visibleMappingSimulation.length && <tr><td colSpan="12" className="empty">לא נמצאו בעיות שיוך בטווח שנבחר</td></tr>}</tbody></table></div>
+      </section>}
+
+      {activeTab === 'mapping-center' && canManageData && <section className="details mapping-center">
+        <div className="mapping-simulator-head"><div><h2>מרכז בקרת מיפויים</h2><p className="details-note">אישור, דחייה וביטול של שיוכים. שיוך משפיע על הדשבורד רק לאחר אישור.</p></div></div>
+        <div className="mapping-summary-grid"><article className="mapping-duplicate"><span>ממתינים לאישור</span><b>{manualMappings.filter(item => item.active !== false && item.status === 'pending').length}</b></article><article className="mapping-ok"><span>מאושרים</span><b>{manualMappings.filter(item => item.active !== false && item.status === 'approved').length}</b></article><article className="mapping-unmatched"><span>נדחו / בוטלו</span><b>{manualMappings.filter(item => item.status === 'rejected' || item.active === false).length}</b></article><article><span>אירועי היסטוריה</span><b>{mappingTimeline.length}</b></article></div>
+        <div className="table-wrap"><table><thead><tr><th>סטטוס</th><th>מתקן</th><th>מק״ט</th><th>תיאור</th><th>יעד</th><th>נוצר ע״י</th><th>תאריך</th><th>פעולות</th></tr></thead><tbody>{manualMappings.map(mapping => <tr key={mapping.id}><td><span className={`mapping-status mapping-status-${mapping.status === 'approved' ? 'matched' : mapping.status === 'pending' ? 'duplicate' : 'unmatched'}`}>{mapping.status === 'approved' ? 'מאושר' : mapping.status === 'pending' ? 'ממתין' : 'נדחה'}</span></td><td>{mapping.family}</td><td>{mapping.material || '—'}</td><td>{mapping.description || '—'}</td><td>{mapping.targetResource}</td><td>{mapping.createdBy || 'מנהל'}</td><td>{mapping.createdAt ? new Date(mapping.createdAt).toLocaleString('he-IL') : '—'}</td><td><div className="mapping-row-actions">{mapping.status === 'pending' && <><button onClick={() => updateMappingStatus(mapping,'approved')}>אשר</button><button className="danger" onClick={() => updateMappingStatus(mapping,'rejected')}>דחה</button></>}{mapping.status === 'approved' && mapping.active !== false && <button className="danger" onClick={() => rollbackMapping(mapping)}>בטל שיוך</button>}</div></td></tr>)}{!manualMappings.length && <tr><td colSpan="8" className="empty">עדיין לא נוצרו מיפויים ידניים</td></tr>}</tbody></table></div>
+        <div className="mapping-timeline"><h3>Timeline החלטות</h3>{mappingTimeline.slice(0,30).map(event => <div key={event.id}><time>{new Date(event.at).toLocaleString('he-IL')}</time><b>{event.action}</b><span>{event.material || '—'} → {event.targetResource || '—'}</span><small>{event.user} · {event.note}</small></div>)}</div>
+      </section>}
+
+      {mappingDialog && <div className="mapping-dialog-backdrop"><div className="mapping-dialog"><button className="mapping-dialog-close" onClick={() => setMappingDialog(null)}><X/></button><h2>שיוך חומר ליעד</h2><div className="mapping-source-card"><b>{mappingDialog.row.material || 'ללא מק״ט'}</b><span>{mappingDialog.row.desc || 'ללא תיאור'}</span><small>תחנה {mappingDialog.row.facility} · משפחה {mappingDialog.family} · כמות {fmt(mappingDialog.row.qty)}</small></div><label>בחר יעד<select value={mappingTargetKey} onChange={event => setMappingTargetKey(event.target.value)}><option value="">בחר יעד...</option>{mappingDialog.candidates.map(target => <option key={target.key} value={target.key}>{target.resource} — יעד {fmt(target.target)} — בוצע {fmt(target.actual)}</option>)}</select></label>{(() => { const target=mappingTargets.find(item => item.key===mappingTargetKey); if(!target) return null; const impacted=mappingSimulation.rows.filter(item => item.family===mappingDialog.family && productionMappingKey(item.row)===productionMappingKey(mappingDialog.row)); const qty=impacted.reduce((sum,item)=>sum+(Number(item.row.qty)||0),0); const before=target.actual||0; const after=before+qty; return <div className="mapping-impact"><h3>סימולציית השפעה</h3><div><span>כמות שתשויך</span><b>{fmt(qty)}</b></div><div><span>ביצוע לפני</span><b>{fmt(before)}</b></div><div><span>ביצוע אחרי</span><b>{fmt(after)}</b></div><div><span>עמידה ביעד</span><b>{target.target ? `${Math.round(before/target.target*100)}% → ${Math.round(after/target.target*100)}%` : 'ללא יעד'}</b></div><p>השינוי לא ישפיע על הדשבורד עד לאישור במרכז המיפויים.</p></div> })()}<button className="mapping-save-btn" disabled={!mappingTargetKey} onClick={savePendingMapping}><Save size={17}/> שמור כממתין לאישור</button></div></div>}
+
       {activeTab === 'shifts' && <section className="details shift-intelligence"><h2>ניתוח משמרות — בוקר, ערב ולילה</h2><p className="details-note">החלפות מוצר מזוהות לפי שינוי מק״ט באותו מתקן ו-Routing group. זמן המעבר הוא פער זמן משוער בין שני דיווחים עוקבים.</p><div className="shift-card-grid">{shiftAnalysis.map(item => <article className={`shift-analysis-card shift-${item.key}`} key={item.key}><div className="shift-card-head"><div><h3>{item.label}</h3><span>{item.hours}</span></div><strong>{fmt(item.total)}</strong></div><div className="shift-metrics"><div><span>קצב ממוצע לשעה</span><b>{fmt(item.avgPerHour)}</b></div><div><span>Orders</span><b>{item.orders}</b></div><div><span>Batch</span><b>{item.batches}</b></div><div><span>מק״טים</span><b>{item.materials}</b></div><div><span>החלפות מוצר</span><b>{item.changeovers.length}</b></div><div><span>חריגות איכות</span><b>{item.deviations}</b></div><div><span>ממוצע מעבר</span><b>{fmt(item.avgChangeover)} דק׳</b></div><div><span>תרומה לתפוקה</span><b>{pctFmt(item.share)}</b></div></div></article>)}</div><h3 className="shift-subtitle">פירוט החלפות מוצר</h3><div className="table-wrap"><table><thead><tr><th>משמרת</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>מוצר קודם</th><th>מוצר חדש</th><th>פער דיווח משוער</th></tr></thead><tbody>{shiftAnalysis.flatMap(item => item.changeovers.map((c,i) => <tr key={`${item.key}-${i}`}><td>{item.label}</td><td>{c.at?.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})}</td><td>{c.facility}</td><td>{c.routingGroup || '—'}</td><td>{c.fromMaterial}{c.fromDesc ? ` · ${c.fromDesc}` : ''}</td><td>{c.toMaterial}{c.toDesc ? ` · ${c.toDesc}` : ''}</td><td>{fmt(c.minutes)} דקות</td></tr>))}{!shiftAnalysis.some(item => item.changeovers.length) && <tr><td colSpan="7" className="empty">לא זוהו החלפות מוצר בטווח שנבחר</td></tr>}</tbody></table></div></section>}
       {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="8" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch.</p><div className="table-wrap"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{iso(r.sampleDate) || '—'}</td><td>{r.sampleDate ? new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="10" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}

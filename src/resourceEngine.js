@@ -1,3 +1,4 @@
+import { mappingMatchesTarget, stationFamily, targetMappingKey } from './mappingEngine'
 const text = value => String(value ?? '').trim()
 const upper = value => text(value).toUpperCase()
 const isoDate = value => {
@@ -21,10 +22,17 @@ const workdayCount = (key, startDay = 1, endDay = daysInMonth(key)) => {
   return count
 }
 
-const matchProductionToTarget = (row, target) => {
+const matchProductionToTarget = (row, target, manualMappings = []) => {
+  const manualDecision = mappingMatchesTarget(row, target, manualMappings)
+  if (manualDecision !== null) return manualDecision
+
   const facilities = target.facilities?.length ? target.facilities : [target.facility].filter(Boolean)
-  if (!facilities.includes(row.facility)) return false
-  if (facilities.includes('1542') && row.facility === '1542' && !upper(row.orderType).includes('ZFIN')) return false
+  const rowFamily = stationFamily(row.facility)
+  const targetFamilies = facilities.map(stationFamily)
+  if (!targetFamilies.includes(rowFamily)) return false
+
+  // מתקן 42 נשאר במסלול הקיים והנעול.
+  if (rowFamily === '1542' && !upper(row.orderType).includes('ZFIN')) return false
   if (target.routingGroup && upper(row.routingGroup) !== upper(target.routingGroup)) return false
   const tokens = (target.descriptionTokens || []).map(upper).filter(Boolean)
   if (!tokens.length) return true
@@ -42,7 +50,7 @@ const packagingTypeForTarget = target => {
   return ''
 }
 
-export function buildResourceRows({ production = [], targets = [], planningMonth = '', fallbackFacilities = [], now = new Date() }) {
+export function buildResourceRows({ production = [], targets = [], planningMonth = '', fallbackFacilities = [], manualMappings = [], now = new Date() }) {
   if (!planningMonth) return []
   const [year, month] = planningMonth.split('-').map(Number)
   const monthRows = production.filter(row => {
@@ -68,7 +76,7 @@ const latestDate = monthRows.reduce((latest, row) => {
   const sourceRows = monthTargets.length ? monthTargets : fallbackFacilities.map(facility => ({ facility, facilities:[facility], resource:`מתקן ${facility}`, target:0, capacity:0, descriptionTokens:[] }))
 
   return sourceRows.map((targetRow, index) => {
-    const rows = monthRows.filter(row => matchProductionToTarget(row, targetRow))
+    const rows = monthRows.filter(row => matchProductionToTarget(row, targetRow, manualMappings))
     const dailyMap = new Map()
     let actual = 0
     const orders = new Set()
@@ -100,7 +108,7 @@ const latestDate = monthRows.reduce((latest, row) => {
     else if (target > 0) { state = 'good'; label = 'במסלול ליעד' }
     const facilities = targetRow.facilities?.length ? targetRow.facilities : [targetRow.facility].filter(Boolean)
     return {
-      id:`${targetRow.resource || targetRow.facility || index}::${index}`,
+      id:`${targetRow.resource || targetRow.facility || index}::${index}`, targetKey:targetMappingKey(targetRow),
       resource:targetRow.resource || `מתקן ${targetRow.facility}`,
       facility:facilities.join(','), facilities,
       routingGroup:targetRow.routingGroup || '', station:targetRow.station || facilities.join(','),
