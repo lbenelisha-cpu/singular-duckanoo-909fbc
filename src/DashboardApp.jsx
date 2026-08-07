@@ -862,7 +862,14 @@ material: normalize(getField(r, [
           latestByBatchMaterialLot.set(lotKey, { timestamp, date: row.date })
         }
       }
-
+console.log({
+  batch: row.batch,
+  material: row.material,
+  characteristic: row.characteristic,
+  status: row.status,
+  approval: row.approval,
+  value: row.value
+})
       const status = normalize(row.status || row.approval).toLowerCase()
       const isRejected = ['rejection', 'rejected', 'fail', 'failed', 'פסול', 'לא תקין', 'חריג'].some(x => status.includes(x))
       const item = {
