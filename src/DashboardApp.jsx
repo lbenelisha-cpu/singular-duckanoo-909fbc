@@ -769,7 +769,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
       order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
       batch: normalize(getField(r, ['Batch', 'Batch Number'])),
-      material: normalize(getField(r, ['Material', 'Material #', 'Material Number', 'Material No.', 'מקט', 'מק"ט', 'מק״ט'])),
+      material: normalize(getField(r, [
+  'Material #',
+  'Material Number',
+  'Material No.',
+  'מקט',
+  'מק"ט',
+  'מק״ט',
+  'Material'
+])),
       desc: normalize(getField(r, ['Material description', 'Material Description'])),
       orderType: normalize(getField(r, ['Order Type'])),
       routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group'])),
@@ -794,7 +802,16 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const deviationRows = useMemo(() => deviations.map(r => ({
     facility: canonicalFacility(getField(r, ['Facility', 'Production Line', 'Storage Location'])),
     date: excelDate(getField(r, ['Date of Lot Creation', 'Inspection Lot UD Date', 'Process Order Delivered Date', 'Start Date of Inspection'])),
-    batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, ['Material', 'Material #', 'Material Number', 'Material No.', 'מקט', 'מק"ט', 'מק״ט'])),
+    batch: normalize(getField(r, ['Batch', 'Batch Number'])),
+material: normalize(getField(r, [
+  'Material #',
+  'Material Number',
+  'Material No.',
+  'מקט',
+  'מק"ט',
+  'מק״ט',
+  'Material'
+])),
     inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
     status: normalize(getField(r, ['QA Status', 'Status'])),
     rejectedCount: num(getField(r, ['Rejected characteristics', 'Rejected characteristics '])),
@@ -806,6 +823,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   // scanned the 263K-row quality array several times and then filtered the whole
   // array again for every deviation, which froze the browser after the fast cache render.
   const qualityIndex = useMemo(() => {
+    const byBatch = new Map()
     const byBatchMaterial = new Map()
     const rejected = new Map()
     const approved = new Map()
@@ -861,7 +879,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       addCharacteristic(isRejected ? rejected : approved, isRejected ? seenRejected : seenApproved, key, item)
     })
 
-    return { byBatchMaterial, rejected, approved, latestByBatchMaterial, latestByBatchMaterialLot }
+    return {
+    byBatch,
+    byBatchMaterial,
+    rejected,
+    approved,
+    latestByBatchMaterial,
+    latestByBatchMaterialLot,
+}
   }, [qualityRows])
 
   const enrichedDeviationRows = useMemo(() => deviationRows.map(row => {
