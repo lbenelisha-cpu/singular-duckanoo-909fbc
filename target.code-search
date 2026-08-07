@@ -1,0 +1,1522 @@
+# Query: target
+# ContextLines: 1
+
+798 results - 23 files
+
+
+BatchCard.jsx:
+     4    Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
+     5:   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
+     6    Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Settings2, Plus, MapPin
+
+    13  
+    14: const LEGACY_DAILY_TARGETS = {
+    15    '1519': 80000, '1521': 60000, '1523': 40000, '1524': 6000,
+
+   194  
+   195: const TARGET_MONTHS = { jan:1, january:1, feb:2, february:2, mar:3, march:3, apr:4, april:4, may:5, jun:6, june:6, jul:7, july:7, aug:8, august:8, sep:9, sept:9, september:9, oct:10, october:10, nov:11, november:11, dec:12, december:12 }
+   196: const targetMonthFromTitle = (value, fallbackDate = new Date()) => {
+   197    const text = normalize(value)
+   198    const english = text.match(/(?:production\s+report\s+)?([a-z]{3,9})\s+(20\d{2})/i)
+   199:   if (english) { const month = TARGET_MONTHS[english[1].toLowerCase()]; if (month) return `${english[2]}-${String(month).padStart(2,'0')}` }
+   200    return parseMonth(text) || monthKey(fallbackDate)
+   201  }
+   202: const targetFacilityIds = (resource) => {
+   203    const text = normalize(resource)
+
+   208  }
+   209: const targetDescriptionTokens = (resource) => {
+   210    const text = normalize(resource).toUpperCase()
+
+   218  }
+   219: const parseTargetNumber = (value) => {
+   220    if (value === null || value === undefined || value === '' || /^\s*-+\s*$/.test(String(value)) || /DIV\/0/i.test(String(value))) return 0
+
+   254  
+   255: async function readTargetWorkbook(file) {
+   256    const buf = await file.arrayBuffer(); const wb = XLSX.read(buf, { type:'array', cellDates:true, dense:true }); const output = []
+
+   259      if (!matrix.length) continue
+   260:     const titleText = matrix.slice(0,3).flat().map(normalize).join(' '); const fallbackMonth = targetMonthFromTitle(`${titleText} ${file.name}`, new Date())
+   261      const headerIndex = matrix.findIndex(row => { const keys=row.map(normKey); return keys.some(k=>k==='capacity') && keys.some(k=>k==='plan') })
+
+   288  
+   289:   const targetLike = hasAll(
+   290:     ['monthly target', 'monthly plan', 'יעד חודשי', 'תוכנית חודשית', 'target', 'plan'],
+   291      ['facility', 'מתקן', 'resource', 'משאב']
+   292    )
+   293:   if (targetLike) return 'targets'
+   294  
+
+   318    const [deviations, setDeviations] = useState([])
+   319:   const [targets, setTargets] = useState([])
+   320    const [status, setStatus] = useState('ממתין לטעינת קבצים')
+
+   331    const [periodQuarter, setPeriodQuarter] = useState('')
+   332:   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
+   333    const [selectedBatch, setSelectedBatch] = useState('')
+
+   348      const startedAt = performance.now()
+   349:     const kinds = ['production', 'quality', 'deviations', 'targets']
+   350  
+
+   355        if (kind === 'deviations') setDeviations(rows)
+   356:       if (kind === 'targets') setTargets(rows)
+   357        setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
+
+   368            setDeviations(cached.deviations || [])
+   369:           setTargets(cached.targets || [])
+   370:           setDataMeta(cached.dataMeta || { production:null, quality:null, deviations:null, targets:null })
+   371            setStatus('מוצג מטמון מקומי — בודק עדכונים מהשרת...')
+   372            setCloudState({ mode:'connecting', lastSync:cached.savedAt || null, message:'הדשבורד זמין; בודק גרסאות חדשות ברקע...', latencyMs:null, live:false })
+   373:           setPerformance(current => ({ ...current, cache:'HIT', rows:(cached.production?.length||0)+(cached.quality?.length||0)+(cached.deviations?.length||0)+(cached.targets?.length||0), phase:'בדיקת גרסאות' }))
+   374          }
+
+   399  
+   400:         for (const kind of ['targets', 'quality', 'deviations']) {
+   401            if (!active) return
+
+   433            const kind = payload?.new?.kind || payload?.old?.kind
+   434:           if (!['production','quality','deviations','targets'].includes(kind)) return
+   435            try {
+
+   441              if (kind === 'deviations') setDeviations(rows)
+   442:             if (kind === 'targets') setTargets(rows)
+   443              setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
+
+   483    useEffect(() => {
+   484:     if (!production.length && !quality.length && !deviations.length && !targets.length) return
+   485      const timer = setTimeout(() => {
+   486:       idbSet({ production, quality, deviations, targets, dataMeta, savedAt: new Date().toISOString() })
+   487          .catch(e => { console.error(e); setStatus('הנתונים בענן, אך יצירת גיבוי מקומי נכשלה') })
+
+   489      return () => clearTimeout(timer)
+   490:   }, [production, quality, deviations, targets, dataMeta])
+   491  
+
+   508        ],
+   509:       targets: [
+   510          ['משאב', present('Resource', 'משאב', 'Storage Location', 'Facility', 'מתקן')],
+   511:         ['תוכנית חודשית', present('Plan', 'Monthly Target', 'Monthly Plan', 'יעד חודשי', 'תוכנית חודשית', 'Target')],
+   512        ],
+
+   523          setStatus(`קורא את ${file.name}...`)
+   524:         const rows = forcedKind === 'targets' ? await readTargetWorkbook(file) : await readWorkbook(file)
+   525:         const detected = forcedKind === 'targets' ? 'targets' : classifyFile(rows)
+   526          const kind = forcedKind || detected
+
+   582          } else if (kind === 'deviations') {}
+   583:         else if (kind === 'targets') {
+   584:           const fallbackMonth = targetMonthFromTitle(file.name, new Date())
+   585            const parsed = rows.map(r => {
+   586              const resource = normalize(getField(r, ['Resource','משאב','1','Product','Line']))
+   587:             const facilities = targetFacilityIds(resource)
+   588              const facility = facilities[0] || canonicalFacility(getField(r, ['Storage Location','Facility','מתקן']))
+
+   590                resource, facility, facilities: facilities.length ? facilities : (facility ? [facility] : []),
+   591:               facilityLabel:(resource.match(/\(([^)]+)\)/)?.[1]||'').trim(), descriptionTokens:targetDescriptionTokens(resource),
+   592                routingGroup:normalizeRouting(getField(r,['Routing group','Routing Group','RoutingGroup','קבוצת ניתוב'])),
+   593                station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
+   594:               month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,
+   595                activity:normalize(getField(r,['Activity','Type','סוג פעילות','Production/Packaging']))||'ייצור / אריזה',
+   596:               capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])),
+   597:               target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])),
+   598:               fileProduction:parseTargetNumber(getField(r,['Production','ייצור'])), fileAchievement:parseTargetNumber(getField(r,['% Achievement','Achievement'])),
+   599:               requiredPerDay:parseTargetNumber(getField(r,['Req. t/d','Required t/d'])), lastDay:parseTargetNumber(getField(r,['Last day'])),
+   600:               adjustedRequiredPerDay:parseTargetNumber(getField(r,['Adjusted Req. t/d'])), actualPerDay:parseTargetNumber(getField(r,['Actual t/d'])),
+   601:               ratePercent:parseTargetNumber(getField(r,['%Rate','Rate'])), adherence:parseTargetNumber(getField(r,['New Adherence'])),
+   602:               recyclingPlan:parseTargetNumber(getField(r,['Recycling Plan'])), recycled:parseTargetNumber(getField(r,['Recycled'])),
+   603:               forPacking:parseTargetNumber(getField(r,['For Packing'])), restrictedRecycling:parseTargetNumber(getField(r,['Restricted - recycling'])),
+   604:               restrictedDisposal:parseTargetNumber(getField(r,['Restricted – risk for disposal','Restricted - risk for disposal'])),
+   605:               average:parseTargetNumber(getField(r,['AVERAGE','Average'])), notes:normalize(getField(r,['Notes','Remarks','הערות']))
+   606              }
+   607:           }).filter(r=>r.resource&&r.facilities.length&&(r.target>0||r.capacity>0||r.notes))
+   608            if(!parsed.length) throw new Error(`${file.name}: לא נמצאו שורות יעד תקינות. ודא שקיימות עמודות Resource, Capacity ו-Plan.`)
+
+   624          else if (kind === 'deviations') setDeviations(rowsForCloud)
+   625:         else if (kind === 'targets') setTargets(rowsForCloud)
+   626          setDataMeta(current => ({ ...current, [kind]: savedMeta }))
+
+   721  
+   722:     const addCharacteristic = (target, seenMap, batch, item) => {
+   723        if (!batch || !item.characteristic) return
+
+   728        seen.add(signature)
+   729:       const list = target.get(batch) || []
+   730        list.push(item)
+   731:       target.set(batch, list)
+   732      }
+
+   802    const dataMonths = useMemo(() => [...new Set(prod.map(r => monthKey(r.date)).filter(Boolean))].sort(), [prod])
+   803:   const targetMonths = useMemo(() => [...new Set(targets.map(r => r.month).filter(Boolean))].sort(), [targets])
+   804:   const availableMonths = useMemo(() => [...new Set([...targetMonths, ...dataMonths])].sort().reverse(), [targetMonths, dataMonths])
+   805    useEffect(() => { if (!planningMonth && availableMonths.length) setPlanningMonth(availableMonths[0]) }, [availableMonths, planningMonth])
+
+   828  
+   829:   const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
+   830    const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
+
+   835      production: prod,
+   836:     targets,
+   837      planningMonth,
+
+   839      mappings: resourceMappings,
+   840:   }), [planningMonth, prod, targets, facilities, resourceMappings])
+   841  
+
+   849      const plans = planningRows.filter(x => (x.facilities || [x.facility]).includes(id))
+   850:     const target = plans.reduce((sum, row) => sum + row.target, 0)
+   851      const forecast = plans.reduce((sum, row) => sum + row.forecast, 0)
+   852:     const rank = { risk: 3, warning: 2, 'no-target': 1, good: 0, achieved: 0 }
+   853:     const state = plans.sort((a,b) => (rank[b.state] || 0) - (rank[a.state] || 0))[0]?.state || 'no-target'
+   854:     return { id, actual, target, pct: target ? actual / target * 100 : 0, orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state, forecast }
+   855    }), [facilities, baseFiltered, planningRows])
+
+   936    const warningCount = planningRows.filter(r => r.state === 'warning').length
+   937:   const targetTotal = planningRows.reduce((s,r) => s + r.target, 0)
+   938:   const targetActual = planningRows.reduce((s,r) => s + r.actual, 0)
+   939:   const targetForecast = planningRows.reduce((s,r) => s + r.forecast, 0)
+   940    const uniqueOrders = useMemo(() => new Set(filtered.map(r => r.order).filter(Boolean)).size, [filtered])
+
+   944      const highestRisk = planningRows.filter(r => r.state === 'risk').sort((a,b) => (b.requiredDaily - b.provenMax) - (a.requiredDaily - a.provenMax))[0]
+   945:     const warning = planningRows.filter(r => r.state === 'warning').sort((a,b) => a.forecast / Math.max(1,a.target) - b.forecast / Math.max(1,b.target))[0]
+   946:     const best = planningRows.filter(r => r.target > 0).sort((a,b) => (b.forecast / b.target) - (a.forecast / a.target))[0]
+   947      if (highestRisk) insights.push({ state:'risk', title:`${planningName(highestRisk)} דורש פעולה`, text:`הקצב הנדרש הוא ${fmt(highestRisk.requiredDaily)} ליום לעומת שיא מוכח של ${fmt(highestRisk.provenMax)}.` })
+   948:     if (warning) insights.push({ state:'warning', title:`${planningName(warning)} נמצא בסיכון`, text:`התחזית היא ${fmt(warning.forecast)} מול יעד של ${fmt(warning.target)}. נדרש שיפור בקצב היומי.` })
+   949:     if (best && ['good','achieved'].includes(best.state)) insights.push({ state:'good', title:`${planningName(best)} מוביל`, text:`התחזית הנוכחית היא ${pctFmt(best.forecast / best.target * 100)} מהיעד החודשי.` })
+   950      if (openDeviations.length) insights.push({ state:'risk', title:`${openDeviations.length} חריגות איכות פתוחות`, text:'לחיצה על הכרטיס תפתח את פירוט המנות ומאפייני החריגה.' })
+
+   961        const deviationsCount=facilitiesForRow.reduce((sum,id)=>sum+(deviationByFacility.get(id)||0),0)
+   962:       const forecastPct=row.target?row.forecast/row.target*100:0, actualPct=row.target?row.actual/row.target*100:0
+   963:       const planScore=row.target?Math.min(100,forecastPct):70, qualityScore=Math.max(0,100-deviationsCount*8)
+   964        const healthScore=Math.max(0,Math.min(100,Math.round(planScore*.72+qualityScore*.28)))
+   965:       const state=!row.target?'no-target':forecastPct>=100?'good':forecastPct>=90?'warning':'risk'
+   966:       return { ...row, facility:row.resource||row.facility, facilityIds:facilitiesForRow, deviationsCount, forecastPct, actualPct, healthScore, state, gap:row.forecast-row.target }
+   967:     }).filter(row=>row.target>0||row.actual>0||row.deviationsCount>0)
+   968:       .sort((a,b)=>({risk:0,warning:1,good:2,'no-target':3}[a.state]-{risk:0,warning:1,good:2,'no-target':3}[b.state])||a.facility.localeCompare(b.facility))
+   969    }, [planningRows, openDeviations])
+
+   987      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filtered.map(r => ({ Date: iso(r.date), Time: r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : '', Facility: r.facility, Order: r.order, Batch: r.batch, Material: r.material, Description: r.desc, RoutingGroup: r.routingGroup, RoutingDescription: r.routingDescription, Quantity: r.qty }))), 'Production')
+   988:     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(planningRows.map(r => ({ Month: planningMonth, Facility: r.facility, RoutingGroup: r.routingGroup, Station: r.station, Line: r.lineName, Activity: r.activity, MonthlyTarget: r.target, Actual: r.actual, Remaining: r.remaining, RequiredDaily: r.requiredDaily, RecentAverage: r.recentAverage, ProvenMax: r.provenMax, Forecast: r.forecast, Status: r.label }))), 'Planning')
+   989      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(qualityBad.map(r => ({ Date: iso(r.date), Facility: r.facility, InspectionLot: r.inspectionLot, Order: r.order, Batch: r.batch, Material: r.material, Status: r.status }))), 'Quality')
+
+   992    }
+   993:   const downloadTargetTemplate = () => {
+   994      const month=planningMonth||monthKey(new Date())
+
+   997      const ws=XLSX.utils.json_to_sheet(rows,{origin:'A3'}); XLSX.utils.sheet_add_aoa(ws,[[new Date().toLocaleDateString('he-IL'),`Production Report ${month}`]],{origin:'A1'})
+   998:     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Monthly Targets'); XLSX.writeFile(wb,'IML_Monthly_Targets_Template.xlsx')
+   999    }
+
+  1005        await deleteAllCloudDatasets(currentUser)
+  1006:       setProduction([]); setQuality([]); setDeviations([]); setTargets([]); setDataMeta({ production:null, quality:null, deviations:null, targets:null }); localStorage.removeItem(STORAGE_KEY); await idbClear().catch(console.warn)
+  1007        setStatus('כל הנתונים נמחקו מהענן'); setCloudState({ mode:'cloud', lastSync:new Date().toISOString(), message:'מחובר למסד המשותף', latencyMs:cloudState.latencyMs, live:true }); setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPlanningMonth(''); setAdditionalFacilities([]); setFacilityToAdd(''); setPeriodYear(''); setPeriodQuarter('')
+
+  1046        <div className="side-filter-title"><Search size={18}/><strong>חיפוש וסינון</strong></div>
+  1047:       <label className="side-field"><span>Quick Search</span><div><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Order, Batch, חומר..."/></div></label>
+  1048:       <label className="side-field"><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
+  1049:       <label className="side-field"><span>מתאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => { setFrom(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+  1050:       <label className="side-field"><span>עד תאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => { setTo(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+  1051:       <label className="side-field"><span>מתקן</span><select value={selectedFacilities.length === 1 ? selectedFacilities[0] : ''} onChange={e => setSelectedFacilities(e.target.value ? [e.target.value] : [])}><option value="">כל המתקנים</option>{facilities.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
+  1052        <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
+
+  1062            <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
+  1063:           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
+  1064            <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
+  1065:           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
+  1066:           {canManageData && <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label>}
+  1067            <button className="action secondary" onClick={onSignOut}><LogOut size={18}/> יציאה</button>
+
+  1084          <div className="tower-kpis">
+  1085:           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><Target/><span>יעד חודשי כולל</span><b>{fmt(targetTotal)}</b><small>{planningMonth || 'ללא חודש נבחר'}</small></button>
+  1086:           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><Database/><span>בוצע החודש</span><b>{fmt(targetActual)}</b><small>{targetTotal ? pctFmt(targetActual / targetTotal * 100) : '—'} מהיעד</small></button>
+  1087:           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><TrendingUp/><span>תחזית סוף חודש</span><b>{fmt(targetForecast)}</b><small>{targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} מהיעד</small></button>
+  1088            <button onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><Gauge/><span>קצב יומי נדרש</span><b>{fmt(planningRows.reduce((sum,row)=>sum+row.requiredDaily,0))}</b><small>לכל המתקנים</small></button>
+  1089:           <button className={targetForecast >= targetTotal && targetTotal ? 'good' : 'bad'} onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><AlertTriangle/><span>פער צפוי</span><b>{targetTotal ? fmt(targetForecast-targetTotal) : '—'}</b><small>{targetForecast >= targetTotal ? 'מעל היעד' : 'נדרש להגביר קצב'}</small></button>
+  1090          </div>
+
+  1099              <div className="tower-progress"><i style={{width:`${Math.min(100,row.actualPct)}%`}}/></div>
+  1100:             <dl><div><dt>יעד חודשי</dt><dd>{fmt(row.target)}</dd></div><div><dt>בוצע</dt><dd>{fmt(row.actual)}</dd></div><div><dt>תחזית</dt><dd>{fmt(row.forecast)}</dd></div><div><dt>פער צפוי</dt><dd className={row.gap >= 0 ? 'positive' : 'negative'}>{row.gap >= 0 ? '+' : ''}{fmt(row.gap)}</dd></div><div><dt>קצב נדרש</dt><dd>{fmt(row.requiredDaily)}</dd></div><div><dt>חריגות פתוחות</dt><dd>{row.deviationsCount}</dd></div></dl>
+  1101              <span className="tower-enter">לפרטים מלאים <ArrowLeft size={16}/></span>
+
+  1118            <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
+  1119:           <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')} canManage={canManageData}/>
+  1120          </div>
+
+  1129        <section className="planning-toolbar">
+  1130:         <div><Target/><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></div>
+  1131          <small>היעד היומי אינו מוזן: הוא מחושב מחדש בכל יום לפי יתרת היעד וימי העבודה שנותרו.</small>
+
+  1134        <section className="executive-strip executive-six">
+  1135:         <Executive icon={<Target/>} title="ביצוע מול יעד" value={targetTotal ? pctFmt(targetActual / targetTotal * 100) : '—'} sub={`${fmt(targetActual)} מתוך ${fmt(targetTotal)}`} onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+  1136:         <Executive icon={<TrendingUp/>} title="תחזית סוף חודש" value={targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} sub={fmt(targetForecast)} onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+  1137          <Executive icon={<CheckCircle2/>} title="במסלול / הושג" value={achievedCount} sub="מתקנים" good onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+
+  1148        <section className="filters legacy-filters">
+  1149:         <label><Search size={17}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="חיפוש מתקן, Order, Batch או חומר"/></label>
+  1150:         <label><CalendarDays size={17}/>שנה<select value={periodYear} onChange={e => applyYearFilter(e.target.value)}><option value="">כל השנים</option>{availableYears.map(y => <option key={y} value={y}>{y}</option>)}</select></label>
+  1151:         <label><CalendarDays size={17}/>רבעון<select value={periodQuarter} disabled={!periodYear} onChange={e => applyQuarterFilter(e.target.value)}><option value="">כל השנה</option><option value="1">רבעון 1</option><option value="2">רבעון 2</option><option value="3">רבעון 3</option><option value="4">רבעון 4</option></select></label>
+  1152:         <label><CalendarDays size={17}/>מתאריך<input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => { setFrom(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+  1153:         <label><CalendarDays size={17}/>עד תאריך<input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => { setTo(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+  1154          <button onClick={() => setQuickRange(1)}>יום אחרון</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button>
+
+  1159          <div><Factory size={18}/><strong>מתקנים נוספים</strong><span>ברירת המחדל מציגה רק את מתקני הליבה.</span></div>
+  1160:         <div className="extra-facility-actions"><select value={facilityToAdd} onChange={e => setFacilityToAdd(e.target.value)}><option value="">בחר מתקן נוסף</option>{optionalFacilities.map(id => <option key={id} value={id}>{id}</option>)}</select><button onClick={addFacility} disabled={!facilityToAdd}>הוסף מתקן</button></div>
+  1161          {!!additionalFacilities.length && <div className="extra-facility-chips">{additionalFacilities.map(id => <button key={id} onClick={() => removeAdditionalFacility(id)}>{id}<X size={14}/></button>)}</div>}
+
+  1184          <div className="alert-list">
+  1185:           {alerts.map(r => <div className={`alert-item ${r.state}`} key={r.id}><div className="alert-symbol">{r.state === 'risk' ? '!' : '⚠'}</div><div><strong>{planningName(r)} — {r.label}</strong><p>{r.state === 'risk' ? `נדרש ${fmt(r.requiredDaily)} ליום, אך השיא המוכח הוא ${fmt(r.provenMax)}.` : `התחזית היא ${fmt(r.forecast)} מול יעד ${fmt(r.target)}. נדרש קצב של ${fmt(r.requiredDaily)} ליום.`}</p></div></div>)}
+  1186            {!alerts.length && <div className="empty">אין התראות תכנון לחודש הנבחר.</div>}
+
+  1192          <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
+  1193:           {planningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+  1194            {!planningRows.length && <tr><td colSpan="14" className="empty">אין יעדים לחודש הנבחר</td></tr>}
+
+  1236    const reset = () => setDraft(DEFAULT_RESOURCE_MAPPINGS.map(item => ({...item})))
+  1237:   return <div className="resource-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+  1238      <section className="mapping-modal" role="dialog" aria-modal="true">
+
+  1240        {!!unmapped.length && <section className="unmapped-box"><div><AlertTriangle/><strong>נמצאו {unmapped.length} תיאורים לא ממופים</strong></div><div className="unmapped-chips">{unmapped.slice(0,20).map(row => <button key={`${row.facility}-${row.description}`} onClick={() => add(row)}><b>{row.facility}</b><span>{row.description}</span><small>{fmt(row.qty)} · {row.rows} רשומות</small><Plus size={15}/></button>)}</div></section>}
+  1241:       <div className="mapping-table-wrap"><table><thead><tr><th>פעיל</th><th>תחנה</th><th>Description בקובץ</th><th>התאמה</th><th>משאב יעד</th><th></th></tr></thead><tbody>{draft.map(row => <tr key={row.id}><td><input type="checkbox" checked={row.active!==false} onChange={e=>update(row.id,'active',e.target.checked)}/></td><td><input value={row.facility} onChange={e=>update(row.id,'facility',e.target.value)} placeholder="1542"/></td><td><input value={row.description} onChange={e=>update(row.id,'description',e.target.value)} placeholder="LIQUID 5 LITER"/></td><td><select value={row.mode||'exact'} onChange={e=>update(row.id,'mode',e.target.value)}><option value="exact">מדויקת</option><option value="contains">מכיל</option></select></td><td><input value={row.resource} onChange={e=>update(row.id,'resource',e.target.value)} placeholder="LQ 5 lt (42)"/></td><td><button className="mapping-delete" onClick={()=>remove(row.id)}><Trash2 size={16}/></button></td></tr>)}</tbody></table></div>
+  1242        <footer><div><button className="mapping-secondary" onClick={()=>add()}><Plus size={16}/> הוסף שורה</button><button className="mapping-secondary" onClick={reset}>שחזר ברירת מחדל</button></div><div><button className="mapping-secondary" onClick={onClose}>ביטול</button><button className="mapping-save" onClick={save}><Save size={16}/> שמור מיפויים</button></div></footer>
+
+  1257    const orders = [...new Set(rows.map(row => row.order).filter(Boolean))]
+  1258:   const progress = resource.target ? Math.min(100, resource.actual / resource.target * 100) : 0
+  1259:   return <div className="resource-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+  1260      <section className="resource-detail-modal" role="dialog" aria-modal="true" aria-label={`פירוט ${resource.resource}`}>
+  1261        <header><div><span>RESOURCE CONTROL CENTER</span><h2>{resource.resource}</h2><p>{[resource.station && `Station ${resource.station}`, resource.description, resource.lineName].filter(Boolean).join(' · ')}</p></div><button onClick={onClose} aria-label="סגירה"><X/></button></header>
+  1262:       <div className={`resource-status-banner ${resource.state}`}><strong>{resource.label}</strong><span>תחזית {fmt(resource.forecast)} מול יעד {fmt(resource.target)}</span></div>
+  1263        <div className="resource-detail-kpis">
+  1264:         <BatchMetric label="יעד חודשי" value={fmt(resource.target)}/><BatchMetric label="בוצע" value={fmt(resource.actual)}/><BatchMetric label="עמידה" value={pctFmt(resource.pct)}/><BatchMetric label="תחזית" value={fmt(resource.forecast)}/><BatchMetric label="קצב נדרש" value={fmt(resource.requiredDaily)}/><BatchMetric label="קצב אחרון" value={fmt(resource.recentAverage)}/><BatchMetric label="ימי עבודה נותרו" value={resource.remainingWorkdays}/><BatchMetric label="שיא מוכח" value={fmt(resource.provenMax)}/>
+  1265        </div>
+
+  1322    }
+  1323:   return <div className="batch-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget) onClose()}}>
+  1324      <section className="batch-control-card" role="dialog" aria-modal="true" aria-label={`כרטיס מנה ${data.batch}`}>
+
+  1346      <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
+  1347:     {canManage ? <label className={`source-upload ${busy ? 'disabled' : ''}`}><RefreshCw size={16}/>{acceptLabel}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; onFiles(files) }}/></label> : <div className="viewer-lock"><ShieldCheck size={16}/> צפייה בלבד</div>}
+  1348    </article>
+
+  1353  function StatusBadge({ state, label }) { return <span className={`status-pill ${state}`}>{label}</span> }
+  1354: function ForecastCard({ facility, facilities, resource, packagingType, routingGroup, station, lineName, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
+  1355    return <article className={`forecast-card ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0">
+  1356      <div className="forecast-head"><div><small>משאב / מתקן</small><h3>{resource || facility}</h3>{(facilities || []).includes('1542') && packagingType && <div className="forecast-packaging-type"><span>קו אריזה</span><b>{packagingType}</b></div>}{(routingGroup || station) && <div className="forecast-resource"><b>{station || routingGroup}</b><span>{lineName || routingGroup}</span>{routingGroup && <small>{routingGroup}</small>}</div>}</div><StatusBadge state={state} label={label}/></div>
+  1357:     <div className="forecast-main"><div><span>ביצוע</span><b>{pctFmt(pct)}</b></div><div><span>תחזית</span><b>{target ? pctFmt(forecast / target * 100) : '—'}</b></div></div>
+  1358      <div className="bar"><i style={{width:`${Math.min(100, pct)}%`}}/></div>
+  1359:     <div className="forecast-values"><span>יעד<strong>{fmt(target)}</strong></span><span>בפועל<strong>{fmt(actual)}</strong></span><span>נותר<strong>{fmt(remaining)}</strong></span></div>
+  1360      <div className="forecast-metrics"><div><span>ימים נותרו</span><b>{remainingWorkdays}</b></div><div><span>נדרש ליום</span><b>{fmt(requiredDaily)}</b></div><div><span>7 ימים</span><b>{fmt(recentAverage)}</b></div><div><span>שיא מוכח</span><b>{fmt(provenMax)}</b></div></div>
+
+  1362  }
+  1363: function Facility({ id, actual, target, pct, orders, selected, onClick }) {
+  1364:   const state = !target ? 'no-target' : pct >= 100 ? 'good' : pct >= 75 ? 'warning' : 'risk'
+  1365:   return <article className={`facility ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0"><div className="facility-top"><div><small>מתקן</small><h3>{id}</h3></div><b>{target ? pctFmt(pct) : '—'}</b></div><div className="bar"><i style={{width:`${Math.min(100,pct)}%`}}/></div><div className="facility-numbers"><span>בפועל<strong>{fmt(actual)}</strong></span><span>יעד חודשי<strong>{fmt(target)}</strong></span><span>הזמנות<strong>{orders}</strong></span></div></article>
+  1366  }
+
+cloudData.js:
+  1  export default function FacilityCard({ item }) {
+  2:   const pct = Math.min(100, Math.round(item.actual/item.target*100))
+  3    return <div className="facility-card">
+
+  5      <div className="progress"><i style={{width:`${pct}%`}}/></div>
+  6:     <div className="facility-foot"><span>{item.actual.toLocaleString()} בפועל</span><strong>{pct}%</strong><span>{item.target.toLocaleString()} יעד</span></div>
+  7    </div>
+
+demo.js:
+   24  
+   25: const matchProductionToTarget = (row, target, mappings) => {
+   26:   const facilities = target.facilities?.length ? target.facilities : [target.facility].filter(Boolean)
+   27    if (!facilities.includes(row.facility)) return false
+
+   29    const mapped = matchResourceMapping(row, mappings)
+   30:   if (mapped) return upper(mapped.resource) === upper(target.resource)
+   31    // Facility 42 must never fall back to a partial token match. An unknown
+
+   33    if (row.facility === '1542') return false
+   34:   if (target.routingGroup && upper(row.routingGroup) !== upper(target.routingGroup)) return false
+   35:   const tokens = (target.descriptionTokens || []).map(upper).filter(Boolean)
+   36    if (!tokens.length) return true
+
+   41  
+   42: const packagingTypeForTarget = target => {
+   43:   const resource = upper(target.resource)
+   44:   const tokens = (target.descriptionTokens || []).map(upper)
+   45    if (/LQ\s*1\s*(LT|L)\b/.test(resource) || tokens.some(t => ['1L','1 L','1LT','1 LT'].includes(t))) return '1 ליטר'
+
+   50  
+   51: export function buildResourceRows({ production = [], targets = [], planningMonth = '', fallbackFacilities = [], mappings = [], now = new Date() }) {
+   52    if (!planningMonth) return []
+
+   64    const remainingWorkdays = Math.max(0, totalWorkdays - elapsedWorkdays)
+   65:   const monthTargets = targets.filter(target => target.month === planningMonth)
+   66:   const sourceRows = monthTargets.length ? monthTargets : fallbackFacilities.map(facility => ({ facility, facilities:[facility], resource:`מתקן ${facility}`, target:0, capacity:0, descriptionTokens:[] }))
+   67  
+   68:   return sourceRows.map((targetRow, index) => {
+   69:     const rows = monthRows.filter(row => matchProductionToTarget(row, targetRow, mappings))
+   70      const dailyMap = new Map()
+
+   85      const recentAverage = recent.length ? recent.reduce((sum, value) => sum + value, 0) / recent.length : average
+   86:     const target = Number(targetRow.target) || 0
+   87:     const capacity = Number(targetRow.capacity) || 0
+   88      const provenMax = dailyValues.length ? Math.max(...dailyValues) : (capacity ? capacity / Math.max(1, totalWorkdays) : 0)
+   89:     const remaining = Math.max(0, target - actual)
+   90      const requiredDaily = remainingWorkdays ? remaining / remainingWorkdays : remaining
+
+   92      const capacityForecast = actual + provenMax * remainingWorkdays
+   93:     let state = 'no-target', label = 'ללא יעד'
+   94:     if (target > 0 && actual >= target) { state = 'achieved'; label = 'היעד הושג' }
+   95:     else if (target > 0 && remainingWorkdays === 0) { state = 'risk'; label = 'היעד לא הושג' }
+   96:     else if (target > 0 && provenMax > 0 && requiredDaily > provenMax) { state = 'risk'; label = 'לא בר־השגה' }
+   97:     else if (target > 0 && forecast < target) { state = 'warning'; label = 'נדרש שיפור קצב' }
+   98:     else if (target > 0) { state = 'good'; label = 'במסלול ליעד' }
+   99:     const facilities = targetRow.facilities?.length ? targetRow.facilities : [targetRow.facility].filter(Boolean)
+  100      return {
+  101:       id:`${targetRow.resource || targetRow.facility || index}::${index}`,
+  102:       resource:targetRow.resource || `מתקן ${targetRow.facility}`,
+  103        facility:facilities.join(','), facilities,
+  104:       routingGroup:targetRow.routingGroup || '', station:targetRow.station || facilities.join(','),
+  105:       description:(targetRow.descriptionTokens || []).join(' / '), packagingType:packagingTypeForTarget(targetRow), lineName:targetRow.lineName || targetRow.resource || '', activity:targetRow.activity || 'ייצור / אריזה',
+  106:       target, capacity, actual, pct:target ? actual / target * 100 : 0, remaining, requiredDaily,
+  107        average, recentAverage, provenMax, forecast, capacityForecast, elapsedWorkdays, remainingWorkdays, totalWorkdays,
+  108        orders:orders.size, batches:batches.size, productionRows:rows, dailyEntries, state, label,
+  109:       notes:targetRow.notes || '', recyclingPlan:Number(targetRow.recyclingPlan)||0, recycled:Number(targetRow.recycled)||0,
+  110:       forPacking:Number(targetRow.forPacking)||0, restrictedRecycling:Number(targetRow.restrictedRecycling)||0,
+  111:       restrictedDisposal:Number(targetRow.restrictedDisposal)||0,
+  112      }
+
+FacilityCard.jsx:
+  132  .resource-detail-modal>header span{font-size:12px;letter-spacing:1.4px;color:#64748b;font-weight:800}.resource-detail-modal>header h2{font-size:30px;margin:4px 0}.resource-detail-modal>header p{margin:0;color:#64748b}.resource-detail-modal>header button{border:0;background:#eef2f7;border-radius:12px;width:42px;height:42px;display:grid;place-items:center;cursor:pointer}
+  133: .resource-status-banner{margin:18px 0;padding:14px 18px;border-radius:14px;display:flex;justify-content:space-between;gap:12px}.resource-status-banner.good,.resource-status-banner.achieved{background:#e8fff5;color:#087653}.resource-status-banner.warning{background:#fff8df;color:#926600}.resource-status-banner.risk{background:#fff0f0;color:#b3261e}.resource-status-banner.no-target{background:#f1f5f9;color:#475569}
+  134  .resource-detail-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.resource-detail-kpis .batch-metric{background:#f8fafc;border:1px solid #e7edf4;border-radius:14px;padding:14px}
+
+KpiCard.jsx:
+   8  export const facilities = [
+   9:   { id: '1542', name: 'קו 1L', actual: 17800, target: 18000, status: 'פעיל' },
+  10:   { id: '1543', name: 'קו 5L', actual: 61200, target: 60000, status: 'פעיל' },
+  11:   { id: '1523', name: 'מתקן 43', actual: 38800, target: 40000, status: 'פעיל' },
+  12:   { id: '1528', name: 'מתקן 28', actual: 66800, target: 80000, status: 'בהמתנה' },
+  13  ]
+
+package-lock.json:
+  51          "@babel/generator": "^7.29.7",
+  52:         "@babel/helper-compilation-targets": "^7.29.7",
+  53          "@babel/helper-module-transforms": "^7.29.7",
+
+  89      },
+  90:     "node_modules/@babel/helper-compilation-targets": {
+  91        "version": "7.29.7",
+  92:       "resolved": "https://registry.npmjs.org/@babel/helper-compilation-targets/-/helper-compilation-targets-7.29.7.tgz",
+  93        "integrity": "sha512-wem6WaBj4NaVYVdNhLPPVacES6ZJ+KBBfSkTMD3YZxbP3rm3Di85tJU5ljaUNhaOynt+Aj0xruhYuzQBt8n71g==",
+
+README_SPRINT11_4_0_HE.md:
+  1: # Sprint 11.4.0 — Target Management & Fast Cloud Load
+  2  
+
+README_SPRINT11_4_1_HE.md:
+  1: # Sprint 11.4.1 — Resource Targets by Station + Description
+  2  
+
+README_SPRINT11_5_0_BUILD1_HE.md:
+  2  
+  3: export const CLOUD_KINDS = ['production', 'quality', 'deviations', 'targets']
+  4  export const FUTURE_CLOUD_KINDS = [...CLOUD_KINDS, 'packaging_plan']
+
+README_SPRINT11_5_0_BUILD2_HE.md:
+   73  create table if not exists public.iml_data_sources (
+   74:   kind text primary key check (kind in ('production','quality','deviations','targets','packaging_plan')),
+   75    file_name text not null default '',
+
+   98      add constraint iml_data_sources_kind_check
+   99:     check (kind in ('production','quality','deviations','targets','packaging_plan'));
+  100  exception when duplicate_object then null;
+
+  174    id uuid primary key default gen_random_uuid(),
+  175:   kind text not null check (kind in ('production','quality','deviations','targets','packaging_plan')),
+  176    version_no bigint not null,
+
+  305    delete from public.iml_data_sources
+  306:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  307    delete from public.iml_dataset_versions
+  308:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  309    delete from public.iml_data_chunks
+  310:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  311  end;
+
+SPRINT_10_1_1_MIGRATION.sql:
+   13    id uuid primary key default gen_random_uuid(),
+   14:   kind text not null check (kind in ('production','quality','deviations','targets','packaging_plan')),
+   15    version_no bigint not null,
+
+  162    delete from public.iml_data_sources
+  163:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  164    delete from public.iml_dataset_versions
+  165:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  166    delete from public.iml_data_chunks
+  167:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  168  end;
+
+SPRINT_10_1_INSTALL_SUPABASE.sql:
+   73  create table if not exists public.iml_data_sources (
+   74:   kind text primary key check (kind in ('production','quality','deviations','targets','packaging_plan')),
+   75    file_name text not null default '',
+
+   98      add constraint iml_data_sources_kind_check
+   99:     check (kind in ('production','quality','deviations','targets','packaging_plan'));
+  100  exception when duplicate_object then null;
+
+  174    id uuid primary key default gen_random_uuid(),
+  175:   kind text not null check (kind in ('production','quality','deviations','targets','packaging_plan')),
+  176    version_no bigint not null,
+
+  305    delete from public.iml_data_sources
+  306:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  307    delete from public.iml_dataset_versions
+  308:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  309    delete from public.iml_data_chunks
+  310:   where kind in ('production','quality','deviations','targets','packaging_plan');
+  311  end;
+
+supabase_cloud_schema.sql:
+  73  create table if not exists public.iml_data_sources (
+  74:   kind text primary key check (kind in ('production','quality','deviations','targets','packaging_plan')),
+  75    file_name text not null default '',
+
+  98      add constraint iml_data_sources_kind_check
+  99:     check (kind in ('production','quality','deviations','targets','packaging_plan'));
+  100  exception when duplicate_object then null;
+
+supabase_schema.sql:
+  73  create table if not exists public.iml_data_sources (
+  74:   kind text primary key check (kind in ('production','quality','deviations','targets','packaging_plan')),
+  75    file_name text not null default '',
+
+  98      add constraint iml_data_sources_kind_check
+  99:     check (kind in ('production','quality','deviations','targets','packaging_plan'));
+  100  exception when duplicate_object then null;
+
+supabase.js:
+  77      <div className="auth-icon"><LockKeyhole/></div><h1>כניסה למערכת</h1><p>התחבר כדי לצפות בנתוני המתקנים המשותפים.</p>
+  78:     <label><span>דוא״ל</span><div><Mail size={18}/><input type="email" value={email} onChange={e=>setEmail(e.target.value)} required autoComplete="email"/></div></label>
+  79:     <label><span>סיסמה</span><div><LockKeyhole size={18}/><input type={showPassword?'text':'password'} value={password} onChange={e=>setPassword(e.target.value)} required autoComplete="current-password"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword?<EyeOff size={18}/>:<Eye size={18}/>}</button></div></label>
+  80      {urlWasNormalized && <div className="auth-info">כתובת Supabase נוקתה אוטומטית מתוספת /rest/v1/.</div>}
+
+node_modules\vite\dist\node\chunks\dep-BJP6rrE_.js:
+      9  import esbuild, { transform as transform$1, formatMessages, build as build$b } from 'esbuild';
+     10: import { CLIENT_ENTRY, OPTIMIZABLE_ENTRY_RE, wildcardHosts, loopbackHosts, FS_PREFIX, CLIENT_PUBLIC_PATH, ENV_PUBLIC_PATH, DEFAULT_ASSETS_INLINE_LIMIT, ENV_ENTRY, SPECIAL_QUERY_RE, DEP_VERSION_RE, DEV_PROD_CONDITION, JS_TYPES_RE, KNOWN_ASSET_TYPES, CSS_LANGS_RE, METADATA_FILENAME, ESBUILD_MODULES_TARGET, ERR_OPTIMIZE_DEPS_PROCESSING_ERROR, ERR_FILE_NOT_FOUND_IN_OPTIMIZED_DEP_DIR, VITE_PACKAGE_DIR, DEFAULT_DEV_PORT, CLIENT_DIR, VERSION, ROLLUP_HOOKS, DEFAULT_PREVIEW_PORT, DEFAULT_ASSETS_RE, DEFAULT_CONFIG_FILES, DEFAULT_CLIENT_MAIN_FIELDS, DEFAULT_SERVER_MAIN_FIELDS, DEFAULT_CLIENT_CONDITIONS, DEFAULT_SERVER_CONDITIONS } from '../constants.js';
+     11  import require$$0$2, { posix, win32, isAbsolute, resolve as resolve$3, relative as relative$1, basename as basename$1, extname, dirname as dirname$1, join, sep } from 'path';
+
+   5230      const isNegated = pattern.startsWith('!');
+   5231:     const modifyMap = (targetPath, resolvedPath) =>
+   5232        isNegated
+   5233:         ? dynamicRequireModules.delete(targetPath)
+   5234:         : dynamicRequireModules.set(targetPath, resolvedPath);
+   5235      // eslint-disable-next-line new-cap
+
+   5261  
+   5262: const FAILED_REQUIRE_ERROR = `throw new Error('Could not dynamically require "' + path + '". Please configure the dynamicRequireTargets or/and ignoreDynamicRequires option of @rollup/plugin-commonjs appropriately for this require call to work.');`;
+   5263  
+
+   5846          currentlyResolving.set(parentId, currentlyResolvingForParent);
+   5847:         const requireTargets = await Promise.all(
+   5848            sources.map(async ({ source, isConditional }) => {
+
+   5873          fullyAnalyzedModules[parentId] = true;
+   5874:         return requireTargets.map(({ id: dependencyId, allowProxy }, index) => {
+   5875            // eslint-disable-next-line no-multi-assign
+
+   6002  
+   6003: function getDefinePropertyCallName(node, targetName) {
+   6004    const {
+
+   6010  
+   6011:   const targetNames = targetName.split('.');
+   6012:   const [target, key, value] = node.arguments;
+   6013:   if (targetNames.length === 1) {
+   6014:     if (target.type !== 'Identifier' || target.name !== targetNames[0]) {
+   6015        return;
+
+   6018  
+   6019:   if (targetNames.length === 2) {
+   6020      if (
+   6021:       target.type !== 'MemberExpression' ||
+   6022:       target.object.name !== targetNames[0] ||
+   6023:       target.property.name !== targetNames[1]
+   6024      ) {
+
+   6424      const requiresBySource = collectSources(requireExpressions);
+   6425:     const requireTargets = await resolveRequireSourcesAndUpdateMeta(
+   6426        id,
+
+   6437        imports,
+   6438:       requireTargets,
+   6439        requiresBySource,
+
+   6466    imports,
+   6467:   requireTargets,
+   6468    requiresBySource,
+
+   6472    const generateRequireName = getGenerateRequireName();
+   6473:   for (const { source, id: resolvedId, isCommonJS, wrappedModuleSideEffects } of requireTargets) {
+   6474      const requires = requiresBySource[source];
+
+   7133    const { commonDir, dynamicRequireModules } = getDynamicRequireModules(
+   7134:     options.dynamicRequireTargets,
+   7135      dynamicRequireRoot
+
+  10233  }
+  10234: function arraify(target) {
+  10235:   return Array.isArray(target) ? target : [target];
+  10236  }
+
+  12123        "preserveValueImports",
+  12124:       "target",
+  12125        "useDefineForClassFields",
+
+  12153      };
+  12154:     if (compilerOptions.useDefineForClassFields === void 0 && compilerOptions.target === void 0) {
+  12155        compilerOptions.useDefineForClassFields = false;
+
+  12216    const transformOptions = {
+  12217:     target: "esnext",
+  12218      charset: "utf8",
+
+  12313  function resolveEsbuildTranspileOptions(config, format) {
+  12314:   const target = config.build.target;
+  12315    const minify = config.build.minify === "esbuild";
+  12316:   if ((!target || target === "esnext") && !minify) {
+  12317      return null;
+
+  12324      loader: "js",
+  12325:     target: target || void 0,
+  12326      format: rollupToEsbuildFormatMap[format],
+
+  13234    "t38": "image/t38",
+  13235:   "td": "application/urc-targetdesc+xml",
+  13236    "tei": "application/tei+xml",
+
+  15508  createError(
+  15509:   'ERR_INVALID_PACKAGE_TARGET',
+  15510    /**
+
+  15512     * @param {string} key
+  15513:    * @param {unknown} target
+  15514     * @param {boolean} [isImport=false]
+
+  15516     */
+  15517:   (packagePath, key, target, isImport = false, base = undefined) => {
+  15518      const relatedError =
+  15519:       typeof target === 'string' &&
+  15520        !isImport &&
+  15521:       target.length > 0 &&
+  15522:       !target.startsWith('./');
+  15523      if (key === '.') {
+
+  15525        return (
+  15526:         `Invalid "exports" main target ${JSON.stringify(target)} defined ` +
+  15527          `in the package config ${packagePath}package.json${
+  15528            base ? ` imported from ${base}` : ''
+  15529:         }${relatedError ? '; targets must start with "./"' : ''}`
+  15530        )
+
+  15534        isImport ? 'imports' : 'exports'
+  15535:     }" target ${JSON.stringify(
+  15536:       target
+  15537      )} defined for '${key}' in the package config ${packagePath}package.json${
+  15538        base ? ` imported from ${base}` : ''
+  15539:     }${relatedError ? '; targets must start with "./"' : ''}`
+  15540    },
+
+  15885    const noExternalFilter = typeof noExternal !== "boolean" && !(Array.isArray(noExternal) && noExternal.length === 0) && createFilter(void 0, noExternal, { resolve: false });
+  15886:   const targetConditions = resolve.externalConditions;
+  15887    const resolveOptions = {
+
+  15891      isBuild: true,
+  15892:     conditions: targetConditions
+  15893    };
+
+  16947        {
+  16948:         get: (target, prop) => {
+  16949            if (prop === "logger") {
+
+  16951            }
+  16952:           if (prop in target) {
+  16953              return this._options[prop];
+
+  18967    // and conditions
+  18968:   (environment.config.consumer === "client" || environment.config.ssr.target === "webworker" ? "browser" : "node");
+  18969    const external = [...optimizeDeps2.exclude ?? []];
+
+  18985      } : void 0,
+  18986:     target: ESBUILD_MODULES_TARGET,
+  18987      external,
+
+  22702  
+  22703: var objectAssign = shouldUseNative() ? Object.assign : function (target, source) {
+  22704  	var from;
+  22705: 	var to = toObject(target);
+  22706  	var symbols;
+
+  28048  
+  28049: _handleRead(directory, initialAdd, wh, target, dir, depth, throttler) {
+  28050    // Normalize the directory name on Windows
+
+  28084      // emit `add` event.
+  28085:     if (item === target || !target && !previous.has(item)) {
+  28086        this.fsw._incrReadyCount();
+
+  28123        // one more time for any missed in case changes came in extremely quickly
+  28124:       if (wasThrottled) this._handleRead(directory, false, wh, target, dir, depth, throttler);
+  28125      })
+
+  28134   * @param {Number} depth relative to user-supplied path
+  28135:  * @param {String} target child path targeted for watch
+  28136   * @param {Object} wh Common watch helpers for this path
+
+  28139   */
+  28140: async _handleDir(dir, stats, initialAdd, depth, target, wh, realpath) {
+  28141    const parentDir = this.fsw._getWatchedDir(sysPath$2.dirname(dir));
+  28142    const tracked = parentDir.has(sysPath$2.basename(dir));
+  28143:   if (!(initialAdd && this.fsw.options.ignoreInitial) && !target && !tracked) {
+  28144      if (!wh.hasGlob || wh.globFilter(dir)) this.fsw._emit(EV_ADD_DIR$2, dir, stats);
+
+  28154    if ((oDepth == null || depth <= oDepth) && !this.fsw._symlinkPaths.has(realpath)) {
+  28155:     if (!target) {
+  28156:       await this._handleRead(dir, initialAdd, wh, target, dir, depth, throttler);
+  28157        if (this.fsw.closed) return;
+
+  28163  
+  28164:       this._handleRead(dirPath, false, wh, target, dir, depth, throttler);
+  28165      });
+
+  28175   * @param {Object} priorWh depth relative to user-supplied path
+  28176:  * @param {Number} depth Child path actually targeted for watch
+  28177:  * @param {String=} target Child path actually targeted for watch
+  28178   * @returns {Promise}
+  28179   */
+  28180: async _addToNodeFs(path, initialAdd, priorWh, depth, target) {
+  28181    const ready = this.fsw._emitReady;
+
+  28207        const absPath = sysPath$2.resolve(path);
+  28208:       const targetPath = follow ? await fsrealpath(path) : path;
+  28209        if (this.fsw.closed) return;
+  28210:       closer = await this._handleDir(wh.watchPath, stats, initialAdd, depth, target, wh, targetPath);
+  28211        if (this.fsw.closed) return;
+  28212:       // preserve this symlink's target path
+  28213:       if (absPath !== targetPath && targetPath !== undefined) {
+  28214:         this.fsw._symlinkPaths.set(absPath, targetPath);
+  28215        }
+  28216      } else if (stats.isSymbolicLink()) {
+  28217:       const targetPath = follow ? await fsrealpath(path) : path;
+  28218        if (this.fsw.closed) return;
+
+  28221        this.fsw._emit(EV_ADD$2, wh.watchPath, stats);
+  28222:       closer = await this._handleDir(parent, stats, initialAdd, depth, path, wh, targetPath);
+  28223        if (this.fsw.closed) return;
+  28224  
+  28225:       // preserve this symlink's target path
+  28226:       if (targetPath !== undefined) {
+  28227:         this.fsw._symlinkPaths.set(sysPath$2.resolve(path), targetPath);
+  28228        }
+
+  28628    try {
+  28629:     const linkTarget = await realpath(linkPath);
+  28630      if (this.fsw.closed) return;
+  28631:     if (this.fsw._isIgnored(linkTarget)) {
+  28632        return this.fsw._emitReady();
+
+  28636  
+  28637:     // add the linkTarget for watching with a wrapper for transform
+  28638      // that causes emitted paths to incorporate the link's path
+  28639:     this._addToFsEvents(linkTarget || linkPath, (path) => {
+  28640        let aliasedPath = linkPath;
+  28641:       if (linkTarget && linkTarget !== DOT_SLASH) {
+  28642:         aliasedPath = path.replace(linkTarget, linkPath);
+  28643        } else if (path !== DOT_SLASH) {
+
+  31575  function isDocker() {
+  31576: 	// TODO: Use `??=` when targeting Node.js 16.
+  31577  	if (isDockerCached === undefined) {
+
+  31596  function isInsideContainer() {
+  31597: 	// TODO: Use `??=` when targeting Node.js 16.
+  31598  	if (cachedResult === undefined) {
+
+  31929  			encodedArguments.push(`"\`"${app}\`""`);
+  31930: 			if (options.target) {
+  31931: 				appArguments.push(options.target);
+  31932  			}
+  31933: 		} else if (options.target) {
+  31934: 			encodedArguments.push(`"${options.target}"`);
+  31935  		}
+
+  31942  		// Using Base64-encoded command, accepted by PowerShell, to allow special characters.
+  31943: 		options.target = Buffer$1.from(encodedArguments.join(' '), 'utf16le').toString('base64');
+  31944  	} else {
+
+  31979  	// This has to come after `--args`.
+  31980: 	if (options.target) {
+  31981: 		cliArguments.push(options.target);
+  31982  	}
+
+  32005  
+  32006: const open = (target, options) => {
+  32007: 	if (typeof target !== 'string') {
+  32008: 		throw new TypeError('Expected a `target`');
+  32009  	}
+
+  32012  		...options,
+  32013: 		target,
+  32014  	});
+
+  33022  
+  33023:   const target = Buffer.allocUnsafe(totalLength);
+  33024    let offset = 0;
+
+  33027      const buf = list[i];
+  33028:     target.set(buf, offset);
+  33029      offset += buf.length;
+
+  33032    if (offset < totalLength) {
+  33033:     return new FastBuffer$2(target.buffer, target.byteOffset, offset);
+  33034    }
+  33035  
+  33036:   return target;
+  33037  }
+
+  34699  
+  34700:     const target = Buffer.allocUnsafe(merge ? dataLength + offset : offset);
+  34701  
+  34702:     target[0] = options.fin ? options.opcode | 0x80 : options.opcode;
+  34703:     if (options.rsv1) target[0] |= 0x40;
+  34704  
+  34705:     target[1] = payloadLength;
+  34706  
+  34707      if (payloadLength === 126) {
+  34708:       target.writeUInt16BE(dataLength, 2);
+  34709      } else if (payloadLength === 127) {
+  34710:       target[2] = target[3] = 0;
+  34711:       target.writeUIntBE(dataLength, 4, 6);
+  34712      }
+  34713  
+  34714:     if (!options.mask) return [target, data];
+  34715  
+  34716:     target[1] |= 0x80;
+  34717:     target[offset - 4] = mask[0];
+  34718:     target[offset - 3] = mask[1];
+  34719:     target[offset - 2] = mask[2];
+  34720:     target[offset - 1] = mask[3];
+  34721  
+  34722:     if (skipMasking) return [target, data];
+  34723  
+  34724      if (merge) {
+  34725:       applyMask(data, mask, target, offset, dataLength);
+  34726:       return [target];
+  34727      }
+
+  34729      applyMask(data, mask, data, 0, dataLength);
+  34730:     return [target, data];
+  34731    }
+
+  35171  const kReason = Symbol('kReason');
+  35172: const kTarget = Symbol('kTarget');
+  35173  const kType = Symbol('kType');
+
+  35186    constructor(type) {
+  35187:     this[kTarget] = null;
+  35188      this[kType] = type;
+
+  35193     */
+  35194:   get target() {
+  35195:     return this[kTarget];
+  35196    }
+
+  35205  
+  35206: Object.defineProperty(Event$1.prototype, 'target', { enumerable: true });
+  35207  Object.defineProperty(Event$1.prototype, 'type', { enumerable: true });
+
+  35332  /**
+  35333:  * This provides methods for emulating the `EventTarget` interface. It's not
+  35334   * meant to be used directly.
+
+  35337   */
+  35338: const EventTarget = {
+  35339    /**
+
+  35369  
+  35370:         event[kTarget] = this;
+  35371          callListener(handler, this, event);
+
+  35380  
+  35381:         event[kTarget] = this;
+  35382          callListener(handler, this, event);
+
+  35390  
+  35391:         event[kTarget] = this;
+  35392          callListener(handler, this, event);
+
+  35397  
+  35398:         event[kTarget] = this;
+  35399          callListener(handler, this, event);
+
+  35431  
+  35432: var eventTarget = {
+  35433    CloseEvent,
+
+  35435    Event: Event$1,
+  35436:   EventTarget,
+  35437    MessageEvent
+
+  35683  const {
+  35684:   EventTarget: { addEventListener, removeEventListener }
+  35685: } = eventTarget;
+  35686  const { format, parse: parse$2 } = extension$1;
+
+  38354  	 * @param {ClientRequest} Req Request Object
+  38355: 	 * @param {String} Forward String to select forward or target
+  38356  	 * 
+
+  38362  	common.setupOutgoing = function(outgoing, options, req, forward) {
+  38363: 	  outgoing.port = options[forward || 'target'].port ||
+  38364: 	                  (isSSL.test(options[forward || 'target'].protocol) ? 443 : 80);
+  38365  
+
+  38367  	    'passphrase', 'cert', 'ca', 'ciphers', 'secureProtocol'].forEach(
+  38368: 	    function(e) { outgoing[e] = options[forward || 'target'][e]; }
+  38369  	  );
+
+  38385  
+  38386: 	  if (isSSL.test(options[forward || 'target'].protocol)) {
+  38387  	    outgoing.rejectUnauthorized = (typeof options.secure === "undefined") ? true : options.secure;
+
+  38405  
+  38406: 	  // the final path is target path + relative path requested by user:
+  38407: 	  var target = options[forward || 'target'];
+  38408: 	  var targetPath = target && options.prependPath !== false
+  38409: 	    ? (target.path || '')
+  38410  	    : '';
+
+  38425  
+  38426: 	  outgoing.path = common.urlJoin(targetPath, outgoingPath);
+  38427  
+
+  38429  	    outgoing.headers.host =
+  38430: 	      required(outgoing.port, options[forward || 'target'].protocol) && !hasPort(outgoing.host)
+  38431  	        ? outgoing.host + ':' + outgoing.port
+
+  38631          && redirectRegex.test(proxyRes.statusCode)) {
+  38632:       var target = url$1.parse(options.target);
+  38633        var u = url$1.parse(proxyRes.headers['location']);
+  38634  
+  38635:       // make sure the redirected host matches the target host before rewriting
+  38636:       if (target.host != u.host) {
+  38637          return;
+
+  39087    // RFC7230§5.3.1: When making a request directly to an origin server, […]
+  39088:   // a client MUST send only the absolute path […] as the request-target.
+  39089    this._currentUrl = /^\//.test(this._options.path) ?
+
+  39091      // When making a request to a proxy, […]
+  39092:     // a client MUST send the target URI in absolute-form […].
+  39093      this._options.path;
+
+  39188        // the server is redirecting the user agent to a different resource […]
+  39189:       // A user agent can perform a retrieval request targeting that URI
+  39190        // (a GET or HEAD request if using HTTP) […]
+
+  39338  
+  39339: function spreadUrlObject(urlObject, target) {
+  39340:   var spread = target || {};
+  39341    for (var key of preservedUrlFields) {
+
+  39535      // And we begin!
+  39536:     server.emit('start', req, res, options.target || options.forward);
+  39537  
+
+  39554        (options.buffer || req).pipe(forwardReq);
+  39555:       if(!options.target) { return res.end(); }
+  39556      }
+
+  39558      // Request initalization
+  39559:     var proxyReq = (options.target.protocol === 'https:' ? https : http).request(
+  39560        common$1.setupOutgoing(options.ssl || {}, options, req)
+
+  39583      // handle errors in proxy and incoming request, just like for forward proxy
+  39584:     var proxyError = createErrorHandler(proxyReq, options.target);
+  39585      req.on('error', proxyError);
+
+  39730  
+  39731:     var proxyReq = (common.isSSL.test(options.target.protocol) ? https : http).request(
+  39732        common.setupOutgoing(options.ssl || {}, options, req)
+
+  39853  
+  39854: 	      ['target', 'forward'].forEach(function(e) {
+  39855  	        if (typeof requestOptions[e] === 'string')
+
+  39858  
+  39859: 	      if (!requestOptions.target && !requestOptions.forward) {
+  39860: 	        return this.emit('error', new Error('Must provide a proper URL as target'));
+  39861  	      }
+
+  40004     *  {
+  40005:    *    target : <url string to be parsed with the url module>
+  40006     *    forward: <url string to be parsed with the url module>
+
+  40012     *    toProxy: <true/false, explicitly specify if we are proxying to another proxy>
+  40013:    *    prependPath: <true/false, Default: true - specify whether you want to prepend the target's path to the proxy path>
+  40014     *    ignorePath: <true/false, Default: false - specify whether you want to ignore the proxy path of the incoming request>
+  40015     *    localAddress : <Local interface string to bind for outgoing connections>
+  40016:    *    changeOrigin: <true/false, Default: false - changes the origin of the host header to the target URL>
+  40017     *    preserveHeaderKeyCase: <true/false, Default: false - specify whether you want to keep letter case of response header key >
+
+  40024     *  NOTE: `options.ws` and `options.ssl` are optional.
+  40025:    *    `options.target and `options.forward` cannot be
+  40026     *    both missing
+
+  40064    if (options.rewriteWsOrigin) {
+  40065:     const { target } = options;
+  40066      if (proxyReq.headersSent) {
+
+  40073      }
+  40074:     if (proxyReq.getHeader("origin") && target) {
+  40075:       const changedOrigin = typeof target === "object" ? `${target.protocol}//${target.host}` : target;
+  40076        proxyReq.setHeader("origin", changedOrigin);
+
+  40087      if (typeof opts === "string") {
+  40088:       opts = { target: opts, changeOrigin: true };
+  40089      }
+
+  40156            const [proxy, opts] = proxies[context];
+  40157:           if (opts.ws || opts.target?.toString().startsWith("ws:") || opts.target?.toString().startsWith("wss:")) {
+  40158              if (opts.bypass) {
+
+  40172              }
+  40173:             debug$5?.(`${req.url} -> ws ${opts.target}`);
+  40174              proxy.ws(req, socket, head);
+
+  40198          }
+  40199:         debug$5?.(`${req.url} -> ${opts.target || opts.forward}`);
+  40200          if (opts.rewrite) {
+
+  46138        }
+  46139:       let directTarget = hmrConfig?.host || resolvedServerHostname;
+  46140:       directTarget += `:${hmrConfig?.port || resolvedServerPort}`;
+  46141:       directTarget += devBase;
+  46142        let hmrBase = devBase;
+
+  46151        const hmrPortReplacement = escapeReplacement(port);
+  46152:       const hmrDirectTargetReplacement = escapeReplacement(directTarget);
+  46153        const hmrBaseReplacement = escapeReplacement(hmrBase);
+
+  46157        injectConfigValues = (code) => {
+  46158:         return code.replace(`__MODE__`, modeReplacement).replace(/__BASE__/g, baseReplacement).replace(`__SERVER_HOST__`, serverHostReplacement).replace(`__HMR_PROTOCOL__`, hmrProtocolReplacement).replace(`__HMR_HOSTNAME__`, hmrHostnameReplacement).replace(`__HMR_PORT__`, hmrPortReplacement).replace(`__HMR_DIRECT_TARGET__`, hmrDirectTargetReplacement).replace(`__HMR_BASE__`, hmrBaseReplacement).replace(`__HMR_TIMEOUT__`, hmrTimeoutReplacement).replace(`__HMR_ENABLE_OVERLAY__`, hmrEnableOverlayReplacement).replace(`__HMR_CONFIG_NAME__`, hmrConfigNameReplacement);
+  46159        };
+
+  47740      resolved.lightningcss ??= {};
+  47741:     resolved.lightningcss.targets ??= convertTargets(ESBUILD_MODULES_TARGET);
+  47742    } else {
+
+  48928          ...config.css.lightningcss,
+  48929:         targets: convertTargets(config.build.cssTarget),
+  48930          cssModules: void 0,
+
+  48967        loader: "css",
+  48968:       target: config.build.cssTarget || void 0,
+  48969        ...resolveMinifyCssEsbuildOptions(config.esbuild || {})
+
+  49765        code: Buffer.from(src),
+  49766:       targets: config.css.lightningcss?.targets,
+  49767        minify: config.isProduction && !!config.build.cssMinify,
+
+  49907  const versionRE = /\d/;
+  49908: const convertTargetsCache = /* @__PURE__ */ new Map();
+  49909: const convertTargets = (esbuildTarget) => {
+  49910:   if (!esbuildTarget) return {};
+  49911:   const cached = convertTargetsCache.get(esbuildTarget);
+  49912    if (cached) return cached;
+  49913:   const targets = {};
+  49914:   const entriesWithoutES = arraify(esbuildTarget).flatMap((e) => {
+  49915      const match = esRE.exec(e);
+
+  49917      const year = Number(match[1]);
+  49918:     if (!esMap[year]) throw new Error(`Unsupported target "${e}"`);
+  49919      return esMap[year];
+
+  49930            const version = major << 16 | minor << 8;
+  49931:           if (!targets[browser] || version < targets[browser]) {
+  49932:             targets[browser] = version;
+  49933            }
+
+  49937      }
+  49938:     throw new Error(`Unsupported target "${entry}"`);
+  49939    }
+  49940:   convertTargetsCache.set(esbuildTarget, targets);
+  49941:   return targets;
+  49942  };
+
+  50568  const buildEnvironmentOptionsDefaults = Object.freeze({
+  50569:   target: "modules",
+  50570    /** @deprecated */
+
+  50576    // cssCodeSplit
+  50577:   // cssTarget
+  50578    // cssMinify
+
+  50627    );
+  50628:   if (merged.target === "modules") {
+  50629:     merged.target = ESBUILD_MODULES_TARGET;
+  50630    }
+
+  50640      ...merged,
+  50641:     cssTarget: merged.cssTarget ?? merged.target,
+  50642      cssMinify: merged.cssMinify ?? (consumer === "server" ? "esbuild" : !!merged.minify),
+
+  50785    };
+  50786:   const isSsrTargetWebworkerEnvironment = environment.name === "ssr" && environment.getTopLevelConfig().ssr?.target === "webworker";
+  50787    let bundle;
+
+  50808        const format = output.format || "es";
+  50809:       const jsExt = ssr && !isSsrTargetWebworkerEnvironment || libOptions ? resolveOutputJsExtension(
+  50810          format,
+
+  50834          assetFileNames: libOptions ? `[name].[ext]` : path$d.posix.join(options.assetsDir, `[name]-[hash].[ext]`),
+  50835:         inlineDynamicImports: output.format === "umd" || output.format === "iife" || isSsrTargetWebworkerEnvironment && (typeof input === "string" || Object.keys(input).length === 1),
+  50836          ...output
+
+  52986    // external
+  52987:   target: "node",
+  52988    optimizeDeps: {}
+
+  53130  }
+  53131: function resolveEnvironmentOptions(options, alias, preserveSymlinks, logger, environmentName, skipSsrTransform, isSsrTargetWebworkerSet) {
+  53132    const isClientEnvironment = environmentName === "client";
+  53133    const consumer = options.consumer ?? (isClientEnvironment ? "client" : "server");
+  53134:   const isSsrTargetWebworkerEnvironment = isSsrTargetWebworkerSet && environmentName === "ssr";
+  53135    const resolve = resolveEnvironmentResolveOptions(
+
+  53140      consumer,
+  53141:     isSsrTargetWebworkerEnvironment
+  53142    );
+
+  53145      resolve,
+  53146:     keepProcessEnv: options.keepProcessEnv ?? (isSsrTargetWebworkerEnvironment ? false : consumer === "server"),
+  53147      consumer,
+
+  53208  ];
+  53209: function resolveEnvironmentResolveOptions(resolve, alias, preserveSymlinks, logger, consumer, isSsrTargetWebworkerEnvironment) {
+  53210    const resolvedResolve = mergeWithDefaults(
+
+  53212        ...configDefaults.resolve,
+  53213:       mainFields: consumer === "client" || isSsrTargetWebworkerEnvironment ? DEFAULT_CLIENT_MAIN_FIELDS : DEFAULT_SERVER_MAIN_FIELDS,
+  53214:       conditions: consumer === "client" || isSsrTargetWebworkerEnvironment ? DEFAULT_CLIENT_CONDITIONS : DEFAULT_SERVER_CONDITIONS.filter((c) => c !== "browser"),
+  53215:       enableBuiltinNoExternalCheck: !!isSsrTargetWebworkerEnvironment
+  53216      },
+
+  53399      configEnv,
+  53400:     config.ssr?.target === "webworker"
+  53401    );
+
+  53414        config.experimental?.skipSsrTransform,
+  53415:       config.ssr?.target === "webworker"
+  53416      );
+
+  53794      write: false,
+  53795:     target: [`node${process.versions.node}`],
+  53796      platform: "node",
+
+  53966  }
+  53967: async function runConfigEnvironmentHook(environments, plugins, configEnv, isSsrTargetWebworkerSet) {
+  53968    const environmentNames = Object.keys(environments);
+
+  53974          ...configEnv,
+  53975:         isSsrTargetWebworker: isSsrTargetWebworkerSet && name === "ssr"
+  53976        });
+
+src\App.jsx:
+  77      <div className="auth-icon"><LockKeyhole/></div><h1>כניסה למערכת</h1><p>התחבר כדי לצפות בנתוני המתקנים המשותפים.</p>
+  78:     <label><span>דוא״ל</span><div><Mail size={18}/><input type="email" value={email} onChange={e=>setEmail(e.target.value)} required autoComplete="email"/></div></label>
+  79:     <label><span>סיסמה</span><div><LockKeyhole size={18}/><input type={showPassword?'text':'password'} value={password} onChange={e=>setPassword(e.target.value)} required autoComplete="current-password"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword?<EyeOff size={18}/>:<Eye size={18}/>}</button></div></label>
+  80      {urlWasNormalized && <div className="auth-info">כתובת Supabase נוקתה אוטומטית מתוספת /rest/v1/.</div>}
+
+src\cloudData.js:
+  2  
+  3: export const CLOUD_KINDS = ['production', 'quality', 'deviations', 'targets']
+  4  export const FUTURE_CLOUD_KINDS = [...CLOUD_KINDS, 'packaging_plan']
+
+src\DashboardApp.jsx:
+     4    Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
+     5:   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
+     6    Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse
+
+    12  
+    13: const LEGACY_DAILY_TARGETS = {
+    14    '1519': 80000, '1521': 60000, '1523': 40000, '1524': 6000,
+
+   193  
+   194: const TARGET_MONTHS = { jan:1, january:1, feb:2, february:2, mar:3, march:3, apr:4, april:4, may:5, jun:6, june:6, jul:7, july:7, aug:8, august:8, sep:9, sept:9, september:9, oct:10, october:10, nov:11, november:11, dec:12, december:12 }
+   195: const targetMonthFromTitle = (value, fallbackDate = new Date()) => {
+   196    const text = normalize(value)
+   197    const english = text.match(/(?:production\s+report\s+)?([a-z]{3,9})\s+(20\d{2})/i)
+   198:   if (english) { const month = TARGET_MONTHS[english[1].toLowerCase()]; if (month) return `${english[2]}-${String(month).padStart(2,'0')}` }
+   199    return parseMonth(text) || monthKey(fallbackDate)
+   200  }
+   201: const targetFacilityIds = (resource) => {
+   202    const text = normalize(resource)
+
+   207  }
+   208: const targetDescriptionTokens = (resource) => {
+   209    const text = normalize(resource).toUpperCase()
+
+   217  }
+   218: const parseTargetNumber = (value) => {
+   219    if (value === null || value === undefined || value === '' || /^\s*-+\s*$/.test(String(value)) || /DIV\/0/i.test(String(value))) return 0
+
+   253  
+   254: async function readTargetWorkbook(file) {
+   255    const buf = await file.arrayBuffer(); const wb = XLSX.read(buf, { type:'array', cellDates:true, dense:true }); const output = []
+
+   258      if (!matrix.length) continue
+   259:     const titleText = matrix.slice(0,3).flat().map(normalize).join(' '); const fallbackMonth = targetMonthFromTitle(`${titleText} ${file.name}`, new Date())
+   260      const headerIndex = matrix.findIndex(row => { const keys=row.map(normKey); return keys.some(k=>k==='capacity') && keys.some(k=>k==='plan') })
+
+   287  
+   288:   const targetLike = hasAll(
+   289:     ['monthly target', 'monthly plan', 'יעד חודשי', 'תוכנית חודשית', 'target', 'plan'],
+   290      ['facility', 'מתקן', 'resource', 'משאב']
+   291    )
+   292:   if (targetLike) return 'targets'
+   293  
+
+   317    const [deviations, setDeviations] = useState([])
+   318:   const [targets, setTargets] = useState([])
+   319    const [status, setStatus] = useState('ממתין לטעינת קבצים')
+
+   330    const [periodQuarter, setPeriodQuarter] = useState('')
+   331:   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
+   332    const [selectedBatch, setSelectedBatch] = useState('')
+
+   340      const startedAt = performance.now()
+   341:     const kinds = ['production', 'quality', 'deviations', 'targets']
+   342  
+
+   347        if (kind === 'deviations') setDeviations(rows)
+   348:       if (kind === 'targets') setTargets(rows)
+   349        setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
+
+   360            setDeviations(cached.deviations || [])
+   361:           setTargets(cached.targets || [])
+   362:           setDataMeta(cached.dataMeta || { production:null, quality:null, deviations:null, targets:null })
+   363            setStatus('מוצג מטמון מקומי — בודק עדכונים מהשרת...')
+   364            setCloudState({ mode:'connecting', lastSync:cached.savedAt || null, message:'הדשבורד זמין; בודק גרסאות חדשות ברקע...', latencyMs:null, live:false })
+   365:           setPerformance(current => ({ ...current, cache:'HIT', rows:(cached.production?.length||0)+(cached.quality?.length||0)+(cached.deviations?.length||0)+(cached.targets?.length||0), phase:'בדיקת גרסאות' }))
+   366          }
+
+   391  
+   392:         for (const kind of ['targets', 'quality', 'deviations']) {
+   393            if (!active) return
+
+   425            const kind = payload?.new?.kind || payload?.old?.kind
+   426:           if (!['production','quality','deviations','targets'].includes(kind)) return
+   427            try {
+
+   433              if (kind === 'deviations') setDeviations(rows)
+   434:             if (kind === 'targets') setTargets(rows)
+   435              setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
+
+   452    useEffect(() => {
+   453:     if (!production.length && !quality.length && !deviations.length && !targets.length) return
+   454      const timer = setTimeout(() => {
+   455:       idbSet({ production, quality, deviations, targets, dataMeta, savedAt: new Date().toISOString() })
+   456          .catch(e => { console.error(e); setStatus('הנתונים בענן, אך יצירת גיבוי מקומי נכשלה') })
+
+   458      return () => clearTimeout(timer)
+   459:   }, [production, quality, deviations, targets, dataMeta])
+   460  
+
+   477        ],
+   478:       targets: [
+   479          ['משאב', present('Resource', 'משאב', 'Storage Location', 'Facility', 'מתקן')],
+   480:         ['תוכנית חודשית', present('Plan', 'Monthly Target', 'Monthly Plan', 'יעד חודשי', 'תוכנית חודשית', 'Target')],
+   481        ],
+
+   492          setStatus(`קורא את ${file.name}...`)
+   493:         const rows = forcedKind === 'targets' ? await readTargetWorkbook(file) : await readWorkbook(file)
+   494:         const detected = forcedKind === 'targets' ? 'targets' : classifyFile(rows)
+   495          const kind = forcedKind || detected
+
+   551          } else if (kind === 'deviations') {}
+   552:         else if (kind === 'targets') {
+   553:           const fallbackMonth = targetMonthFromTitle(file.name, new Date())
+   554            const parsed = rows.map(r => {
+   555              const resource = normalize(getField(r, ['Resource','משאב','1','Product','Line']))
+   556:             const facilities = targetFacilityIds(resource)
+   557              const facility = facilities[0] || canonicalFacility(getField(r, ['Storage Location','Facility','מתקן']))
+
+   559                resource, facility, facilities: facilities.length ? facilities : (facility ? [facility] : []),
+   560:               facilityLabel:(resource.match(/\(([^)]+)\)/)?.[1]||'').trim(), descriptionTokens:targetDescriptionTokens(resource),
+   561                routingGroup:normalizeRouting(getField(r,['Routing group','Routing Group','RoutingGroup','קבוצת ניתוב'])),
+   562                station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
+   563:               month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,
+   564                activity:normalize(getField(r,['Activity','Type','סוג פעילות','Production/Packaging']))||'ייצור / אריזה',
+   565:               capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])),
+   566:               target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])),
+   567:               fileProduction:parseTargetNumber(getField(r,['Production','ייצור'])), fileAchievement:parseTargetNumber(getField(r,['% Achievement','Achievement'])),
+   568:               requiredPerDay:parseTargetNumber(getField(r,['Req. t/d','Required t/d'])), lastDay:parseTargetNumber(getField(r,['Last day'])),
+   569:               adjustedRequiredPerDay:parseTargetNumber(getField(r,['Adjusted Req. t/d'])), actualPerDay:parseTargetNumber(getField(r,['Actual t/d'])),
+   570:               ratePercent:parseTargetNumber(getField(r,['%Rate','Rate'])), adherence:parseTargetNumber(getField(r,['New Adherence'])),
+   571:               recyclingPlan:parseTargetNumber(getField(r,['Recycling Plan'])), recycled:parseTargetNumber(getField(r,['Recycled'])),
+   572:               forPacking:parseTargetNumber(getField(r,['For Packing'])), restrictedRecycling:parseTargetNumber(getField(r,['Restricted - recycling'])),
+   573:               restrictedDisposal:parseTargetNumber(getField(r,['Restricted – risk for disposal','Restricted - risk for disposal'])),
+   574:               average:parseTargetNumber(getField(r,['AVERAGE','Average'])), notes:normalize(getField(r,['Notes','Remarks','הערות']))
+   575              }
+   576:           }).filter(r=>r.resource&&r.facilities.length&&(r.target>0||r.capacity>0||r.notes))
+   577            if(!parsed.length) throw new Error(`${file.name}: לא נמצאו שורות יעד תקינות. ודא שקיימות עמודות Resource, Capacity ו-Plan.`)
+
+   593          else if (kind === 'deviations') setDeviations(rowsForCloud)
+   594:         else if (kind === 'targets') setTargets(rowsForCloud)
+   595          setDataMeta(current => ({ ...current, [kind]: savedMeta }))
+
+   690  
+   691:     const addCharacteristic = (target, seenMap, batch, item) => {
+   692        if (!batch || !item.characteristic) return
+
+   697        seen.add(signature)
+   698:       const list = target.get(batch) || []
+   699        list.push(item)
+   700:       target.set(batch, list)
+   701      }
+
+   771    const dataMonths = useMemo(() => [...new Set(prod.map(r => monthKey(r.date)).filter(Boolean))].sort(), [prod])
+   772:   const targetMonths = useMemo(() => [...new Set(targets.map(r => r.month).filter(Boolean))].sort(), [targets])
+   773:   const availableMonths = useMemo(() => [...new Set([...targetMonths, ...dataMonths])].sort().reverse(), [targetMonths, dataMonths])
+   774    useEffect(() => { if (!planningMonth && availableMonths.length) setPlanningMonth(availableMonths[0]) }, [availableMonths, planningMonth])
+
+   797  
+   798:   const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
+   799    const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
+
+   804      production: prod,
+   805:     targets,
+   806      planningMonth,
+   807      fallbackFacilities: facilities,
+   808:   }), [planningMonth, prod, targets, facilities])
+   809  
+
+   814      const plans = planningRows.filter(x => (x.facilities || [x.facility]).includes(id))
+   815:     const target = plans.reduce((sum, row) => sum + row.target, 0)
+   816      const forecast = plans.reduce((sum, row) => sum + row.forecast, 0)
+   817:     const rank = { risk: 3, warning: 2, 'no-target': 1, good: 0, achieved: 0 }
+   818:     const state = plans.sort((a,b) => (rank[b.state] || 0) - (rank[a.state] || 0))[0]?.state || 'no-target'
+   819:     return { id, actual, target, pct: target ? actual / target * 100 : 0, orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state, forecast }
+   820    }), [facilities, baseFiltered, planningRows])
+
+   901    const warningCount = planningRows.filter(r => r.state === 'warning').length
+   902:   const targetTotal = planningRows.reduce((s,r) => s + r.target, 0)
+   903:   const targetActual = planningRows.reduce((s,r) => s + r.actual, 0)
+   904:   const targetForecast = planningRows.reduce((s,r) => s + r.forecast, 0)
+   905    const uniqueOrders = useMemo(() => new Set(filtered.map(r => r.order).filter(Boolean)).size, [filtered])
+
+   909      const highestRisk = planningRows.filter(r => r.state === 'risk').sort((a,b) => (b.requiredDaily - b.provenMax) - (a.requiredDaily - a.provenMax))[0]
+   910:     const warning = planningRows.filter(r => r.state === 'warning').sort((a,b) => a.forecast / Math.max(1,a.target) - b.forecast / Math.max(1,b.target))[0]
+   911:     const best = planningRows.filter(r => r.target > 0).sort((a,b) => (b.forecast / b.target) - (a.forecast / a.target))[0]
+   912      if (highestRisk) insights.push({ state:'risk', title:`${planningName(highestRisk)} דורש פעולה`, text:`הקצב הנדרש הוא ${fmt(highestRisk.requiredDaily)} ליום לעומת שיא מוכח של ${fmt(highestRisk.provenMax)}.` })
+   913:     if (warning) insights.push({ state:'warning', title:`${planningName(warning)} נמצא בסיכון`, text:`התחזית היא ${fmt(warning.forecast)} מול יעד של ${fmt(warning.target)}. נדרש שיפור בקצב היומי.` })
+   914:     if (best && ['good','achieved'].includes(best.state)) insights.push({ state:'good', title:`${planningName(best)} מוביל`, text:`התחזית הנוכחית היא ${pctFmt(best.forecast / best.target * 100)} מהיעד החודשי.` })
+   915      if (openDeviations.length) insights.push({ state:'risk', title:`${openDeviations.length} חריגות איכות פתוחות`, text:'לחיצה על הכרטיס תפתח את פירוט המנות ומאפייני החריגה.' })
+
+   926        const deviationsCount=facilitiesForRow.reduce((sum,id)=>sum+(deviationByFacility.get(id)||0),0)
+   927:       const forecastPct=row.target?row.forecast/row.target*100:0, actualPct=row.target?row.actual/row.target*100:0
+   928:       const planScore=row.target?Math.min(100,forecastPct):70, qualityScore=Math.max(0,100-deviationsCount*8)
+   929        const healthScore=Math.max(0,Math.min(100,Math.round(planScore*.72+qualityScore*.28)))
+   930:       const state=!row.target?'no-target':forecastPct>=100?'good':forecastPct>=90?'warning':'risk'
+   931:       return { ...row, facility:row.resource||row.facility, facilityIds:facilitiesForRow, deviationsCount, forecastPct, actualPct, healthScore, state, gap:row.forecast-row.target }
+   932:     }).filter(row=>row.target>0||row.actual>0||row.deviationsCount>0)
+   933:       .sort((a,b)=>({risk:0,warning:1,good:2,'no-target':3}[a.state]-{risk:0,warning:1,good:2,'no-target':3}[b.state])||a.facility.localeCompare(b.facility))
+   934    }, [planningRows, openDeviations])
+
+   952      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filtered.map(r => ({ Date: iso(r.date), Time: r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : '', Facility: r.facility, Order: r.order, Batch: r.batch, Material: r.material, Description: r.desc, RoutingGroup: r.routingGroup, RoutingDescription: r.routingDescription, Quantity: r.qty }))), 'Production')
+   953:     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(planningRows.map(r => ({ Month: planningMonth, Facility: r.facility, RoutingGroup: r.routingGroup, Station: r.station, Line: r.lineName, Activity: r.activity, MonthlyTarget: r.target, Actual: r.actual, Remaining: r.remaining, RequiredDaily: r.requiredDaily, RecentAverage: r.recentAverage, ProvenMax: r.provenMax, Forecast: r.forecast, Status: r.label }))), 'Planning')
+   954      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(qualityBad.map(r => ({ Date: iso(r.date), Facility: r.facility, InspectionLot: r.inspectionLot, Order: r.order, Batch: r.batch, Material: r.material, Status: r.status }))), 'Quality')
+
+   957    }
+   958:   const downloadTargetTemplate = () => {
+   959      const month=planningMonth||monthKey(new Date())
+
+   962      const ws=XLSX.utils.json_to_sheet(rows,{origin:'A3'}); XLSX.utils.sheet_add_aoa(ws,[[new Date().toLocaleDateString('he-IL'),`Production Report ${month}`]],{origin:'A1'})
+   963:     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Monthly Targets'); XLSX.writeFile(wb,'IML_Monthly_Targets_Template.xlsx')
+   964    }
+
+   970        await deleteAllCloudDatasets(currentUser)
+   971:       setProduction([]); setQuality([]); setDeviations([]); setTargets([]); setDataMeta({ production:null, quality:null, deviations:null, targets:null }); localStorage.removeItem(STORAGE_KEY); await idbClear().catch(console.warn)
+   972        setStatus('כל הנתונים נמחקו מהענן'); setCloudState({ mode:'cloud', lastSync:new Date().toISOString(), message:'מחובר למסד המשותף', latencyMs:cloudState.latencyMs, live:true }); setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPlanningMonth(''); setAdditionalFacilities([]); setFacilityToAdd(''); setPeriodYear(''); setPeriodQuarter('')
+
+  1011        <div className="side-filter-title"><Search size={18}/><strong>חיפוש וסינון</strong></div>
+  1012:       <label className="side-field"><span>Quick Search</span><div><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Order, Batch, חומר..."/></div></label>
+  1013:       <label className="side-field"><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
+  1014:       <label className="side-field"><span>מתאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => { setFrom(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+  1015:       <label className="side-field"><span>עד תאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => { setTo(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+  1016:       <label className="side-field"><span>מתקן</span><select value={selectedFacilities.length === 1 ? selectedFacilities[0] : ''} onChange={e => setSelectedFacilities(e.target.value ? [e.target.value] : [])}><option value="">כל המתקנים</option>{facilities.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
+  1017        <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
+
+  1027            <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
+  1028:           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
+  1029            <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
+  1030:           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
+  1031:           {canManageData && <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label>}
+  1032            <button className="action secondary" onClick={onSignOut}><LogOut size={18}/> יציאה</button>
+
+  1049          <div className="tower-kpis">
+  1050:           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><Target/><span>יעד חודשי כולל</span><b>{fmt(targetTotal)}</b><small>{planningMonth || 'ללא חודש נבחר'}</small></button>
+  1051:           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><Database/><span>בוצע החודש</span><b>{fmt(targetActual)}</b><small>{targetTotal ? pctFmt(targetActual / targetTotal * 100) : '—'} מהיעד</small></button>
+  1052:           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><TrendingUp/><span>תחזית סוף חודש</span><b>{fmt(targetForecast)}</b><small>{targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} מהיעד</small></button>
+  1053            <button onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><Gauge/><span>קצב יומי נדרש</span><b>{fmt(planningRows.reduce((sum,row)=>sum+row.requiredDaily,0))}</b><small>לכל המתקנים</small></button>
+  1054:           <button className={targetForecast >= targetTotal && targetTotal ? 'good' : 'bad'} onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><AlertTriangle/><span>פער צפוי</span><b>{targetTotal ? fmt(targetForecast-targetTotal) : '—'}</b><small>{targetForecast >= targetTotal ? 'מעל היעד' : 'נדרש להגביר קצב'}</small></button>
+  1055          </div>
+
+  1064              <div className="tower-progress"><i style={{width:`${Math.min(100,row.actualPct)}%`}}/></div>
+  1065:             <dl><div><dt>יעד חודשי</dt><dd>{fmt(row.target)}</dd></div><div><dt>בוצע</dt><dd>{fmt(row.actual)}</dd></div><div><dt>תחזית</dt><dd>{fmt(row.forecast)}</dd></div><div><dt>פער צפוי</dt><dd className={row.gap >= 0 ? 'positive' : 'negative'}>{row.gap >= 0 ? '+' : ''}{fmt(row.gap)}</dd></div><div><dt>קצב נדרש</dt><dd>{fmt(row.requiredDaily)}</dd></div><div><dt>חריגות פתוחות</dt><dd>{row.deviationsCount}</dd></div></dl>
+  1066              <span className="tower-enter">לפרטים מלאים <ArrowLeft size={16}/></span>
+
+  1083            <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
+  1084:           <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')} canManage={canManageData}/>
+  1085          </div>
+
+  1088        <section className="planning-toolbar">
+  1089:         <div><Target/><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></div>
+  1090          <small>היעד היומי אינו מוזן: הוא מחושב מחדש בכל יום לפי יתרת היעד וימי העבודה שנותרו.</small>
+
+  1093        <section className="executive-strip executive-six">
+  1094:         <Executive icon={<Target/>} title="ביצוע מול יעד" value={targetTotal ? pctFmt(targetActual / targetTotal * 100) : '—'} sub={`${fmt(targetActual)} מתוך ${fmt(targetTotal)}`} onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+  1095:         <Executive icon={<TrendingUp/>} title="תחזית סוף חודש" value={targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} sub={fmt(targetForecast)} onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+  1096          <Executive icon={<CheckCircle2/>} title="במסלול / הושג" value={achievedCount} sub="מתקנים" good onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}/>
+
+  1107        <section className="filters legacy-filters">
+  1108:         <label><Search size={17}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="חיפוש מתקן, Order, Batch או חומר"/></label>
+  1109:         <label><CalendarDays size={17}/>שנה<select value={periodYear} onChange={e => applyYearFilter(e.target.value)}><option value="">כל השנים</option>{availableYears.map(y => <option key={y} value={y}>{y}</option>)}</select></label>
+  1110:         <label><CalendarDays size={17}/>רבעון<select value={periodQuarter} disabled={!periodYear} onChange={e => applyQuarterFilter(e.target.value)}><option value="">כל השנה</option><option value="1">רבעון 1</option><option value="2">רבעון 2</option><option value="3">רבעון 3</option><option value="4">רבעון 4</option></select></label>
+  1111:         <label><CalendarDays size={17}/>מתאריך<input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => { setFrom(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+  1112:         <label><CalendarDays size={17}/>עד תאריך<input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => { setTo(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+  1113          <button onClick={() => setQuickRange(1)}>יום אחרון</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button>
+
+  1118          <div><Factory size={18}/><strong>מתקנים נוספים</strong><span>ברירת המחדל מציגה רק את מתקני הליבה.</span></div>
+  1119:         <div className="extra-facility-actions"><select value={facilityToAdd} onChange={e => setFacilityToAdd(e.target.value)}><option value="">בחר מתקן נוסף</option>{optionalFacilities.map(id => <option key={id} value={id}>{id}</option>)}</select><button onClick={addFacility} disabled={!facilityToAdd}>הוסף מתקן</button></div>
+  1120          {!!additionalFacilities.length && <div className="extra-facility-chips">{additionalFacilities.map(id => <button key={id} onClick={() => removeAdditionalFacility(id)}>{id}<X size={14}/></button>)}</div>}
+
+  1143          <div className="alert-list">
+  1144:           {alerts.map(r => <div className={`alert-item ${r.state}`} key={r.id}><div className="alert-symbol">{r.state === 'risk' ? '!' : '⚠'}</div><div><strong>{planningName(r)} — {r.label}</strong><p>{r.state === 'risk' ? `נדרש ${fmt(r.requiredDaily)} ליום, אך השיא המוכח הוא ${fmt(r.provenMax)}.` : `התחזית היא ${fmt(r.forecast)} מול יעד ${fmt(r.target)}. נדרש קצב של ${fmt(r.requiredDaily)} ליום.`}</p></div></div>)}
+  1145            {!alerts.length && <div className="empty">אין התראות תכנון לחודש הנבחר.</div>}
+
+  1151          <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
+  1152:           {planningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+  1153            {!planningRows.length && <tr><td colSpan="14" className="empty">אין יעדים לחודש הנבחר</td></tr>}
+
+  1191    const orders = [...new Set(rows.map(row => row.order).filter(Boolean))]
+  1192:   const progress = resource.target ? Math.min(100, resource.actual / resource.target * 100) : 0
+  1193:   return <div className="resource-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+  1194      <section className="resource-detail-modal" role="dialog" aria-modal="true" aria-label={`פירוט ${resource.resource}`}>
+  1195        <header><div><span>RESOURCE CONTROL CENTER</span><h2>{resource.resource}</h2><p>{[resource.station && `Station ${resource.station}`, resource.description, resource.lineName].filter(Boolean).join(' · ')}</p></div><button onClick={onClose} aria-label="סגירה"><X/></button></header>
+  1196:       <div className={`resource-status-banner ${resource.state}`}><strong>{resource.label}</strong><span>תחזית {fmt(resource.forecast)} מול יעד {fmt(resource.target)}</span></div>
+  1197        <div className="resource-detail-kpis">
+  1198:         <BatchMetric label="יעד חודשי" value={fmt(resource.target)}/><BatchMetric label="בוצע" value={fmt(resource.actual)}/><BatchMetric label="עמידה" value={pctFmt(resource.pct)}/><BatchMetric label="תחזית" value={fmt(resource.forecast)}/><BatchMetric label="קצב נדרש" value={fmt(resource.requiredDaily)}/><BatchMetric label="קצב אחרון" value={fmt(resource.recentAverage)}/><BatchMetric label="ימי עבודה נותרו" value={resource.remainingWorkdays}/><BatchMetric label="שיא מוכח" value={fmt(resource.provenMax)}/>
+  1199        </div>
+
+  1256    }
+  1257:   return <div className="batch-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget) onClose()}}>
+  1258      <section className="batch-control-card" role="dialog" aria-modal="true" aria-label={`כרטיס מנה ${data.batch}`}>
+
+  1280      <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
+  1281:     {canManage ? <label className={`source-upload ${busy ? 'disabled' : ''}`}><RefreshCw size={16}/>{acceptLabel}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; onFiles(files) }}/></label> : <div className="viewer-lock"><ShieldCheck size={16}/> צפייה בלבד</div>}
+  1282    </article>
+
+  1287  function StatusBadge({ state, label }) { return <span className={`status-pill ${state}`}>{label}</span> }
+  1288: function ForecastCard({ facility, facilities, resource, packagingType, routingGroup, station, lineName, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
+  1289    return <article className={`forecast-card ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0">
+  1290      <div className="forecast-head"><div><small>משאב / מתקן</small><h3>{resource || facility}</h3>{(facilities || []).includes('1542') && packagingType && <div className="forecast-packaging-type"><span>קו אריזה</span><b>{packagingType}</b></div>}{(routingGroup || station) && <div className="forecast-resource"><b>{station || routingGroup}</b><span>{lineName || routingGroup}</span>{routingGroup && <small>{routingGroup}</small>}</div>}</div><StatusBadge state={state} label={label}/></div>
+  1291:     <div className="forecast-main"><div><span>ביצוע</span><b>{pctFmt(pct)}</b></div><div><span>תחזית</span><b>{target ? pctFmt(forecast / target * 100) : '—'}</b></div></div>
+  1292      <div className="bar"><i style={{width:`${Math.min(100, pct)}%`}}/></div>
+  1293:     <div className="forecast-values"><span>יעד<strong>{fmt(target)}</strong></span><span>בפועל<strong>{fmt(actual)}</strong></span><span>נותר<strong>{fmt(remaining)}</strong></span></div>
+  1294      <div className="forecast-metrics"><div><span>ימים נותרו</span><b>{remainingWorkdays}</b></div><div><span>נדרש ליום</span><b>{fmt(requiredDaily)}</b></div><div><span>7 ימים</span><b>{fmt(recentAverage)}</b></div><div><span>שיא מוכח</span><b>{fmt(provenMax)}</b></div></div>
+
+  1296  }
+  1297: function Facility({ id, actual, target, pct, orders, selected, onClick }) {
+  1298:   const state = !target ? 'no-target' : pct >= 100 ? 'good' : pct >= 75 ? 'warning' : 'risk'
+  1299:   return <article className={`facility ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0"><div className="facility-top"><div><small>מתקן</small><h3>{id}</h3></div><b>{target ? pctFmt(pct) : '—'}</b></div><div className="bar"><i style={{width:`${Math.min(100,pct)}%`}}/></div><div className="facility-numbers"><span>בפועל<strong>{fmt(actual)}</strong></span><span>יעד חודשי<strong>{fmt(target)}</strong></span><span>הזמנות<strong>{orders}</strong></span></div></article>
+  1300  }
+
+src\resourceEngine.js:
+   23  
+   24: const matchProductionToTarget = (row, target) => {
+   25:   const facilities = target.facilities?.length ? target.facilities : [target.facility].filter(Boolean)
+   26    if (!facilities.includes(row.facility)) return false
+   27    if (facilities.includes('1542') && row.facility === '1542' && !upper(row.orderType).includes('ZFIN')) return false
+   28:   if (target.routingGroup && upper(row.routingGroup) !== upper(target.routingGroup)) return false
+   29:   const tokens = (target.descriptionTokens || []).map(upper).filter(Boolean)
+   30    if (!tokens.length) return true
+
+   35  
+   36: const packagingTypeForTarget = target => {
+   37:   const resource = upper(target.resource)
+   38:   const tokens = (target.descriptionTokens || []).map(upper)
+   39    if (/LQ\s*1\s*(LT|L)\b/.test(resource) || tokens.some(t => ['1L','1 L','1LT','1 LT'].includes(t))) return '1 ליטר'
+
+   44  
+   45: export function buildResourceRows({ production = [], targets = [], planningMonth = '', fallbackFacilities = [], now = new Date() }) {
+   46    if (!planningMonth) return []
+
+   58    const remainingWorkdays = Math.max(0, totalWorkdays - elapsedWorkdays)
+   59:   const monthTargets = targets.filter(target => target.month === planningMonth)
+   60:   const sourceRows = monthTargets.length ? monthTargets : fallbackFacilities.map(facility => ({ facility, facilities:[facility], resource:`מתקן ${facility}`, target:0, capacity:0, descriptionTokens:[] }))
+   61  
+   62:   return sourceRows.map((targetRow, index) => {
+   63:     const rows = monthRows.filter(row => matchProductionToTarget(row, targetRow))
+   64      const dailyMap = new Map()
+
+   79      const recentAverage = recent.length ? recent.reduce((sum, value) => sum + value, 0) / recent.length : average
+   80:     const target = Number(targetRow.target) || 0
+   81:     const capacity = Number(targetRow.capacity) || 0
+   82      const provenMax = dailyValues.length ? Math.max(...dailyValues) : (capacity ? capacity / Math.max(1, totalWorkdays) : 0)
+   83:     const remaining = Math.max(0, target - actual)
+   84      const requiredDaily = remainingWorkdays ? remaining / remainingWorkdays : remaining
+
+   86      const capacityForecast = actual + provenMax * remainingWorkdays
+   87:     let state = 'no-target', label = 'ללא יעד'
+   88:     if (target > 0 && actual >= target) { state = 'achieved'; label = 'היעד הושג' }
+   89:     else if (target > 0 && remainingWorkdays === 0) { state = 'risk'; label = 'היעד לא הושג' }
+   90:     else if (target > 0 && provenMax > 0 && requiredDaily > provenMax) { state = 'risk'; label = 'לא בר־השגה' }
+   91:     else if (target > 0 && forecast < target) { state = 'warning'; label = 'נדרש שיפור קצב' }
+   92:     else if (target > 0) { state = 'good'; label = 'במסלול ליעד' }
+   93:     const facilities = targetRow.facilities?.length ? targetRow.facilities : [targetRow.facility].filter(Boolean)
+   94      return {
+   95:       id:`${targetRow.resource || targetRow.facility || index}::${index}`,
+   96:       resource:targetRow.resource || `מתקן ${targetRow.facility}`,
+   97        facility:facilities.join(','), facilities,
+   98:       routingGroup:targetRow.routingGroup || '', station:targetRow.station || facilities.join(','),
+   99:       description:(targetRow.descriptionTokens || []).join(' / '), packagingType:packagingTypeForTarget(targetRow), lineName:targetRow.lineName || targetRow.resource || '', activity:targetRow.activity || 'ייצור / אריזה',
+  100:       target, capacity, actual, pct:target ? actual / target * 100 : 0, remaining, requiredDaily,
+  101        average, recentAverage, provenMax, forecast, capacityForecast, elapsedWorkdays, remainingWorkdays, totalWorkdays,
+  102        orders:orders.size, batches:batches.size, productionRows:rows, dailyEntries, state, label,
+  103:       notes:targetRow.notes || '', recyclingPlan:Number(targetRow.recyclingPlan)||0, recycled:Number(targetRow.recycled)||0,
+  104:       forPacking:Number(targetRow.forPacking)||0, restrictedRecycling:Number(targetRow.restrictedRecycling)||0,
+  105:       restrictedDisposal:Number(targetRow.restrictedDisposal)||0,
+  106      }
+
+src\styles.css:
+  132  .resource-detail-modal>header span{font-size:12px;letter-spacing:1.4px;color:#64748b;font-weight:800}.resource-detail-modal>header h2{font-size:30px;margin:4px 0}.resource-detail-modal>header p{margin:0;color:#64748b}.resource-detail-modal>header button{border:0;background:#eef2f7;border-radius:12px;width:42px;height:42px;display:grid;place-items:center;cursor:pointer}
+  133: .resource-status-banner{margin:18px 0;padding:14px 18px;border-radius:14px;display:flex;justify-content:space-between;gap:12px}.resource-status-banner.good,.resource-status-banner.achieved{background:#e8fff5;color:#087653}.resource-status-banner.warning{background:#fff8df;color:#926600}.resource-status-banner.risk{background:#fff0f0;color:#b3261e}.resource-status-banner.no-target{background:#f1f5f9;color:#475569}
+  134  .resource-detail-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.resource-detail-kpis .batch-metric{background:#f8fafc;border:1px solid #e7edf4;border-radius:14px;padding:14px}
+
+src\components\FacilityCard.jsx:
+  1  export default function FacilityCard({ item }) {
+  2:   const pct = Math.min(100, Math.round(item.actual/item.target*100))
+  3    return <div className="facility-card">
+
+  5      <div className="progress"><i style={{width:`${pct}%`}}/></div>
+  6:     <div className="facility-foot"><span>{item.actual.toLocaleString()} בפועל</span><strong>{pct}%</strong><span>{item.target.toLocaleString()} יעד</span></div>
+  7    </div>
+
+src\data\demo.js:
+   8  export const facilities = [
+   9:   { id: '1542', name: 'קו 1L', actual: 17800, target: 18000, status: 'פעיל' },
+  10:   { id: '1543', name: 'קו 5L', actual: 61200, target: 60000, status: 'פעיל' },
+  11:   { id: '1523', name: 'מתקן 43', actual: 38800, target: 40000, status: 'פעיל' },
+  12:   { id: '1528', name: 'מתקן 28', actual: 66800, target: 80000, status: 'בהמתנה' },
+  13  ]
