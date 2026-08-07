@@ -845,6 +845,20 @@ material: normalize(getField(r, [
     }
 
     qualityRows.forEach(row => {
+      if (normalize(row.batch) === '0000000101') {
+  console.log(
+    'QUALITY CHECK',
+    {
+      batch: row.batch,
+      material: row.material,
+      characteristic: row.characteristic,
+      status: row.status,
+      approval: row.approval,
+      inspectionLot: row.inspectionLot,
+      value: row.value
+    }
+  )
+}
       const key = batchMaterialKey(row.batch, row.material)
       if (!key) return
 
