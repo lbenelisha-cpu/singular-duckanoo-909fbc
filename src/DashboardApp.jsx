@@ -786,18 +786,55 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       shift: shiftInfo(finish),
     }
   }).filter(r => r.facility), [production])
+const materialByBatchDescription = useMemo(() => {
+  const map = new Map()
 
-  const qualityRows = useMemo(() => quality.map(r => r.__compactQuality ? r : ({
+  prod.forEach(row => {
+    const batch = normalize(row.batch)
+    const material = normalize(row.material)
+    const desc = normalize(row.desc).toLowerCase()
+
+    if (!batch || !material || !desc) return
+
+    map.set(`${batch}|${desc}`, material)
+  })
+
+  return map
+}, [prod])
+  const qualityRows = useMemo(() => quality.map(r => {
+  if (r.__compactQuality) {
+    const repairedMaterial =
+      materialByBatchDescription.get(
+        `${normalize(r.batch)}|${normalize(r.material).toLowerCase()}`
+      )
+
+    return {
+      ...r,
+      material: repairedMaterial || r.material
+    }
+  }
+
+  return ({
     facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
     date: combineExcelDateTime(
       getField(r, ['Sample Date', 'Sampling Date', 'Date of Sample', 'Date of Sampling', 'תאריך דגימה', 'Start Date of Inspection', 'Date of Lot Creation', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date']),
       getField(r, ['Sample Time', 'Sampling Time', 'Time of Sample', 'Time of Sampling', 'שעת דגימה', 'Inspection Time', 'Start Time of Inspection', 'Time']),
       getField(r, ['Sample Date Time', 'Sampling Date Time', 'Sample Datetime', 'Sampling Datetime', 'תאריך ושעת דגימה'])
     ),
-    batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, ['Material', 'Material #', 'Material Number', 'Material No.', 'מקט', 'מק"ט', 'מק״ט'])),
-    order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])), status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
-    inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
-  })), [quality])
+    batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, [
+  'Material #',
+  'Material Number',
+  'Material No.',
+  'מקט',
+  'מק"ט',
+  'מק״ט',
+  'Material'
+])),
+ order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])),
+status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
+inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #']))
+  })
+}), [quality, materialByBatchDescription])
 
   const deviationRows = useMemo(() => deviations.map(r => ({
     facility: canonicalFacility(getField(r, ['Facility', 'Production Line', 'Storage Location'])),
@@ -860,6 +897,9 @@ material: normalize(getField(r, [
   )
 }
       const key = batchMaterialKey(row.batch, row.material)
+      if (row.batch === '0000000101') {
+  console.log("MAP KEY =", key)
+}
       if (!key) return
 
       const list = byBatchMaterial.get(key) || []
@@ -935,12 +975,15 @@ console.log({
     const batchMaterials = [...new Set(batchProductionRows.map(row => normalize(row.material)).filter(Boolean))]
     const material = requestedMaterial || (batchMaterials.length === 1 ? batchMaterials[0] : '')
     const key = batchMaterialKey(batch, material)
-
+if (batch === '0000000101') {
+  alert(`KEY=${key}\nMaterial=${material}`)
+}
     const productionRows = material
       ? batchProductionRows.filter(row => normalize(row.material) === material)
       : batchProductionRows
 
     const qualityForBatchMaterial = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
+    console.log("Found quality records =", qualityForBatchMaterial.length)
     console.log("KEY =", key)
 console.log("QUALITY =", qualityForBatchMaterial)
     const deviationForBatchMaterial = key
