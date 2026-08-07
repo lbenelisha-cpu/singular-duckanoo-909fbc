@@ -817,6 +817,12 @@ const [selectedBatchOrder, setSelectedBatchOrder] = useState('')
 
     qualityRows.forEach(row => {
       const batch = normalize(row.batch)
+      console.log(
+  'QUALITY',
+  batch,
+  normalize(row.material),
+  normalize(row.order)
+)
       if (!batch) return
       const list = byBatch.get(batch) || []
       list.push(row)
