@@ -86,7 +86,7 @@ export default function App() {
       <UserRoundCheck size={19}/>{busy?'מתחבר...':'צפייה בלבד'}
     </button>
     <div className="guest-note"><ShieldCheck size={16}/> משתמש צפייה יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
-    <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.8.1 Build 1</small>
+    <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.8.2 Build 2</small>
   </form></div>
   if (session && profileLoading) return <div className="auth-page" dir="rtl"><div className="auth-card auth-loading"><div className="auth-icon"><ShieldCheck/></div><h1>בודק הרשאות משתמש...</h1><p>המערכת מאמתת את תפקיד המשתמש לפני טעינת הדשבורד.</p></div></div>
   if (session && !profile) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>לא נמצא פרופיל הרשאה</h1><p>יש להגדיר למשתמש פרופיל פעיל בטבלת profiles.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>

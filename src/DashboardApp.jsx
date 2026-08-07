@@ -38,8 +38,8 @@ const RESOURCE_LABELS = {
 const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
-const DB_KEY = 'sprint1181-build1'
-const BUILD_LABEL = 'Sprint 11.8.1 Build 1 — Mapping Control Center'
+const DB_KEY = 'sprint1182-build2-batch-material'
+const BUILD_LABEL = 'Sprint 11.8.2 Build 2 — Batch + Material Quality Engine'
 const isoDate = value => {
   if (!value) return ''
 
@@ -98,6 +98,11 @@ const idbClear = async () => {
 }
 
 const normalize = (v) => String(v ?? '').trim()
+const batchMaterialKey = (batch, material) => {
+  const b = normalize(batch)
+  const m = normalize(material)
+  return b && m ? `${b}|${m}` : ''
+}
 const normalizeRouting = (v) => normalize(v).toUpperCase()
 const resourceMeta = (facility, routingGroup) => RESOURCE_LABELS[`${facility}|${normalizeRouting(routingGroup)}`] || {}
 const planningName = (row) => row.resource || (row.routingGroup ? `מתקן ${row.facility} · ${row.station || row.routingGroup}${row.lineName ? ` · ${row.lineName}` : ''}` : `מתקן ${row.facility}`)
@@ -381,7 +386,6 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
   const [selectedBatch, setSelectedBatch] = useState('')
   const [selectedBatchMaterial, setSelectedBatchMaterial] = useState('')
-const [selectedBatchOrder, setSelectedBatchOrder] = useState('')
   const [selectedResource, setSelectedResource] = useState(null)
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
@@ -640,7 +644,15 @@ const [selectedBatchOrder, setSelectedBatchOrder] = useState('')
               getField(r, ['Sample Time', 'Sampling Time', 'Time of Sample', 'Time of Sampling', 'שעת דגימה', 'Inspection Time', 'Start Time of Inspection', 'Time']),
               getField(r, ['Sample Date Time', 'Sampling Date Time', 'Sample Datetime', 'Sampling Datetime', 'תאריך ושעת דגימה'])
             ),
-            batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, ['Material', 'Material #', 'Material Number', 'Material No.', 'מקט', 'מק"ט', 'מק״ט'])),
+            batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, [
+  'Material #',
+  'Material Number',
+  'Material No.',
+  'מקט',
+  'מק"ט',
+  'מק״ט',
+  'Material'
+])),
             order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])), status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
             approval: normalize(getField(r, ['QA Approval'])), inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
             characteristic: normalize(getField(r, ['Master Insp Charactristic', 'Master Inspection Characteristic'])),
@@ -794,46 +806,43 @@ const [selectedBatchOrder, setSelectedBatchOrder] = useState('')
   // scanned the 263K-row quality array several times and then filtered the whole
   // array again for every deviation, which froze the browser after the fast cache render.
   const qualityIndex = useMemo(() => {
-    const byBatch = new Map()
+    const byBatchMaterial = new Map()
     const rejected = new Map()
     const approved = new Map()
-    const material = new Map()
-    const latestByBatch = new Map()
-    const latestByBatchLot = new Map()
+    const latestByBatchMaterial = new Map()
+    const latestByBatchMaterialLot = new Map()
     const seenRejected = new Map()
     const seenApproved = new Map()
 
-    const addCharacteristic = (target, seenMap, batch, item) => {
-      if (!batch || !item.characteristic) return
+    const addCharacteristic = (target, seenMap, key, item) => {
+      if (!key || !item.characteristic) return
       const signature = `${item.characteristic}|${item.value}|${item.inspectionLot}`
-      let seen = seenMap.get(batch)
-      if (!seen) { seen = new Set(); seenMap.set(batch, seen) }
+      let seen = seenMap.get(key)
+      if (!seen) { seen = new Set(); seenMap.set(key, seen) }
       if (seen.has(signature)) return
       seen.add(signature)
-      const list = target.get(batch) || []
+      const list = target.get(key) || []
       list.push(item)
-      target.set(batch, list)
+      target.set(key, list)
     }
 
     qualityRows.forEach(row => {
-      const batch = normalize(row.batch)
-      console.log(
-  'QUALITY',
-  batch,
-  normalize(row.material),
-  normalize(row.order)
-)
-      if (!batch) return
-      const list = byBatch.get(batch) || []
+      const key = batchMaterialKey(row.batch, row.material)
+      if (!key) return
+
+      const list = byBatchMaterial.get(key) || []
       list.push(row)
-      byBatch.set(batch, list)
-      if (row.material && !material.has(batch)) material.set(batch, row.material)
+      byBatchMaterial.set(key, list)
 
       const timestamp = row.date ? new Date(row.date).getTime() : 0
-      if (timestamp > (latestByBatch.get(batch)?.timestamp || 0)) latestByBatch.set(batch, { timestamp, date: row.date })
+      if (timestamp > (latestByBatchMaterial.get(key)?.timestamp || 0)) {
+        latestByBatchMaterial.set(key, { timestamp, date: row.date })
+      }
       if (row.inspectionLot) {
-        const lotKey = `${batch}|${row.inspectionLot}`
-        if (timestamp > (latestByBatchLot.get(lotKey)?.timestamp || 0)) latestByBatchLot.set(lotKey, { timestamp, date: row.date })
+        const lotKey = `${key}|${normalize(row.inspectionLot)}`
+        if (timestamp > (latestByBatchMaterialLot.get(lotKey)?.timestamp || 0)) {
+          latestByBatchMaterialLot.set(lotKey, { timestamp, date: row.date })
+        }
       }
 
       const status = normalize(row.status || row.approval).toLowerCase()
@@ -849,109 +858,61 @@ const [selectedBatchOrder, setSelectedBatchOrder] = useState('')
         inspectionLot: row.inspectionLot,
         date: row.date,
       }
-      addCharacteristic(isRejected ? rejected : approved, isRejected ? seenRejected : seenApproved, batch, item)
+      addCharacteristic(isRejected ? rejected : approved, isRejected ? seenRejected : seenApproved, key, item)
     })
 
-    return { byBatch, rejected, approved, material, latestByBatch, latestByBatchLot }
+    return { byBatchMaterial, rejected, approved, latestByBatchMaterial, latestByBatchMaterialLot }
   }, [qualityRows])
 
-  const materialByBatch = useMemo(() => {
-    const map = new Map(qualityIndex.material)
-    prod.forEach(r => { if (r.batch && r.material && !map.has(r.batch)) map.set(r.batch, r.material) })
-    return map
-  }, [prod, qualityIndex])
-
   const enrichedDeviationRows = useMemo(() => deviationRows.map(row => {
-    const batch = normalize(row.batch)
-    const lotKey = row.inspectionLot ? `${batch}|${row.inspectionLot}` : ''
-    const sampleDate = (lotKey && qualityIndex.latestByBatchLot.get(lotKey)?.date) || qualityIndex.latestByBatch.get(batch)?.date || null
+    const key = batchMaterialKey(row.batch, row.material)
+    const lotKey = key && row.inspectionLot ? `${key}|${normalize(row.inspectionLot)}` : ''
+    const sampleDate = key
+      ? ((lotKey && qualityIndex.latestByBatchMaterialLot.get(lotKey)?.date) || qualityIndex.latestByBatchMaterial.get(key)?.date || null)
+      : null
     return {
       ...row,
       sampleDate,
-      material: row.material || materialByBatch.get(batch) || '',
-      rejectedCharacteristics: qualityIndex.rejected.get(batch) || [],
-      approvedCharacteristics: qualityIndex.approved.get(batch) || [],
+      rejectedCharacteristics: key ? (qualityIndex.rejected.get(key) || []) : [],
+      approvedCharacteristics: key ? (qualityIndex.approved.get(key) || []) : [],
     }
-  }), [deviationRows, materialByBatch, qualityIndex])
+  }), [deviationRows, qualityIndex])
 
-  // Batch intelligence is now assembled only after the user opens a batch.
-  // This avoids building a giant index for every batch during application startup.
+  // Plant rule: a quality record is uniquely identified by exact Batch + Material.
+  // Order, facility, routing group and inspection lot remain display fields only.
   const selectedBatchData = useMemo(() => {
-  const batch = normalize(selectedBatch)
-  if (!batch) return null
+    const batch = normalize(selectedBatch)
+    const requestedMaterial = normalize(selectedBatchMaterial)
+    if (!batch) return null
 
-  const productionRows = prod.filter(
-    row => normalize(row.batch) === batch
-  )
+    const batchProductionRows = prod.filter(row => normalize(row.batch) === batch)
+    const batchMaterials = [...new Set(batchProductionRows.map(row => normalize(row.material)).filter(Boolean))]
+    const material = requestedMaterial || (batchMaterials.length === 1 ? batchMaterials[0] : '')
+    const key = batchMaterialKey(batch, material)
 
-  const materials = new Set(
-    productionRows
-      .map(row => normalize(row.material))
-      .filter(Boolean)
-  )
+    const productionRows = material
+      ? batchProductionRows.filter(row => normalize(row.material) === material)
+      : batchProductionRows
 
-  const orders = new Set(
-    productionRows
-      .map(row => normalize(row.order))
-      .filter(Boolean)
-  )
-console.log('Production Materials', [...materials])
-console.log('Production Orders', [...orders])
-console.log('Quality Candidates', qualityIndex.byBatch.get(batch) || [])
+    const qualityForBatchMaterial = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
+    const deviationForBatchMaterial = key
+      ? enrichedDeviationRows.filter(row => batchMaterialKey(row.batch, row.material) === key)
+      : []
 
-  const qualityRows = (qualityIndex.byBatch.get(batch) || []).filter(row => {
-    const material = normalize(row.material)
-    const order = normalize(row.order)
-
-    if (materials.size > 0 && material) {
-      return materials.has(material)
+    return {
+      batch,
+      material,
+      production: productionRows,
+      quality: qualityForBatchMaterial,
+      deviations: deviationForBatchMaterial,
     }
+  }, [selectedBatch, selectedBatchMaterial, prod, qualityIndex, enrichedDeviationRows])
 
-    if (orders.size > 0 && order) {
-      return orders.has(order)
-    }
-
-    return false
-  })
-
-  const deviationRows = enrichedDeviationRows.filter(row => {
-    if (normalize(row.batch) !== batch) return false
-
-    const material = normalize(row.material)
-    const order = normalize(row.order)
-
-    if (materials.size > 0 && material) {
-      return materials.has(material)
-    }
-
-    if (orders.size > 0 && order) {
-      return orders.has(order)
-    }
-
-    return false
-  })
-
-  return {
-    batch,
-    production: productionRows,
-    quality: qualityRows,
-    deviations: deviationRows,
+  const openBatchCard = (batch, material = '') => {
+    if (!batch) return
+    setSelectedBatch(normalize(batch))
+    setSelectedBatchMaterial(normalize(material))
   }
-}, [
-  selectedBatch,
-  selectedBatchMaterial,
-  selectedBatchOrder,
-  prod,
-  qualityIndex,
-  enrichedDeviationRows,
-])
-  const openBatchCard = (batch, material = '', order = '') => {
-  if (!batch) return
-
-  setSelectedBatch(normalize(batch))
-  setSelectedBatchMaterial(normalize(material))
-  setSelectedBatchOrder(normalize(order))
-}
 
   const dataMonths = useMemo(() => [...new Set(prod.map(r => monthKey(r.date)).filter(Boolean))].sort(), [prod])
   const targetMonths = useMemo(() => [...new Set(targets.map(r => r.month).filter(Boolean))].sort(), [targets])
@@ -1518,7 +1479,7 @@ console.log('Quality Candidates', qualityIndex.byBatch.get(batch) || [])
         {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.unmatched + mappingSimulation.summary.duplicate})</button>}
         {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
-      {activeTab === 'production' && <section className="details"><h2>רשומות תפוקה אחרונות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>הזמנה</th><th>Batch</th><th>מק״ט חומר</th><th>תיאור חומר</th><th>כמות</th></tr></thead><tbody>{filtered.slice(-200).reverse().map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : ''}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material, r.order)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="9" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'production' && <section className="details"><h2>רשומות תפוקה אחרונות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>הזמנה</th><th>Batch</th><th>מק״ט חומר</th><th>תיאור חומר</th><th>כמות</th></tr></thead><tbody>{filtered.slice(-200).reverse().map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : ''}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="9" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
         <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מציג לאיזה יעד כל רשומת SAP נכנסת. בשורה בעייתית לחץ "שייך" כדי לראות את ההשפעה לפני שמירה.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
         {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
@@ -1536,11 +1497,11 @@ console.log('Quality Candidates', qualityIndex.byBatch.get(batch) || [])
       {mappingDialog && <div className="mapping-dialog-backdrop"><div className="mapping-dialog"><button className="mapping-dialog-close" onClick={() => setMappingDialog(null)}><X/></button><h2>שיוך חומר ליעד</h2><div className="mapping-source-card"><b>{mappingDialog.row.material || 'ללא מק״ט'}</b><span>{mappingDialog.row.desc || 'ללא תיאור'}</span><small>תחנה {mappingDialog.row.facility} · משפחה {mappingDialog.family} · כמות {fmt(mappingDialog.row.qty)}</small></div><label>בחר יעד<select value={mappingTargetKey} onChange={event => setMappingTargetKey(event.target.value)}><option value="">בחר יעד...</option>{mappingDialog.candidates.map(target => <option key={target.key} value={target.key}>{target.resource} — יעד {fmt(target.target)} — בוצע {fmt(target.actual)}</option>)}</select></label>{(() => { const target=mappingTargets.find(item => item.key===mappingTargetKey); if(!target) return null; const impacted=mappingSimulation.rows.filter(item => item.family===mappingDialog.family && productionMappingKey(item.row)===productionMappingKey(mappingDialog.row)); const qty=impacted.reduce((sum,item)=>sum+(Number(item.row.qty)||0),0); const before=target.actual||0; const after=before+qty; return <div className="mapping-impact"><h3>סימולציית השפעה</h3><div><span>כמות שתשויך</span><b>{fmt(qty)}</b></div><div><span>ביצוע לפני</span><b>{fmt(before)}</b></div><div><span>ביצוע אחרי</span><b>{fmt(after)}</b></div><div><span>עמידה ביעד</span><b>{target.target ? `${Math.round(before/target.target*100)}% → ${Math.round(after/target.target*100)}%` : 'ללא יעד'}</b></div><p>השינוי לא ישפיע על הדשבורד עד לאישור במרכז המיפויים.</p></div> })()}<button className="mapping-save-btn" disabled={!mappingTargetKey} onClick={savePendingMapping}><Save size={17}/> שמור כממתין לאישור</button></div></div>}
 
       {activeTab === 'shifts' && <section className="details shift-intelligence"><h2>ניתוח משמרות — בוקר, ערב ולילה</h2><p className="details-note">החלפות מוצר מזוהות לפי שינוי מק״ט באותו מתקן ו-Routing group. זמן המעבר הוא פער זמן משוער בין שני דיווחים עוקבים.</p><div className="shift-card-grid">{shiftAnalysis.map(item => <article className={`shift-analysis-card shift-${item.key}`} key={item.key}><div className="shift-card-head"><div><h3>{item.label}</h3><span>{item.hours}</span></div><strong>{fmt(item.total)}</strong></div><div className="shift-metrics"><div><span>קצב ממוצע לשעה</span><b>{fmt(item.avgPerHour)}</b></div><div><span>Orders</span><b>{item.orders}</b></div><div><span>Batch</span><b>{item.batches}</b></div><div><span>מק״טים</span><b>{item.materials}</b></div><div><span>החלפות מוצר</span><b>{item.changeovers.length}</b></div><div><span>חריגות איכות</span><b>{item.deviations}</b></div><div><span>ממוצע מעבר</span><b>{fmt(item.avgChangeover)} דק׳</b></div><div><span>תרומה לתפוקה</span><b>{pctFmt(item.share)}</b></div></div></article>)}</div><h3 className="shift-subtitle">פירוט החלפות מוצר</h3><div className="table-wrap"><table><thead><tr><th>משמרת</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>מוצר קודם</th><th>מוצר חדש</th><th>פער דיווח משוער</th></tr></thead><tbody>{shiftAnalysis.flatMap(item => item.changeovers.map((c,i) => <tr key={`${item.key}-${i}`}><td>{item.label}</td><td>{c.at?.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})}</td><td>{c.facility}</td><td>{c.routingGroup || '—'}</td><td>{c.fromMaterial}{c.fromDesc ? ` · ${c.fromDesc}` : ''}</td><td>{c.toMaterial}{c.toDesc ? ` · ${c.toDesc}` : ''}</td><td>{fmt(c.minutes)} דקות</td></tr>))}{!shiftAnalysis.some(item => item.changeovers.length) && <tr><td colSpan="7" className="empty">לא זוהו החלפות מוצר בטווח שנבחר</td></tr>}</tbody></table></div></section>}
-      {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material, r.order)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="8" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
-      {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch.</p><div className="table-wrap"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{iso(r.sampleDate) || '—'}</td><td>{r.sampleDate ? new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material, r.order)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="10" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="8" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch + מק״ט.</p><div className="table-wrap"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{iso(r.sampleDate) || '—'}</td><td>{r.sampleDate ? new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="10" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
     </main>
-    {selectedResource && <ResourceDetailModal resource={selectedResource} onClose={() => setSelectedResource(null)} onOpenBatch={batch => { setSelectedResource(null); openBatchCard(r.batch, r.material, r.order) }}/>}
-    {selectedBatchData && <BatchControlCard data={selectedBatchData} onClose={() => setSelectedBatch('')}/>}
+    {selectedResource && <ResourceDetailModal resource={selectedResource} onClose={() => setSelectedResource(null)} onOpenBatch={batch => { setSelectedResource(null); openBatchCard(batch) }}/>}
+    {selectedBatchData && <BatchControlCard data={selectedBatchData} onClose={() => { setSelectedBatch(''); setSelectedBatchMaterial('') }}/>}
   </div>
 }
 
