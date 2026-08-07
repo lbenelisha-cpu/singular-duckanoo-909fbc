@@ -941,6 +941,8 @@ console.log({
       : batchProductionRows
 
     const qualityForBatchMaterial = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
+    console.log("KEY =", key)
+console.log("QUALITY =", qualityForBatchMaterial)
     const deviationForBatchMaterial = key
       ? enrichedDeviationRows.filter(row => batchMaterialKey(row.batch, row.material) === key)
       : []
