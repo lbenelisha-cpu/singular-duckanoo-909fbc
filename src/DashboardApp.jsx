@@ -42,7 +42,7 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.0 Trial 10 — Original Target Workbook Download'
+const BUILD_LABEL = 'Sprint 11.9.0 Trial 12 — Unified Excel Upload'
 const isoDate = value => {
   if (!value) return ''
 
@@ -1529,13 +1529,20 @@ console.log("QUALITY =", qualityForBatchMaterial)
         return
       }
 
-      // Fallback only when this browser has never uploaded the original workbook.
-      const month=planningMonth||monthKey(new Date())
-      const resources=['EC (23)','LQ 1lt (42)','LQ 5 lt (42)','LQ 10/20 lt (42)','LQ 43','SC (28)','WG (19)','WG small packs (19)','24F128','24F','EC (25)','Diuron (40)','Tolurex (40)','CS (25,40)','Bromacil (25,40)','Galigan (25,40)','Propa Premix (25,40)','Fluorochloridon (25,40)','Saflufenacil Tech (25,40)','Metazachlor (41)','Atralone (41)','NANA (41)','D. Damascone (41)']
-      const rows=resources.map(Resource=>({Resource,Capacity:'',Plan:'',Production:'','% Achievement':'','Req. t/d':'','Last day':'','Adjusted Req. t/d':'','Actual t/d':'','%Rate':'','New Adherence':'','Recycling Plan':'',Recycled:'','For Packing':'','Restricted - recycling':'','Restricted – risk for disposal':'',Remarks:'','%':'',AVERAGE:''}))
-      const ws=XLSX.utils.json_to_sheet(rows,{origin:'A3'}); XLSX.utils.sheet_add_aoa(ws,[[new Date().toLocaleDateString('he-IL'),`Production Report ${month}`]],{origin:'A1'})
-      const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Monthly Targets'); XLSX.writeFile(wb,'IML_Monthly_Targets_Fallback.xlsx')
-      setStatus('לא נמצא עותק מקורי בדפדפן הזה — הורדה תבנית חלופית. טען פעם אחת את קובץ היעדים המקורי כדי לשמור אותו להורדה.')
+      // If no newer target workbook was uploaded in this browser, download
+      // the full approved master workbook bundled with the application.
+      const response = await fetch('/templates/IML_Targets_Master.xlsx', { cache:'no-store' })
+      if (!response.ok) throw new Error('קובץ תבנית היעדים המלא לא נמצא באפליקציה')
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = '26 דוח ביצוע SAP Aug.xlsx'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1500)
+      setStatus('הורדה תבנית היעדים המלאה. לאחר טעינת קובץ יעדים חדש, הכפתור יוריד את הקובץ האחרון שנטען.')
     } catch (error) {
       console.error('Target workbook download failed', error)
       setStatus(`הורדת קובץ היעדים נכשלה: ${error?.message || 'שגיאה לא ידועה'}`)
@@ -1635,9 +1642,8 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <div><h1>חדר בקרה — מתקני אריזה</h1><p>{BUILD_LABEL}</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
-          {canManageData && <label className={`upload target-upload ${busy ? 'disabled' : ''}`}><Target size={19}/>{busy ? 'טוען...' : 'טעינת יעדים חודשיים'}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; loadFiles(files, 'targets') }}/></label>}
           <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
-          <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת קובץ יעדים</button>
+          <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת תבנית יעדים</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
           {canManageData && <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label>}
