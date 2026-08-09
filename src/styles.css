@@ -157,3 +157,20 @@
 .mapping-impact{background:linear-gradient(135deg,#ecfeff,#f0fdf4);border:1px solid #a7f3d0;border-radius:14px;padding:15px;margin:14px 0}.mapping-impact h3{margin:0 0 10px}.mapping-impact>div{display:flex;justify-content:space-between;gap:14px;padding:8px 0;border-bottom:1px dashed #b7ddd1}.mapping-impact>div:last-of-type{border-bottom:0}.mapping-impact p{margin:10px 0 0;color:#52656e;font-size:13px}
 .mapping-center .table-wrap table{min-width:1150px}.mapping-timeline{margin-top:18px;border:1px solid #dbe5ec;border-radius:16px;padding:17px}.mapping-timeline h3{margin:0 0 13px}.mapping-timeline>div{display:grid;grid-template-columns:165px 100px 1fr 1.4fr;gap:10px;align-items:center;padding:10px 0;border-top:1px solid #edf2f5}.mapping-timeline>div:first-of-type{border-top:0}.mapping-timeline time,.mapping-timeline small{color:#64748b;font-size:12px}.mapping-timeline b{color:#0f766e}.mapping-timeline span{font-weight:700}
 @media(max-width:750px){.mapping-dialog{padding:18px}.mapping-timeline>div{grid-template-columns:1fr}.mapping-center .mapping-summary-grid{grid-template-columns:1fr 1fr}}
+
+
+
+/* Sprint 11.9.0 Trial 6 — target upload + print controls */
+.daily-print-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.daily-print-btn{white-space:nowrap}.target-upload{background:linear-gradient(135deg,#0f9f86,#1688a8);color:#fff;border:none}.target-upload:hover{filter:brightness(.97)}
+@media (max-width:900px){.daily-print-actions{width:100%;justify-content:space-between}.daily-print-btn{font-size:12px;padding:8px 10px}}
+
+
+/* Sprint 11.9.0 Trial 8 — sortable production table */
+.details-title-row{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.sortable-production-table thead th{padding:0}
+.sortable-production-table thead th button{width:100%;height:100%;padding:10px 8px;border:0;background:transparent;color:inherit;font:inherit;font-weight:800;cursor:pointer;white-space:nowrap}
+.sortable-production-table thead th button:hover{background:rgba(15,157,132,.10)}
+
+
+/* Sprint 11.9.0 Trial 9 — clean facility view controls */
+.facility-head-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:flex-end}.facility-view-filters{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.facility-view-filters button,.section-toggle{border:1px solid #d6e1e7;background:#fff;color:#36576a;border-radius:999px;padding:7px 11px;font:inherit;font-size:12px;font-weight:800;cursor:pointer}.facility-view-filters button:hover,.section-toggle:hover{background:#edf7f4;border-color:#9bd9cb}.facility-view-filters button.active{background:#0f8f78;border-color:#0f8f78;color:#fff}.section-toggle{border-radius:9px;background:#edf4f8}.facility-panel-head{gap:14px}.facility-panel-head>div:first-child{flex-shrink:0}@media(max-width:900px){.facility-panel-head,.facility-title{align-items:flex-start;flex-direction:column}.facility-head-actions{width:100%;justify-content:flex-start}.facility-view-filters{width:100%}.facility-view-filters button{flex:1;min-width:82px}.section-toggle{min-width:80px}}

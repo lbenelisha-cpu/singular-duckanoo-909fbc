@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer
 } from 'lucide-react'
 import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
@@ -19,16 +19,18 @@ const LEGACY_DAILY_TARGETS = {
 const FACILITY_ALIASES = {
   '1519': ['1519', '19', '19-F-01', '19-F-02'],
   '1521': ['1521', '21'],
-  '1523': ['1523', '43', '43-P-A', '43-P-B'],
+  '1523': ['1523', '23'],
   '1524': ['1524', '24'],
   '1525': ['1525', '25'],
   '1528': ['1528', '28'],
   '1540': ['1540', '40'],
   '1541': ['1541', '41'],
   '1542': ['1542', '42-P-01', 'T42A'],
-  '1543': ['1543', '42-P-03', 'T42B'],
+  '1543': ['1543', '43', '43-P-A', '43-P-B'],
+  '1142': ['1142'],
+  '1123': ['1123'],
 }
-const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1528', '1524', '1542', '1543']
+const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1521', '1528', '1524', '1542', '1543', '1142', '1123']
 const DEFAULT_FACILITIES = PRIMARY_FACILITIES
 const RESOURCE_LABELS = {
   '1542|LQ-P-1': { station: 'P-02', line: '1 ליטר' },
@@ -39,7 +41,7 @@ const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
-const BUILD_LABEL = 'Sprint 11.9.0 Trial 4 — Target Units Fix + Mapping Rules'
+const BUILD_LABEL = 'Sprint 11.9.0 Trial 8 — Clean Targets + UD Sorting'
 const isoDate = value => {
   if (!value) return ''
 
@@ -252,13 +254,17 @@ const targetFacilityIds = (resource) => {
   const upperText = text.toUpperCase()
   // Approved business mappings. EC(23) is intentionally mapped to station 1523.
   if (/^EC\s*\(23\)/i.test(text)) return ['1523']
+  if (/^EC\s*\(25\)/i.test(text)) return ['1525']
+  if (/^SHAKED\s+ISO\s+42$/i.test(text)) return ['1142']
+  if (/^SHAKED\s+ISO\s+23$/i.test(text)) return ['1123']
+  if (/^LQ\s*43\b/i.test(text)) return ['1543']
   if (/^SC\s*\(28\)/i.test(text)) return ['1528']
   if (/WG\s*SMALL\s+PACKS?\s*\(19\)/i.test(text) || /^WG\s*\(19\)/i.test(text)) return ['1519']
   if (/LQ\s*(1|5|10\s*\/\s*20)\s*(LT|L)/i.test(text)) return ['1542']
 
   const raw = (text.match(/\(([^)]+)\)/)?.[1] || (text.match(/\b(19|23|24|25|28|40|41|42|43)\b/g) || []).join(','))
   const plantIds = [...new Set(String(raw).match(/19|23|24|25|28|40|41|42|43/g) || [])]
-  const map = { '19':'1519','23':'1521','24':'1524','25':'1525','28':'1528','40':'1540','41':'1541','42':'1542','43':'1523' }
+  const map = { '19':'1519','23':'1523','24':'1524','25':'1525','28':'1528','40':'1540','41':'1541','42':'1542','43':'1543' }
   return plantIds.map(id => map[id]).filter(Boolean)
 }
 const targetDescriptionTokens = (resource) => {
@@ -272,7 +278,7 @@ const targetDescriptionTokens = (resource) => {
   return !clean || generic.has(clean) ? [] : [clean]
 }
 const APPROVED_TARGET_RESOURCES = new Set([
-  'EC (23)','LQ 1LT (42)','LQ 5 LT (42)','LQ 10/20 LT (42)','LQ 43','SC (28)','WG (19)','WG SMALL PACKS (19)',
+  'EC (23)','SHAKED ISO 42','SHAKED ISO 23','LQ 1LT (42)','LQ 5 LT (42)','LQ 10/20 LT (42)','LQ 43','SC (28)','WG (19)','WG SMALL PACKS (19)',
   '24F128','24F','EC (25)','DIURON (40)','TOLUREX (40)','CS (25,40)','BROMACIL (25,40)','GALIGAN (25,40)',
   'PROPA PREMIX (25,40)','FLUOROCHLORIDON (25,40)','SAFLUFENACIL TECH (25,40)','METAZACHLOR (41)',
   'ATRALONE (41)','NANA (41)','D. DAMASCONE (41)'
@@ -296,7 +302,14 @@ const normalizeStoredTargetRow = row => {
   }
   return { ...row, target:scaleLegacy(row?.target), capacity:scaleLegacy(row?.capacity) }
 }
-const normalizeStoredTargets = rows => (rows || []).map(normalizeStoredTargetRow)
+const isLegacyCombinedTarget = value => {
+  const text = normalize(value).toUpperCase().replace(/\s+/g,' ')
+  return /EC\s*\(\s*(23\s*,\s*25|25\s*,\s*23)\s*\)/.test(text) ||
+    /SHAKED\s+ISO\s*\(\s*(42\s*\+\s*23|42\s*\+\s*43)\s*\)/.test(text)
+}
+const normalizeStoredTargets = rows => (rows || [])
+  .map(normalizeStoredTargetRow)
+  .filter(row => !isLegacyCombinedTarget(row?.resource || row?.lineName || ''))
 
 
 const qualityRowKey = (row) => [
@@ -400,6 +413,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [to, setTo] = useState(initialToDate)
   const [selectedFacilities, setSelectedFacilities] = useState([])
   const [activeTab, setActiveTab] = useState('production')
+  const [productionSort, setProductionSort] = useState({ key:'date', direction:'desc' })
+  const [facilityViewMode, setFacilityViewMode] = useState('relevant')
+  const [showFacilityOverview, setShowFacilityOverview] = useState(true)
+  const [showMonthlyForecast, setShowMonthlyForecast] = useState(true)
   const [simulatorOnlyIssues, setSimulatorOnlyIssues] = useState(true)
   const [manualMappings, setManualMappings] = useState(() => readLocalJson(MAPPING_STORAGE_KEY, []))
   const [mappingTimeline, setMappingTimeline] = useState(() => readLocalJson(MAPPING_TIMELINE_KEY, []))
@@ -688,6 +705,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             upper: normalize(getField(r, ['Upper Specif Limit', 'Upper Spec Limit'])), unit: normalize(getField(r, ['Unit of Measurement'])),
             line: normalize(getField(r, ['Production Line'])), remarks: normalize(getField(r, ['Charactristic Remarks', 'Characteristic Remarks', 'Batch Remarks'])),
             qualitative: normalize(getField(r, ['Qualitative'])),
+            udCode: normalize(getField(r, ['UD Code', 'Usage Decision', 'Usage decision', 'החלטת שימוש'])),
           })).filter(r => r.batch || r.inspectionLot)
           setStatus(`בודק אילו רשומות איכות חדשות קיימות ב-${file.name}...`)
           setUploadProgress({ fileName:file.name, kind, phase:'dedupe', percent:0, message:'משווה מול נתוני האיכות הקיימים' })
@@ -704,28 +722,38 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         } else if (kind === 'deviations') {}
         else if (kind === 'targets') {
           const fallbackMonth = targetMonthFromTitle(file.name, new Date())
-          const parsed = rows.map(r => {
-            const resource = normalize(getField(r, ['Resource','משאב','1','Product','Line']))
-            const facilities = targetFacilityIds(resource)
-            const facility = facilities[0] || canonicalFacility(getField(r, ['Storage Location','Facility','מתקן']))
-            return {
-              resource, facility, facilities: facilities.length ? facilities : (facility ? [facility] : []),
-              facilityLabel:(resource.match(/\(([^)]+)\)/)?.[1]||'').trim(), descriptionTokens:targetDescriptionTokens(resource),
-              routingGroup:normalizeRouting(getField(r,['Routing group','Routing Group','RoutingGroup','קבוצת ניתוב'])),
-              station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
-              month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,
-              activity:normalize(getField(r,['Activity','Type','סוג פעילות','Production/Packaging']))||'ייצור / אריזה',
-              capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])) * 1000,
-              target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])) * 1000,
-              fileProduction:parseTargetNumber(getField(r,['Production','ייצור'])), fileAchievement:parseTargetNumber(getField(r,['% Achievement','Achievement'])),
-              requiredPerDay:parseTargetNumber(getField(r,['Req. t/d','Required t/d'])), lastDay:parseTargetNumber(getField(r,['Last day'])),
-              adjustedRequiredPerDay:parseTargetNumber(getField(r,['Adjusted Req. t/d'])), actualPerDay:parseTargetNumber(getField(r,['Actual t/d'])),
-              ratePercent:parseTargetNumber(getField(r,['%Rate','Rate'])), adherence:parseTargetNumber(getField(r,['New Adherence'])),
-              recyclingPlan:parseTargetNumber(getField(r,['Recycling Plan'])), recycled:parseTargetNumber(getField(r,['Recycled'])),
-              forPacking:parseTargetNumber(getField(r,['For Packing'])), restrictedRecycling:parseTargetNumber(getField(r,['Restricted - recycling'])),
-              restrictedDisposal:parseTargetNumber(getField(r,['Restricted – risk for disposal','Restricted - risk for disposal'])),
-              average:parseTargetNumber(getField(r,['AVERAGE','Average'])), notes:normalize(getField(r,['Notes','Remarks','הערות']))
+          const parsed = rows.flatMap(r => {
+            const sourceResource = normalize(getField(r, ['Resource','משאב','1','Product','Line']))
+            const makeTarget = (resource, overrides = {}) => {
+              const facilities = targetFacilityIds(resource)
+              const facility = facilities[0] || canonicalFacility(getField(r, ['Storage Location','Facility','מתקן']))
+              return {
+                resource, facility, facilities: facilities.length ? facilities : (facility ? [facility] : []),
+                facilityLabel:(resource.match(/\(([^)]+)\)/)?.[1]||'').trim(), descriptionTokens:targetDescriptionTokens(resource),
+                routingGroup:normalizeRouting(getField(r,['Routing group','Routing Group','RoutingGroup','קבוצת ניתוב'])),
+                station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
+                month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,
+                activity:normalize(getField(r,['Activity','Type','סוג פעילות','Production/Packaging']))||'ייצור / אריזה',
+                capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])) * 1000,
+                target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])) * 1000,
+                fileProduction:parseTargetNumber(getField(r,['Production','ייצור'])), fileAchievement:parseTargetNumber(getField(r,['% Achievement','Achievement'])),
+                requiredPerDay:parseTargetNumber(getField(r,['Req. t/d','Required t/d'])), lastDay:parseTargetNumber(getField(r,['Last day'])),
+                adjustedRequiredPerDay:parseTargetNumber(getField(r,['Adjusted Req. t/d'])), actualPerDay:parseTargetNumber(getField(r,['Actual t/d'])),
+                ratePercent:parseTargetNumber(getField(r,['%Rate','Rate'])), adherence:parseTargetNumber(getField(r,['New Adherence'])),
+                recyclingPlan:parseTargetNumber(getField(r,['Recycling Plan'])), recycled:parseTargetNumber(getField(r,['Recycled'])),
+                forPacking:parseTargetNumber(getField(r,['For Packing'])), restrictedRecycling:parseTargetNumber(getField(r,['Restricted - recycling'])),
+                restrictedDisposal:parseTargetNumber(getField(r,['Restricted – risk for disposal','Restricted - risk for disposal'])),
+                average:parseTargetNumber(getField(r,['AVERAGE','Average'])), notes:normalize(getField(r,['Notes','Remarks','הערות'])),
+                ...overrides
+              }
             }
+            if (/^SHAKED\s+ISO\s*\(42\+23\)$/i.test(sourceResource)) {
+              return [
+                makeTarget('Shaked iso 42', { facility:'1142', facilities:['1142'], station:'1142', capacity:0, target:0 }),
+                makeTarget('Shaked iso 23', { facility:'1123', facilities:['1123'], station:'1123', capacity:0, target:0 })
+              ]
+            }
+            return [makeTarget(sourceResource)]
           }).filter(r=>r.resource&&r.facilities.length&&isApprovedTargetResource(r.resource))
           if(!parsed.length) throw new Error(`${file.name}: לא נמצאו שורות יעד תקינות. ודא שקיימות עמודות Resource, Capacity ו-Plan.`)
           storedCount=parsed.length; rowsForCloud=parsed; if(parsed[0]?.month) setPlanningMonth(parsed[0].month)
@@ -860,7 +888,8 @@ const materialByBatchDescription = useMemo(() => {
 ])),
  order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])),
 status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
-inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #']))
+inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
+udCode: normalize(getField(r, ['UD Code', 'Usage Decision', 'Usage decision', 'החלטת שימוש']))
   })
 }), [quality, materialByBatchDescription])
 
@@ -1063,6 +1092,61 @@ console.log("QUALITY =", qualityForBatchMaterial)
     })
   }, [prod, from, to, query])
   const filtered = useMemo(() => baseFiltered.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility)), [baseFiltered, selectedFacilities])
+
+  const udByBatchMaterial = useMemo(() => {
+    const exact = new Map()
+    const byBatch = new Map()
+    const put = (row) => {
+      const batch = normalize(row?.batch)
+      const material = normalize(row?.material)
+      const ud = normalize(row?.udCode || row?.usageDecision)
+      if (!batch || !ud) return
+      if (material) exact.set(`${batch}|${material}`, ud)
+      if (!byBatch.has(batch)) byBatch.set(batch, ud)
+    }
+    qualityRows.forEach(put)
+    deviationRows.forEach(put)
+    return { exact, byBatch }
+  }, [qualityRows, deviationRows])
+
+  const productionUsageDecision = row => {
+    const batch = normalize(row?.batch)
+    const material = normalize(row?.material)
+    if (!batch) return '—'
+    return udByBatchMaterial.exact.get(`${batch}|${material}`) || udByBatchMaterial.byBatch.get(batch) || '—'
+  }
+
+  const productionSortValue = (row, key) => {
+    if (key === 'date') return row?.date ? new Date(row.date).getTime() : 0
+    if (key === 'ud') return productionUsageDecision(row)
+    if (key === 'facility') return normalize(row?.facility)
+    if (key === 'routingGroup') return normalize(row?.routingGroup)
+    if (key === 'order') return normalize(row?.order)
+    if (key === 'batch') return normalize(row?.batch)
+    if (key === 'material') return normalize(row?.material)
+    if (key === 'desc') return normalize(row?.desc)
+    if (key === 'qty') return Number(row?.qty) || 0
+    return ''
+  }
+
+  const sortedRecentProduction = useMemo(() => {
+    const rows = filtered.slice()
+    const { key, direction } = productionSort
+    const factor = direction === 'asc' ? 1 : -1
+    rows.sort((a,b) => {
+      const av = productionSortValue(a,key), bv = productionSortValue(b,key)
+      if (typeof av === 'number' && typeof bv === 'number') return (av-bv)*factor
+      return String(av).localeCompare(String(bv), 'he', { numeric:true, sensitivity:'base' }) * factor
+    })
+    return rows.slice(0,200)
+  }, [filtered, productionSort, udByBatchMaterial])
+
+  const toggleProductionSort = key => setProductionSort(current => ({
+    key,
+    direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
+  }))
+  const productionSortArrow = key => productionSort.key === key ? (productionSort.direction === 'asc' ? ' ↑' : ' ↓') : ' ↕'
+
 
   const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
   const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
@@ -1361,6 +1445,21 @@ console.log("QUALITY =", qualityForBatchMaterial)
       .sort((a,b)=>({risk:0,warning:1,good:2,'no-target':3}[a.state]-{risk:0,warning:1,good:2,'no-target':3}[b.state])||a.facility.localeCompare(b.facility))
   }, [planningRows, openDeviations])
 
+  const facilityViewMatches = row => {
+    if (facilityViewMode === 'target') return Number(row.target || 0) > 0
+    if (facilityViewMode === 'active') return Number(row.actual || 0) > 0
+    if (facilityViewMode === 'risk') return row.state === 'risk' || row.state === 'warning'
+    if (facilityViewMode === 'all') return true
+    return Number(row.target || 0) > 0 || Number(row.actual || 0) > 0
+  }
+  const visibleControlTowerFacilities = useMemo(() => controlTowerFacilities.filter(facilityViewMatches), [controlTowerFacilities, facilityViewMode])
+  const visiblePlanningRows = useMemo(() => planningRows.filter(facilityViewMatches), [planningRows, facilityViewMode])
+  const facilityViewFilters = <div className="facility-view-filters">
+    {[['relevant','יעד + פעילות'],['target','עם יעד'],['active','פעילים'],['risk','בסיכון'],['all','הכול']].map(([value,label]) =>
+      <button key={value} type="button" className={facilityViewMode === value ? 'active' : ''} onClick={() => setFacilityViewMode(value)}>{label}</button>
+    )}
+  </div>
+
   const controlTowerTrend = useMemo(() => {
     const byDay = new Map()
     prod.filter(row => monthKey(row.date) === planningMonth).forEach(row => {
@@ -1389,6 +1488,37 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const rows=resources.map(Resource=>({Resource,Capacity:'',Plan:'',Production:'','% Achievement':'','Req. t/d':'','Last day':'','Adjusted Req. t/d':'','Actual t/d':'','%Rate':'','New Adherence':'','Recycling Plan':'',Recycled:'','For Packing':'','Restricted - recycling':'','Restricted – risk for disposal':'',Remarks:'','%':'',AVERAGE:''}))
     const ws=XLSX.utils.json_to_sheet(rows,{origin:'A3'}); XLSX.utils.sheet_add_aoa(ws,[[new Date().toLocaleDateString('he-IL'),`Production Report ${month}`]],{origin:'A1'})
     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Monthly Targets'); XLSX.writeFile(wb,'IML_Monthly_Targets_Template.xlsx')
+  }
+
+  const openPrintReport = (title, subtitle, headers, rows) => {
+    const popup = window.open('', '_blank', 'width=1400,height=900')
+    if (!popup) { setStatus('הדפדפן חסם חלון הדפסה. יש לאפשר חלונות קופצים לאתר.'); return }
+    const esc = value => String(value ?? '').replace(/[&<>\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]))
+    const bodyRows = rows.map((row, index) => `<tr class="${esc(row._state || '')}"><td class="index">${index+1}</td>${headers.map(h => `<td>${esc(row[h.key])}</td>`).join('')}</tr>`).join('')
+    popup.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+      @page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,"Segoe UI",sans-serif;color:#16324a;margin:0;background:#f4f8fb}.sheet{background:white;padding:22px}.head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #159b83;padding-bottom:14px;margin-bottom:18px}.head h1{margin:0;font-size:28px}.head p{margin:5px 0 0;color:#64748b}.brand{font-weight:800;color:#159b83;font-size:19px}.summary{display:flex;gap:10px;margin:0 0 16px;flex-wrap:wrap}.chip{background:#eaf7f3;border:1px solid #c7eadf;padding:8px 12px;border-radius:12px;font-weight:700}table{width:100%;border-collapse:separate;border-spacing:0;font-size:11px;overflow:hidden;border:1px solid #dbe5ec;border-radius:12px}th{background:#173b57;color:white;padding:9px 6px}td{padding:8px 6px;border-bottom:1px solid #e6edf2;text-align:center}tr:nth-child(even) td{background:#f8fbfd}tr.good td,tr.achieved td{background:#effaf5}tr.warning td{background:#fff8e6}tr.risk td{background:#fff0f0}.index{font-weight:700;color:#64748b}.footer{margin-top:12px;color:#64748b;font-size:10px}@media print{body{background:white}.sheet{padding:0}.no-print{display:none}}
+    </style></head><body><div class="sheet"><div class="head"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="brand">IML CONTROL</div></div><div class="summary"><div class="chip">חודש: ${esc(planningMonth || '—')}</div><div class="chip">תאריך הדפסה: ${esc(new Date().toLocaleString('he-IL'))}</div><div class="chip">רשומות: ${rows.length}</div></div><table><thead><tr><th>#</th>${headers.map(h=>`<th>${esc(h.label)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table><div class="footer">דוח ניהולי — IML CONTROL</div></div><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`)
+    popup.document.close()
+  }
+
+  const printDailyManagement = () => openPrintReport(
+    'Daily Management — ניהול יומי',
+    'יעדים, ביצוע, תחזית וקצב נדרש לכל משאב פעיל',
+    [
+      {key:'resource',label:'משאב יעד'},{key:'station',label:'תחנה'},{key:'line',label:'קו / משאב'},
+      {key:'target',label:'יעד חודשי'},{key:'actual',label:'בפועל'},{key:'pct',label:'% ביצוע'},
+      {key:'remaining',label:'נותר'},{key:'days',label:'ימים נותרו'},{key:'required',label:'נדרש ליום'},
+      {key:'avg7',label:'ממוצע 7 ימים'},{key:'forecast',label:'תחזית'},{key:'status',label:'סטטוס'}
+    ],
+    planningRows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:r.station||r.facility,line:r.lineName||r.routingGroup||'—',target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),days:r.remainingWorkdays,required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),forecast:fmt(r.forecast),status:r.label}))
+  )
+
+  const printMonthlyTargets = () => {
+    const rows = targets.filter(t => !planningMonth || t.month === planningMonth)
+    openPrintReport('קובץ יעדים חודשי', 'תצוגת יעדים ושיוכי תחנות לצורך בקרה ועדכון', [
+      {key:'resource',label:'משאב / יעד'},{key:'station',label:'תחנה'},{key:'facilities',label:'מתקנים משויכים'},
+      {key:'target',label:'יעד חודשי'},{key:'capacity',label:'קיבולת'},{key:'notes',label:'הערות'}
+    ], rows.map(t => ({resource:t.resource||'—',station:t.station||t.facility||'—',facilities:(t.facilities||[t.facility]).filter(Boolean).join(', '),target:fmt(t.target),capacity:fmt(t.capacity),notes:t.notes||''})))
   }
 
   const clearAllData = async () => {
@@ -1453,6 +1583,8 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <div><h1>חדר בקרה — מתקני אריזה</h1><p>{BUILD_LABEL}</p></div>
         <div className="header-actions">
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
+          {canManageData && <label className={`upload target-upload ${busy ? 'disabled' : ''}`}><Target size={19}/>{busy ? 'טוען...' : 'טעינת יעדים חודשיים'}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; loadFiles(files, 'targets') }}/></label>}
+          <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
           <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
@@ -1484,17 +1616,17 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>
 
       <section className="tower-facility-section">
-        <div className="panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><span>{controlTowerFacilities.length} מתקנים במעקב</span></div>
-        <div className="tower-facility-grid">
-          {controlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => setSelectedResource(row)}>
+        <div className="panel-head facility-panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><div className="facility-head-actions">{facilityViewFilters}<span>{visibleControlTowerFacilities.length} מתקנים במעקב</span><button type="button" className="section-toggle" onClick={() => setShowFacilityOverview(v => !v)}>{showFacilityOverview ? 'הסתר' : 'הצג'}</button></div></div>
+        {showFacilityOverview && <div className="tower-facility-grid">
+          {visibleControlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => setSelectedResource(row)}>
             <div className="tower-facility-head"><div><i></i><strong>{row.facility}</strong></div><span>{row.state === 'good' ? 'תקין' : row.state === 'warning' ? 'דורש תשומת לב' : row.state === 'risk' ? 'בסיכון' : 'ללא יעד'}</span></div>
             <div className="tower-health"><div><HeartPulse/><span>Health Score</span></div><b>{row.healthScore}<small>/100</small></b></div>
             <div className="tower-progress"><i style={{width:`${Math.min(100,row.actualPct)}%`}}/></div>
             <dl><div><dt>יעד חודשי</dt><dd>{fmt(row.target)}</dd></div><div><dt>בוצע</dt><dd>{fmt(row.actual)}</dd></div><div><dt>תחזית</dt><dd>{fmt(row.forecast)}</dd></div><div><dt>פער צפוי</dt><dd className={row.gap >= 0 ? 'positive' : 'negative'}>{row.gap >= 0 ? '+' : ''}{fmt(row.gap)}</dd></div><div><dt>קצב נדרש</dt><dd>{fmt(row.requiredDaily)}</dd></div><div><dt>חריגות פתוחות</dt><dd>{row.deviationsCount}</dd></div></dl>
             <span className="tower-enter">לפרטים מלאים <ArrowLeft size={16}/></span>
           </button>)}
-          {!controlTowerFacilities.length && <div className="empty wide-empty">טען יעדים חודשיים ונתוני תפוקה כדי להפעיל את חדר הבקרה.</div>}
-        </div>
+          {!visibleControlTowerFacilities.length && <div className="empty wide-empty">אין מתקנים התואמים למסנן התצוגה.</div>}
+        </div>}
       </section>
 
       <section className="tower-lower-grid">
@@ -1515,7 +1647,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
 
       <section className="planning-toolbar">
         <div><Target/><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></div>
-        <small>היעד היומי אינו מוזן: הוא מחושב מחדש בכל יום לפי יתרת היעד וימי העבודה שנותרו.</small>
+        <small>היעד היומי אינו מוזן: הוא מחושב מחדש בכל יום לפי יתרת היעד והימים שנותרו בחודש.</small>
       </section>
 
       <section className="executive-strip executive-six">
@@ -1560,11 +1692,11 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <Summary title="איכות לא תקינה" value={qualityBad.length} sub="לפי קובץ האיכות" warn/>
       </section>
 
-      <div className="section-title facility-title"><div className="section-title-text"><Gauge/><div><h2>תחזית חודשית לפי מתקן</h2><p>יעד חודשי, קצב נדרש, קצב אחרון, שיא מוכח ותחזית</p></div></div><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת הכול' : 'בחירת כל המתקנים'}</button></div>
-      <section className="forecast-grid" id="planning-section">
-        {planningRows.map(row => <ForecastCard key={row.id} {...row} selected={(row.facilities || [row.facility]).some(id => selectedFacilities.includes(id))} onClick={() => setSelectedFacilities(row.facilities || [row.facility])}/>) }
-        {!planningRows.length && <div className="empty wide-empty">טען קובץ יעדים חודשי כדי להציג תחזית.</div>}
-      </section>
+      <div className="section-title facility-title"><div className="section-title-text"><Gauge/><div><h2>תחזית חודשית לפי מתקן</h2><p>יעד חודשי, קצב נדרש, קצב אחרון, שיא מוכח ותחזית</p></div></div><div className="facility-head-actions">{facilityViewFilters}<button type="button" className="section-toggle" onClick={() => setShowMonthlyForecast(v => !v)}>{showMonthlyForecast ? 'הסתר' : 'הצג'}</button><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת הכול' : 'בחירת כל המתקנים'}</button></div></div>
+      {showMonthlyForecast && <section className="forecast-grid" id="planning-section">
+        {visiblePlanningRows.map(row => <ForecastCard key={row.id} {...row} selected={(row.facilities || [row.facility]).some(id => selectedFacilities.includes(id))} onClick={() => setSelectedFacilities(row.facilities || [row.facility])}/>) }
+        {!visiblePlanningRows.length && <div className="empty wide-empty">אין מתקנים התואמים למסנן התצוגה.</div>}
+      </section>}
 
       <section className="alert-panel" id="alerts-section">
         <div className="panel-head"><div><BellRing/><h2>מה דורש תשומת לב היום?</h2></div><span>{alerts.length} התראות</span></div>
@@ -1575,10 +1707,10 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>
 
       <section className="daily-management">
-        <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><span>{planningMonth}</span></div>
-        <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימי עבודה נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
-          {planningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
-          {!planningRows.length && <tr><td colSpan="14" className="empty">אין יעדים לחודש הנבחר</td></tr>}
+        <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!planningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
+        <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימים נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
+          {visiblePlanningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+          {!visiblePlanningRows.length && <tr><td colSpan="14" className="empty">אין מתקנים התואמים למסנן התצוגה</td></tr>}
         </tbody></table></div>
       </section>
 
@@ -1598,7 +1730,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.unmatched + mappingSimulation.summary.duplicate})</button>}
         {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
-      {activeTab === 'production' && <section className="details"><h2>רשומות תפוקה אחרונות</h2><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>שעה</th><th>משאב יעד</th><th>מתקן / תחנה</th><th>הזמנה</th><th>Batch</th><th>מק״ט חומר</th><th>תיאור חומר</th><th>כמות</th></tr></thead><tbody>{filtered.slice(-200).reverse().map((r, i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? r.date.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'}) : ''}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="9" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span></div><div className="table-wrap"><table className="sortable-production-table"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="9" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
         <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מציג לאיזה יעד כל רשומת SAP נכנסת. בשורה בעייתית לחץ "שייך" כדי לראות את ההשפעה לפני שמירה.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
         {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
@@ -1641,7 +1773,7 @@ function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
       <header><div><span>RESOURCE CONTROL CENTER</span><h2>{resource.resource}</h2><p>{[resource.station && `Station ${resource.station}`, resource.description, resource.lineName].filter(Boolean).join(' · ')}</p></div><button onClick={onClose} aria-label="סגירה"><X/></button></header>
       <div className={`resource-status-banner ${resource.state}`}><strong>{resource.label}</strong><span>תחזית {fmt(resource.forecast)} מול יעד {fmt(resource.target)}</span></div>
       <div className="resource-detail-kpis">
-        <BatchMetric label="יעד חודשי" value={fmt(resource.target)}/><BatchMetric label="בוצע" value={fmt(resource.actual)}/><BatchMetric label="עמידה" value={pctFmt(resource.pct)}/><BatchMetric label="תחזית" value={fmt(resource.forecast)}/><BatchMetric label="קצב נדרש" value={fmt(resource.requiredDaily)}/><BatchMetric label="קצב אחרון" value={fmt(resource.recentAverage)}/><BatchMetric label="ימי עבודה נותרו" value={resource.remainingWorkdays}/><BatchMetric label="שיא מוכח" value={fmt(resource.provenMax)}/>
+        <BatchMetric label="יעד חודשי" value={fmt(resource.target)}/><BatchMetric label="בוצע" value={fmt(resource.actual)}/><BatchMetric label="עמידה" value={pctFmt(resource.pct)}/><BatchMetric label="תחזית" value={fmt(resource.forecast)}/><BatchMetric label="קצב נדרש" value={fmt(resource.requiredDaily)}/><BatchMetric label="קצב אחרון" value={fmt(resource.recentAverage)}/><BatchMetric label="ימים נותרו" value={resource.remainingWorkdays}/><BatchMetric label="שיא מוכח" value={fmt(resource.provenMax)}/>
       </div>
       <div className="resource-detail-progress"><div><span>התקדמות חודשית</span><b>{Math.round(progress)}%</b></div><i><em style={{width:`${progress}%`}}/></i></div>
       <div className="resource-detail-grid">

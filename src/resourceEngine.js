@@ -8,18 +8,15 @@ const isoDate = value => {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`
 }
 const monthOf = value => isoDate(value).slice(0, 7)
-const isWorkday = date => ![5, 6].includes(date.getDay())
+const isWorkday = date => true // All calendar days are operating days, including Friday and Saturday
 const daysInMonth = key => {
   const [year, month] = key.split('-').map(Number)
   return new Date(year, month, 0).getDate()
 }
 const workdayCount = (key, startDay = 1, endDay = daysInMonth(key)) => {
-  const [year, month] = key.split('-').map(Number)
-  let count = 0
-  for (let day = startDay; day <= endDay; day += 1) {
-    if (isWorkday(new Date(year, month - 1, day))) count += 1
-  }
-  return count
+  const first = Math.max(1, Number(startDay) || 1)
+  const last = Math.min(daysInMonth(key), Number(endDay) || daysInMonth(key))
+  return last >= first ? last - first + 1 : 0
 }
 
 const resourceCode = row => upper(`${row.routingGroup || ''} ${row.routingDescription || ''} ${row.resource || ''} ${row.line || ''}`)
@@ -37,10 +34,14 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   // Specific line/resource rules always win over broad station rules.
   if (/^SC\s*\(28\)/.test(targetName)) return station === '1528'
 
-  // LQ 43 has priority over the broad EC(23) station rule to avoid double counting.
+  // Correct facility mapping for EC, Shaked ISO and LQ43.
   const isLq43Resource = route.includes('43-P-A') || route.includes('43-P-B')
-  if (/^LQ\s*43\b/.test(targetName)) return isLq43Resource
-  if (/^EC\s*\(23\)/.test(targetName)) return station === '1523' && !isLq43Resource
+  if (/^LQ\s*43\b/.test(targetName)) return station === '1543' && isLq43Resource
+  if (/^EC\s*\(23\)/.test(targetName)) return station === '1523'
+  if (/^EC\s*\(25\)/.test(targetName)) return station === '1525'
+  if (/^SHAKED\s+ISO\s+42$/.test(targetName)) return station === '1142'
+  if (/^SHAKED\s+ISO\s+23$/.test(targetName)) return station === '1123'
+  if (/^PILOT\s*\(1521\)$/.test(targetName)) return station === '1521'
 
   // Facility 42: identify packaging line by the actual SAP Routing group.
   // Keep the previous 42-P-* aliases and Description text as fallbacks for older files.
@@ -101,7 +102,20 @@ const latestDate = monthRows.reduce((latest, row) => {
   const totalWorkdays = workdayCount(planningMonth)
   const remainingWorkdays = Math.max(0, totalWorkdays - elapsedWorkdays)
   const monthTargets = targets.filter(target => target.month === planningMonth)
-  const sourceRows = monthTargets.length ? monthTargets : fallbackFacilities.map(facility => ({ facility, facilities:[facility], resource:`מתקן ${facility}`, target:0, capacity:0, descriptionTokens:[] }))
+  const baseSourceRows = monthTargets.length ? [...monthTargets] : fallbackFacilities.map(facility => ({ facility, facilities:[facility], resource:`מתקן ${facility}`, target:0, capacity:0, descriptionTokens:[] }))
+  // Always surface the separately managed Pilot/Shaked stations when production exists,
+  // even when the monthly SUM file has no dedicated target row for them.
+  const standaloneStations = [
+    { facility:'1521', resource:'Pilot (1521)' },
+    { facility:'1142', resource:'Shaked iso 42' },
+    { facility:'1123', resource:'Shaked iso 23' },
+  ]
+  const sourceRows = [...baseSourceRows]
+  standaloneStations.forEach(item => {
+    const hasProduction = monthRows.some(row => upper(row.facility) === item.facility)
+    const alreadyExists = sourceRows.some(row => upper(row.resource) === upper(item.resource) || (row.facilities || [row.facility]).includes(item.facility))
+    if (hasProduction && !alreadyExists) sourceRows.push({ facility:item.facility, facilities:[item.facility], resource:item.resource, target:0, capacity:0, descriptionTokens:[], station:item.facility, lineName:item.resource })
+  })
 
   return sourceRows.map((targetRow, index) => {
     const rows = monthRows.filter(row => matchProductionToTarget(row, targetRow, manualMappings))
