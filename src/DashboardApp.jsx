@@ -41,7 +41,8 @@ const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
-const BUILD_LABEL = 'Sprint 11.9.0 Trial 8 — Clean Targets + UD Sorting'
+const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
+const BUILD_LABEL = 'Sprint 11.9.0 Trial 10 — Original Target Workbook Download'
 const isoDate = value => {
   if (!value) return ''
 
@@ -85,6 +86,25 @@ const idbSet = async (value) => {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(DB_STORE, 'readwrite')
     tx.objectStore(DB_STORE).put(value, DB_KEY)
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
+}
+const idbGetKey = async (key) => {
+  const db = await openDashboardDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, 'readonly')
+    const req = tx.objectStore(DB_STORE).get(key)
+    req.onsuccess = () => resolve(req.result || null)
+    req.onerror = () => reject(req.error)
+    tx.oncomplete = () => db.close()
+  })
+}
+const idbSetKey = async (key, value) => {
+  const db = await openDashboardDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, 'readwrite')
+    tx.objectStore(DB_STORE).put(value, key)
     tx.oncomplete = () => { db.close(); resolve() }
     tx.onerror = () => { db.close(); reject(tx.error) }
   })
@@ -649,6 +669,16 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       const loaded = []
       for (const file of files) {
         setStatus(`קורא את ${file.name}...`)
+        if (forcedKind === 'targets') {
+          const originalBuffer = await file.arrayBuffer()
+          await idbSetKey(TARGET_FILE_KEY, {
+            name: file.name,
+            type: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            lastModified: file.lastModified || Date.now(),
+            savedAt: new Date().toISOString(),
+            bytes: originalBuffer,
+          })
+        }
         const rows = forcedKind === 'targets' ? await readTargetWorkbook(file) : await readWorkbook(file)
         const detected = forcedKind === 'targets' ? 'targets' : classifyFile(rows)
         const kind = forcedKind || detected
@@ -1482,12 +1512,34 @@ console.log("QUALITY =", qualityForBatchMaterial)
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(openDeviations.map(r => ({ Date: iso(r.date), Facility: r.facility, Batch: r.batch, Material: r.material, Status: r.status, RejectedCount: r.rejectedCount, RejectedCharacteristics: r.rejectedCharacteristics.map(x => `${x.characteristic}: ${x.value || x.qualitative || '-'} (${[x.lower, x.upper].filter(v => v !== '').join('–')} ${x.unit || ''})`).join(' | '), ApprovedCharacteristics: r.approvedCharacteristics.map(x => `${x.characteristic}: ${x.value || x.qualitative || '-'} (${[x.lower, x.upper].filter(v => v !== '').join('–')} ${x.unit || ''})`).join(' | '), Remarks: r.remarks }))), 'Deviations')
     XLSX.writeFile(wb, `IML_Sprint8_Resource_Report_${new Date().toISOString().slice(0,10)}.xlsx`)
   }
-  const downloadTargetTemplate = () => {
-    const month=planningMonth||monthKey(new Date())
-    const resources=['EC (23)','LQ 1lt (42)','LQ 5 lt (42)','LQ 10/20 lt (42)','LQ 43','SC (28)','WG (19)','WG small packs (19)','24F128','24F','EC (25)','Diuron (40)','Tolurex (40)','CS (25,40)','Bromacil (25,40)','Galigan (25,40)','Propa Premix (25,40)','Fluorochloridon (25,40)','Saflufenacil Tech (25,40)','Metazachlor (41)','Atralone (41)','NANA (41)','D. Damascone (41)']
-    const rows=resources.map(Resource=>({Resource,Capacity:'',Plan:'',Production:'','% Achievement':'','Req. t/d':'','Last day':'','Adjusted Req. t/d':'','Actual t/d':'','%Rate':'','New Adherence':'','Recycling Plan':'',Recycled:'','For Packing':'','Restricted - recycling':'','Restricted – risk for disposal':'',Remarks:'','%':'',AVERAGE:''}))
-    const ws=XLSX.utils.json_to_sheet(rows,{origin:'A3'}); XLSX.utils.sheet_add_aoa(ws,[[new Date().toLocaleDateString('he-IL'),`Production Report ${month}`]],{origin:'A1'})
-    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Monthly Targets'); XLSX.writeFile(wb,'IML_Monthly_Targets_Template.xlsx')
+  const downloadTargetWorkbook = async () => {
+    try {
+      const stored = await idbGetKey(TARGET_FILE_KEY)
+      if (stored?.bytes) {
+        const blob = new Blob([stored.bytes], { type: stored.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = stored.name || `IML_Monthly_Targets_${planningMonth || monthKey(new Date())}.xlsx`
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 1500)
+        setStatus(`קובץ היעדים המקורי הורד — ניתן לערוך ב-Excel ולהטעין מחדש`)
+        return
+      }
+
+      // Fallback only when this browser has never uploaded the original workbook.
+      const month=planningMonth||monthKey(new Date())
+      const resources=['EC (23)','LQ 1lt (42)','LQ 5 lt (42)','LQ 10/20 lt (42)','LQ 43','SC (28)','WG (19)','WG small packs (19)','24F128','24F','EC (25)','Diuron (40)','Tolurex (40)','CS (25,40)','Bromacil (25,40)','Galigan (25,40)','Propa Premix (25,40)','Fluorochloridon (25,40)','Saflufenacil Tech (25,40)','Metazachlor (41)','Atralone (41)','NANA (41)','D. Damascone (41)']
+      const rows=resources.map(Resource=>({Resource,Capacity:'',Plan:'',Production:'','% Achievement':'','Req. t/d':'','Last day':'','Adjusted Req. t/d':'','Actual t/d':'','%Rate':'','New Adherence':'','Recycling Plan':'',Recycled:'','For Packing':'','Restricted - recycling':'','Restricted – risk for disposal':'',Remarks:'','%':'',AVERAGE:''}))
+      const ws=XLSX.utils.json_to_sheet(rows,{origin:'A3'}); XLSX.utils.sheet_add_aoa(ws,[[new Date().toLocaleDateString('he-IL'),`Production Report ${month}`]],{origin:'A1'})
+      const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Monthly Targets'); XLSX.writeFile(wb,'IML_Monthly_Targets_Fallback.xlsx')
+      setStatus('לא נמצא עותק מקורי בדפדפן הזה — הורדה תבנית חלופית. טען פעם אחת את קובץ היעדים המקורי כדי לשמור אותו להורדה.')
+    } catch (error) {
+      console.error('Target workbook download failed', error)
+      setStatus(`הורדת קובץ היעדים נכשלה: ${error?.message || 'שגיאה לא ידועה'}`)
+    }
   }
 
   const openPrintReport = (title, subtitle, headers, rows) => {
@@ -1585,7 +1637,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           {canManageData && <label className={`upload target-upload ${busy ? 'disabled' : ''}`}><Target size={19}/>{busy ? 'טוען...' : 'טעינת יעדים חודשיים'}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; loadFiles(files, 'targets') }}/></label>}
           <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
-          <button className="action secondary" onClick={downloadTargetTemplate}><FileSpreadsheet size={18}/> תבנית יעדים</button>
+          <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת קובץ יעדים</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
           {canManageData && <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label>}
