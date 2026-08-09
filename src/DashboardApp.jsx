@@ -39,7 +39,7 @@ const STORAGE_KEY = 'iml-control-center-sprint7'
 const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
-const BUILD_LABEL = 'Sprint 11.8.2 Build 2 — Batch + Material Quality Engine'
+const BUILD_LABEL = 'Sprint 11.9.0 Trial 4 — Target Units Fix + Mapping Rules'
 const isoDate = value => {
   if (!value) return ''
 
@@ -249,6 +249,13 @@ const targetMonthFromTitle = (value, fallbackDate = new Date()) => {
 }
 const targetFacilityIds = (resource) => {
   const text = normalize(resource)
+  const upperText = text.toUpperCase()
+  // Approved business mappings. EC(23) is intentionally mapped to station 1523.
+  if (/^EC\s*\(23\)/i.test(text)) return ['1523']
+  if (/^SC\s*\(28\)/i.test(text)) return ['1528']
+  if (/WG\s*SMALL\s+PACKS?\s*\(19\)/i.test(text) || /^WG\s*\(19\)/i.test(text)) return ['1519']
+  if (/LQ\s*(1|5|10\s*\/\s*20)\s*(LT|L)/i.test(text)) return ['1542']
+
   const raw = (text.match(/\(([^)]+)\)/)?.[1] || (text.match(/\b(19|23|24|25|28|40|41|42|43)\b/g) || []).join(','))
   const plantIds = [...new Set(String(raw).match(/19|23|24|25|28|40|41|42|43/g) || [])]
   const map = { '19':'1519','23':'1521','24':'1524','25':'1525','28':'1528','40':'1540','41':'1541','42':'1542','43':'1523' }
@@ -264,12 +271,33 @@ const targetDescriptionTokens = (resource) => {
   const generic = new Set(['EC','SC','WG','CS','LQ','24F'])
   return !clean || generic.has(clean) ? [] : [clean]
 }
+const APPROVED_TARGET_RESOURCES = new Set([
+  'EC (23)','LQ 1LT (42)','LQ 5 LT (42)','LQ 10/20 LT (42)','LQ 43','SC (28)','WG (19)','WG SMALL PACKS (19)',
+  '24F128','24F','EC (25)','DIURON (40)','TOLUREX (40)','CS (25,40)','BROMACIL (25,40)','GALIGAN (25,40)',
+  'PROPA PREMIX (25,40)','FLUOROCHLORIDON (25,40)','SAFLUFENACIL TECH (25,40)','METAZACHLOR (41)',
+  'ATRALONE (41)','NANA (41)','D. DAMASCONE (41)'
+])
+const isApprovedTargetResource = value => APPROVED_TARGET_RESOURCES.has(normalize(value).toUpperCase())
+
 const parseTargetNumber = (value) => {
   if (value === null || value === undefined || value === '' || /^\s*-+\s*$/.test(String(value)) || /DIV\/0/i.test(String(value))) return 0
   const text = String(value).trim(); const negative = /^\(.*\)$/.test(text)
   const n = Number(text.replace(/[(),%\s]/g,'').replace(/,/g,''))
   return Number.isFinite(n) ? (negative ? -n : n) : 0
 }
+
+// Sprint 11.9.0 Trial 4 — normalize legacy monthly targets.
+// SUM targets are expressed in thousands (t / m³), while production rows are L / kg.
+// New uploads are already multiplied by 1000; old cloud/cache rows are normalized here once in memory.
+const normalizeStoredTargetRow = row => {
+  const scaleLegacy = value => {
+    const n = Number(value) || 0
+    return n > 0 && n < 10000 ? n * 1000 : n
+  }
+  return { ...row, target:scaleLegacy(row?.target), capacity:scaleLegacy(row?.capacity) }
+}
+const normalizeStoredTargets = rows => (rows || []).map(normalizeStoredTargetRow)
+
 
 const qualityRowKey = (row) => [
   normalize(row?.inspectionLot), normalize(row?.batch), normalize(row?.material),
@@ -433,7 +461,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 }
       if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
       if (kind === 'deviations') setDeviations(rows)
-      if (kind === 'targets') setTargets(rows)
+      if (kind === 'targets') setTargets(normalizeStoredTargets(rows))
       setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
       return rows.length
     }
@@ -459,7 +487,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 )
           setQuality(cached.quality || [])
           setDeviations(cached.deviations || [])
-          setTargets(cached.targets || [])
+          setTargets(normalizeStoredTargets(cached.targets || []))
           setDataMeta(cached.dataMeta || { production:null, quality:null, deviations:null, targets:null })
           setStatus('מוצג מטמון מקומי — בודק עדכונים מהשרת...')
           setCloudState({ mode:'connecting', lastSync:cached.savedAt || null, message:'הדשבורד זמין; בודק גרסאות חדשות ברקע...', latencyMs:null, live:false })
@@ -545,7 +573,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 }
             if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
             if (kind === 'deviations') setDeviations(rows)
-            if (kind === 'targets') setTargets(rows)
+            if (kind === 'targets') setTargets(normalizeStoredTargets(rows))
             setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
             setCloudState(current => ({ ...current, mode:'cloud', live:true, lastSync:new Date().toISOString(), message:`עודכן ${kind} בלבד` }))
             setPerformance(current => ({ ...current, queries:current.queries + 1, rows:rows.length, phase:'עדכון חי' }))
@@ -698,7 +726,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               restrictedDisposal:parseTargetNumber(getField(r,['Restricted – risk for disposal','Restricted - risk for disposal'])),
               average:parseTargetNumber(getField(r,['AVERAGE','Average'])), notes:normalize(getField(r,['Notes','Remarks','הערות']))
             }
-          }).filter(r=>r.resource&&r.facilities.length&&(r.target>0||r.capacity>0||r.notes))
+          }).filter(r=>r.resource&&r.facilities.length&&isApprovedTargetResource(r.resource))
           if(!parsed.length) throw new Error(`${file.name}: לא נמצאו שורות יעד תקינות. ודא שקיימות עמודות Resource, Capacity ו-Plan.`)
           storedCount=parsed.length; rowsForCloud=parsed; if(parsed[0]?.month) setPlanningMonth(parsed[0].month)
         } else throw new Error(`${file.name}: סוג הקובץ לא זוהה. השתמש באזור הטעינה המתאים במרכז הנתונים.`)
@@ -716,7 +744,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         if (kind === 'production') setProduction(rowsForCloud)
         else if (kind === 'quality') setQuality(current => [...current, ...rowsForCloud])
         else if (kind === 'deviations') setDeviations(rowsForCloud)
-        else if (kind === 'targets') setTargets(rowsForCloud)
+        else if (kind === 'targets') setTargets(normalizeStoredTargets(rowsForCloud))
         setDataMeta(current => ({ ...current, [kind]: savedMeta }))
         setCloudState({ mode:'cloud', lastSync:savedMeta.loadedAt, message:'מחובר ומסונכרן עם Supabase', latencyMs:cloudState.latencyMs, live:true })
         loaded.push(`${file.name}: ${fmt(storedCount)} רשומות בענן`)

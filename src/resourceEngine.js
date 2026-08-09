@@ -22,16 +22,44 @@ const workdayCount = (key, startDay = 1, endDay = daysInMonth(key)) => {
   return count
 }
 
+const resourceCode = row => upper(`${row.routingGroup || ''} ${row.routingDescription || ''} ${row.resource || ''} ${row.line || ''}`)
+const isSmallPack19 = row => ['19PWG-01','19PWG-05','19PWG-15'].some(code => resourceCode(row).includes(code))
+
 const matchProductionToTarget = (row, target, manualMappings = []) => {
   const manualDecision = mappingMatchesTarget(row, target, manualMappings)
   if (manualDecision !== null) return manualDecision
+
+  const targetName = upper(target.resource)
+  const station = upper(row.facility)
+  const route = resourceCode(row)
+
+  // Sprint 11.9.0 — business rules approved for monthly targets.
+  // Specific line/resource rules always win over broad station rules.
+  if (/^SC\s*\(28\)/.test(targetName)) return station === '1528'
+
+  // LQ 43 has priority over the broad EC(23) station rule to avoid double counting.
+  const isLq43Resource = route.includes('43-P-A') || route.includes('43-P-B')
+  if (/^LQ\s*43\b/.test(targetName)) return isLq43Resource
+  if (/^EC\s*\(23\)/.test(targetName)) return station === '1523' && !isLq43Resource
+
+  // Facility 42: identify packaging line by the actual SAP Routing group.
+  // Keep the previous 42-P-* aliases and Description text as fallbacks for older files.
+  const isFacility42Zfin = station === '1542' && upper(row.orderType).includes('ZFIN')
+  const lq1 = route.includes('LQ-P-1') || route.includes('42-P-02') || route.includes('LIQUID 1 LITER')
+  const lq5 = route.includes('LQ-P-5') || route.includes('42-P-03') || route.includes('LIQUID 5 LITER')
+  const lq1020 = route.includes('LQ-P-10') || route.includes('42-P-04') || route.includes('LIQUID 10/20 LITER')
+  if (/LQ\s*1\s*(LT|L)\b/.test(targetName)) return isFacility42Zfin && lq1
+  if (/LQ\s*5\s*(LT|L)\b/.test(targetName)) return isFacility42Zfin && lq5
+  if (/LQ\s*10\s*\/\s*20/.test(targetName)) return isFacility42Zfin && lq1020
+
+  if (/WG\s*SMALL\s+PACKS?\s*\(19\)/.test(targetName)) return station === '1519' && isSmallPack19(row)
+  if (/^WG\s*\(19\)/.test(targetName)) return station === '1519' && !isSmallPack19(row)
 
   const facilities = target.facilities?.length ? target.facilities : [target.facility].filter(Boolean)
   const rowFamily = stationFamily(row.facility)
   const targetFamilies = facilities.map(stationFamily)
   if (!targetFamilies.includes(rowFamily)) return false
 
-  // מתקן 42 נשאר במסלול הקיים והנעול.
   if (rowFamily === '1542' && !upper(row.orderType).includes('ZFIN')) return false
   if (target.routingGroup && upper(row.routingGroup) !== upper(target.routingGroup)) return false
   const tokens = (target.descriptionTokens || []).map(upper).filter(Boolean)
