@@ -275,6 +275,8 @@ const targetFacilityIds = (resource) => {
   // Approved business mappings. EC(23) is intentionally mapped to station 1523.
   if (/^EC\s*\(23\)/i.test(text)) return ['1523']
   if (/^EC\s*\(25\)/i.test(text)) return ['1525']
+  // Bromacil is produced under station 1540. Product membership comes from the DATA sheet.
+  if (/^BROMACIL\s*\(25\s*,\s*40\)/i.test(text)) return ['1540']
   if (/^SHAKED\s+ISO\s+42$/i.test(text)) return ['1142']
   if (/^SHAKED\s+ISO\s+23$/i.test(text)) return ['1123']
   if (/^LQ\s*43\b/i.test(text)) return ['1543']
@@ -362,17 +364,50 @@ async function filterNewQualityRows(existingRows, incomingRows, onProgress) {
 }
 
 async function readTargetWorkbook(file) {
-  const buf = await file.arrayBuffer(); const wb = XLSX.read(buf, { type:'array', cellDates:true, dense:true }); const output = []
+  const buf = await file.arrayBuffer()
+  const wb = XLSX.read(buf, { type:'array', cellDates:true, dense:true })
+  const output = []
+
+  // The DATA sheet is the product master. Build Family -> Item Code dynamically.
+  // Packaging facilities 1542 and 1519 intentionally keep their existing routing logic.
+  const materialsByFamily = new Map()
   for (const sheetName of wb.SheetNames) {
     const matrix = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:'', raw:true })
     if (!matrix.length) continue
-    const titleText = matrix.slice(0,3).flat().map(normalize).join(' '); const fallbackMonth = targetMonthFromTitle(`${titleText} ${file.name}`, new Date())
+    const headerIndex = matrix.findIndex(row => {
+      const keys = row.map(normKey)
+      return keys.includes(normKey('Item Code')) && keys.includes(normKey('Family'))
+    })
+    if (headerIndex < 0) continue
+    const header = matrix[headerIndex].map(normalize)
+    const itemCodeIndex = header.findIndex(value => normKey(value) === normKey('Item Code'))
+    const familyIndex = header.findIndex(value => normKey(value) === normKey('Family'))
+    if (itemCodeIndex < 0 || familyIndex < 0) continue
+    matrix.slice(headerIndex + 1).forEach(row => {
+      const material = normalize(row[itemCodeIndex])
+      const family = normalize(row[familyIndex]).toUpperCase()
+      if (!material || !family || family === '#N/A') return
+      const list = materialsByFamily.get(family) || new Set()
+      list.add(material)
+      materialsByFamily.set(family, list)
+    })
+  }
+
+  for (const sheetName of wb.SheetNames) {
+    const matrix = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:'', raw:true })
+    if (!matrix.length) continue
+    const titleText = matrix.slice(0,3).flat().map(normalize).join(' ')
+    const fallbackMonth = targetMonthFromTitle(`${titleText} ${file.name}`, new Date())
     const headerIndex = matrix.findIndex(row => { const keys=row.map(normKey); return keys.some(k=>k==='capacity') && keys.some(k=>k==='plan') })
     if (headerIndex < 0) continue
     const header = matrix[headerIndex].map((v,i)=>normalize(v)||(i===0?'Resource':`Column_${i+1}`))
     for (const row of matrix.slice(headerIndex+1)) {
       const resource=normalize(row[0]); if(!resource||/^total$/i.test(resource)) continue
-      const item={__sheet:sheetName,Resource:resource,Month:fallbackMonth}; header.forEach((key,i)=>{item[key]=row[i]??''}); output.push(item)
+      const familyName = resource.replace(/\([^)]*\)/g, '').trim().toUpperCase()
+      const protectedPackaging = /LQ\s*(1|5|10\s*\/\s*20)\s*(LT|L)/i.test(resource) || /WG/i.test(resource)
+      const familyMaterials = protectedPackaging ? [] : [...(materialsByFamily.get(familyName) || [])]
+      const item={__sheet:sheetName,Resource:resource,Month:fallbackMonth,__family:familyName,__materials:familyMaterials}
+      header.forEach((key,i)=>{item[key]=row[i]??''}); output.push(item)
     }
   }
   return output
@@ -760,6 +795,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               return {
                 resource, facility, facilities: facilities.length ? facilities : (facility ? [facility] : []),
                 facilityLabel:(resource.match(/\(([^)]+)\)/)?.[1]||'').trim(), descriptionTokens:targetDescriptionTokens(resource),
+                productFamily:normalize(r.__family), materials:Array.isArray(r.__materials) ? r.__materials.map(normalize).filter(Boolean) : [],
                 routingGroup:normalizeRouting(getField(r,['Routing group','Routing Group','RoutingGroup','קבוצת ניתוב'])),
                 station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
                 month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,

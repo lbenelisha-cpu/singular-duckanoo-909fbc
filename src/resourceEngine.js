@@ -56,6 +56,31 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   if (/WG\s*SMALL\s+PACKS?\s*\(19\)/.test(targetName)) return station === '1519' && isSmallPack19(row)
   if (/^WG\s*\(19\)/.test(targetName)) return station === '1519' && !isSmallPack19(row)
 
+  // Bromacil: production is reported under station 1540.
+  // Prefer the DATA-sheet Item Code list when it is present on the target row.
+  // The BRMC fallback keeps legacy/cached target rows working until the DATA mapping
+  // is refreshed. Both ZFIN and ZSEM are valid for this production family.
+  if (/^BROMACIL\b/.test(targetName)) {
+    if (station !== '1540') return false
+    const orderType = upper(row.orderType)
+    if (orderType && !orderType.includes('ZFIN') && !orderType.includes('ZSEM')) return false
+
+    const targetMaterials = new Set((target.materials || []).map(upper).filter(Boolean))
+    if (targetMaterials.size) return targetMaterials.has(upper(row.material))
+
+    const bromacilText = upper(`${row.desc || ''} ${row.routingDescription || ''}`)
+    return /(^|\s)BRMC\d*/.test(bromacilText) || bromacilText.includes('BROMACIL')
+  }
+
+  // Production families: DATA sheet Item Codes are the source of truth.
+  // 1542 and 1519 are handled above and are deliberately excluded from this mechanism.
+  const targetMaterials = new Set((target.materials || []).map(upper).filter(Boolean))
+  if (targetMaterials.size) {
+    const facilities = target.facilities?.length ? target.facilities : [target.facility].filter(Boolean)
+    if (!facilities.map(upper).includes(station)) return false
+    return targetMaterials.has(upper(row.material))
+  }
+
   const facilities = target.facilities?.length ? target.facilities : [target.facility].filter(Boolean)
   const rowFamily = stationFamily(row.facility)
   const targetFamilies = facilities.map(stationFamily)
