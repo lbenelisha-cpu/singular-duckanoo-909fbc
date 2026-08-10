@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2
 } from 'lucide-react'
 import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
@@ -490,6 +490,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
   const [perfStats, setPerformance] = useState({ startedAt:0, cache:'MISS', queries:0, rows:0, loadMs:0, phase:'אתחול' })
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('iml-ui-sidebar-collapsed') === '1')
+  const [managementMode, setManagementMode] = useState(() => localStorage.getItem('iml-ui-management-mode') === '1')
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+
+  useEffect(() => { localStorage.setItem('iml-ui-sidebar-collapsed', sidebarCollapsed ? '1' : '0') }, [sidebarCollapsed])
+  useEffect(() => { localStorage.setItem('iml-ui-management-mode', managementMode ? '1' : '0') }, [managementMode])
 
   useEffect(() => { localStorage.setItem(MAPPING_STORAGE_KEY, JSON.stringify(manualMappings)) }, [manualMappings])
   useEffect(() => { localStorage.setItem(MAPPING_TIMELINE_KEY, JSON.stringify(mappingTimeline.slice(0,500))) }, [mappingTimeline])
@@ -1658,8 +1664,9 @@ console.log("QUALITY =", qualityForBatchMaterial)
     setSelectedFacilities(current => current.filter(x => x !== id))
   }
 
-  return <div className="dashboard" dir="rtl">
+  return <div className={`dashboard ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${managementMode ? 'management-mode' : ''}`} dir="rtl">
     <aside className="side filter-side">
+      <button type="button" className="side-collapse-button" onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'פתיחת מסננים' : 'כיווץ מסננים'}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}</button>
       <div className="brand branded"><img src="/icons/mark-128.png" alt="IML"/><div>IML<span>CONTROL</span></div></div>
       <div className="side-filter-title"><Search size={18}/><strong>חיפוש וסינון</strong></div>
       <label className="side-field"><span>Quick Search</span><div><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Order, Batch, חומר..."/></div></label>
@@ -1677,6 +1684,10 @@ console.log("QUALITY =", qualityForBatchMaterial)
       <header className="header">
         <div><h1>חדר בקרה — מתקני אריזה</h1><p>{BUILD_LABEL}</p></div>
         <div className="header-actions">
+          <div className="ui-refresh-controls">
+            <button type="button" className="action ui-control" onClick={() => setSidebarCollapsed(v => !v)}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}<span>{sidebarCollapsed ? 'פתח מסננים' : 'כווץ מסננים'}</span></button>
+            <button type="button" className={`action ui-control ${managementMode ? 'active' : ''}`} onClick={() => setManagementMode(v => !v)}>{managementMode ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}<span>{managementMode ? 'יציאה ממצב ניהולי' : 'מצב ניהולי'}</span></button>
+          </div>
           <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
           <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת תבנית יעדים</button>
@@ -1687,15 +1698,41 @@ console.log("QUALITY =", qualityForBatchMaterial)
         </div>
       </header>
 
-      <div className="load-status"><CheckCircle2 size={18}/>{status}</div>
-      {canManageData && <div className="performance-strip"><Activity size={16}/><b>Build 3 Diagnostics</b><span>Cache: {perfStats.cache}</span><span>Queries: {perfStats.queries}</span><span>Production: {production.length.toLocaleString()}</span><span>Quality: {quality.length.toLocaleString()}</span><span>In range: {(filtered.length + filteredQualityRows.length + filteredDeviationRows.length).toLocaleString()}</span><span>Load: {perfStats.loadMs ? `${perfStats.loadMs}ms` : perfStats.phase}</span><span>Range: {from}–{to}</span></div>}
+      <section className="top-status-bar" aria-label="סטטוס מערכת">
+        <div className={`top-status-item cloud ${cloudState.mode}`}><span className="status-dot"></span><small>ענן</small><b>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר' : 'מקומי'}</b></div>
+        <div className="top-status-item"><small>עדכון אחרון</small><b>{cloudState.lastSync ? new Date(cloudState.lastSync).toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'}) : '—'}</b></div>
+        <div className="top-status-item"><small>חודש פעיל</small><b>{planningMonth || '—'}</b></div>
+        <div className="top-status-item"><small>תפוקה</small><b>{fmt(production.length)}</b></div>
+        <div className="top-status-item"><small>איכות</small><b>{fmt(quality.length + deviations.length)}</b></div>
+        <div className="top-status-item range"><small>טווח</small><b>{from || '—'} → {to || '—'}</b></div>
+        {canManageData && <button type="button" className={`diagnostics-toggle ${diagnosticsOpen ? 'active' : ''}`} onClick={() => setDiagnosticsOpen(v => !v)} title="אבחון מערכת"><Activity size={16}/><span>אבחון</span></button>}
+      </section>
+
+      {(busy || cloudState.mode !== 'cloud' || /נכשל|שגיאה|ממתין|מתחבר|בודק|טוען|לא זמין/.test(status)) && <div className={`load-status compact ${cloudState.mode === 'error' || /נכשל|שגיאה/.test(status) ? 'error' : ''}`}><CheckCircle2 size={17}/>{status}</div>}
       {uploadProgress && <section className="upload-progress-card"><div className="upload-progress-head"><strong>{uploadProgress.fileName}</strong><span>{uploadProgress.percent}%</span></div><div className="upload-progress-track"><div style={{width:`${uploadProgress.percent}%`}}/></div><small>{uploadProgress.message}</small></section>}
 
-      <section className={`cloud-status ${cloudState.mode}`}>
+      {canManageData && diagnosticsOpen && <section className="diagnostics-panel">
+        <div className="diagnostics-panel-head"><div><Activity size={18}/><strong>אבחון מערכת</strong></div><button type="button" onClick={() => setDiagnosticsOpen(false)}><X size={16}/> סגור</button></div>
+        <div className="diagnostics-grid">
+          <article><small>Cache</small><b>{perfStats.cache}</b></article>
+          <article><small>Queries</small><b>{perfStats.queries}</b></article>
+          <article><small>Production</small><b>{production.length.toLocaleString()}</b></article>
+          <article><small>Quality</small><b>{quality.length.toLocaleString()}</b></article>
+          <article><small>In range</small><b>{(filtered.length + filteredQualityRows.length + filteredDeviationRows.length).toLocaleString()}</b></article>
+          <article><small>Load</small><b>{perfStats.loadMs ? `${perfStats.loadMs}ms` : perfStats.phase}</b></article>
+          <article><small>Data source</small><b>{cloudState.mode === 'cloud' ? 'Supabase' : 'Browser Cache'}</b></article>
+          <article><small>Realtime</small><b>{cloudState.live ? 'פעיל' : 'לא פעיל'}</b></article>
+          <article><small>Latency</small><b>{cloudState.latencyMs != null ? `${cloudState.latencyMs}ms` : '—'}</b></article>
+          <article className="wide"><small>Range</small><b>{from || '—'} → {to || '—'}</b></article>
+          <article className="wide"><small>Last sync</small><b>{cloudState.lastSync ? new Date(cloudState.lastSync).toLocaleString('he-IL') : '—'}</b></article>
+        </div>
+      </section>}
+
+      {cloudState.mode !== 'cloud' && <section className={`cloud-status ${cloudState.mode}`}>
         <div className="cloud-status-icon">{cloudState.mode === 'offline' ? <WifiOff/> : <Cloud/>}</div>
-        <div><strong>{cloudState.mode === 'cloud' ? 'מערכת פעילה בענן' : cloudState.mode === 'connecting' ? 'מתחבר לענן' : cloudState.mode === 'offline' ? 'מצב מקומי זמני' : 'שגיאת סנכרון'}</strong><span>{cloudState.message}</span></div>
-        <div className="cloud-status-meta"><small>מקור נתונים</small><b>{cloudState.mode === 'cloud' ? 'Supabase' : 'Browser Cache'}</b><small>{cloudState.live ? '● עדכון חי פעיל' : '○ עדכון חי לא פעיל'}</small>{cloudState.latencyMs != null && <small>זמן תגובה: {cloudState.latencyMs}ms</small>}{cloudState.lastSync && <small>סנכרון: {new Date(cloudState.lastSync).toLocaleString('he-IL')}</small>}</div>
-      </section>
+        <div><strong>{cloudState.mode === 'connecting' ? 'מתחבר לענן' : cloudState.mode === 'offline' ? 'מצב מקומי זמני' : 'שגיאת סנכרון'}</strong><span>{cloudState.message}</span></div>
+        <div className="cloud-status-meta"><small>מקור נתונים</small><b>{cloudState.mode === 'offline' ? 'Browser Cache' : 'Supabase'}</b><small>{cloudState.live ? '● עדכון חי פעיל' : '○ עדכון חי לא פעיל'}</small>{cloudState.latencyMs != null && <small>זמן תגובה: {cloudState.latencyMs}ms</small>}{cloudState.lastSync && <small>סנכרון: {new Date(cloudState.lastSync).toLocaleString('he-IL')}</small>}</div>
+      </section>}
 
 
       <section className="control-tower-hero">
