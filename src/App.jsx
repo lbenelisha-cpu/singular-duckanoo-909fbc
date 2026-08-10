@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { LockKeyhole, Mail, ShieldCheck, AlertCircle, Cloud, Eye, EyeOff, UserRoundCheck } from 'lucide-react'
 import DashboardApp from './DashboardApp'
 import { cloudConfigured, configurationError, supabase, supabaseUrl, testSupabaseConnection, urlWasNormalized } from './supabase'
@@ -16,33 +16,86 @@ export default function App() {
   const [connectionStatus, setConnectionStatus] = useState(null)
   const [publicViewer, setPublicViewer] = useState(false)
 
-  useEffect(() => {
-    if (!cloudConfigured || configurationError) return
-    testSupabaseConnection().then(setConnectionStatus)
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null))
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession))
-    return () => data.subscription.unsubscribe()
-  }, [])
+  const sessionRef = useRef(null)
 
   useEffect(() => {
-    if (!session?.user || !cloudConfigured) { setProfile(null); setProfileLoading(false); return }
+    if (!cloudConfigured || configurationError) return
+    let active = true
+
+    testSupabaseConnection().then(result => { if (active) setConnectionStatus(result) })
+
+    const applySession = (nextSession, event = '') => {
+      if (!active) return
+
+      if (!nextSession) {
+        sessionRef.current = null
+        setSession(null)
+        setProfile(null)
+        setProfileLoading(false)
+        return
+      }
+
+      const previousUserId = sessionRef.current?.user?.id || ''
+      const nextUserId = nextSession?.user?.id || ''
+      sessionRef.current = nextSession
+
+      // Supabase commonly emits TOKEN_REFRESHED / duplicate SIGNED_IN events when the
+      // browser tab becomes active again.  Updating React state for the same user
+      // would remount DashboardApp, re-run the large cloud/cache restore and flash
+      // the permissions screen.  The Supabase client keeps the refreshed token
+      // internally, so React only needs a new session when the actual user changes.
+      if (!previousUserId || previousUserId !== nextUserId || event === 'USER_UPDATED') {
+        setSession(nextSession)
+      }
+    }
+
+    supabase.auth.getSession().then(({ data }) => applySession(data.session || null, 'INITIAL_SESSION'))
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'SIGNED_OUT') {
+        applySession(null, event)
+        return
+      }
+      applySession(nextSession, event)
+    })
+
+    return () => {
+      active = false
+      data.subscription.unsubscribe()
+    }
+  }, [])
+
+  const sessionUserId = session?.user?.id || ''
+  const isAnonymousUser = Boolean(session?.user?.is_anonymous)
+
+  useEffect(() => {
+    let active = true
+
+    if (!sessionUserId || !cloudConfigured) {
+      setProfile(null)
+      setProfileLoading(false)
+      return () => { active = false }
+    }
+
     setProfileLoading(true)
 
     // Anonymous Supabase users are always treated as read-only guests.
-    if (session.user.is_anonymous) {
-      setProfile({ email: '', full_name: 'אורח', role: 'viewer', is_active: true, is_guest: true })
+    if (isAnonymousUser) {
+      setProfile({ id: sessionUserId, email: '', full_name: 'אורח', role: 'viewer', is_active: true, is_guest: true })
       setMessage('')
       setProfileLoading(false)
-      return
+      return () => { active = false }
     }
 
-    supabase.from('profiles').select('id,email,full_name,role,is_active').eq('id', session.user.id).maybeSingle()
+    supabase.from('profiles').select('id,email,full_name,role,is_active').eq('id', sessionUserId).maybeSingle()
       .then(({ data, error }) => {
+        if (!active) return
         if (error) setMessage('המשתמש התחבר, אך פרופיל ההרשאה עדיין לא הוגדר.')
         setProfile(data || null)
         setProfileLoading(false)
       })
-  }, [session])
+
+    return () => { active = false }
+  }, [sessionUserId, isAnonymousUser])
 
   const signIn = async (event) => {
     event.preventDefault(); setBusy(true); setMessage('')
@@ -88,7 +141,7 @@ export default function App() {
     <div className="guest-note"><ShieldCheck size={16}/> משתמש צפייה יכול לצפות, לסנן, לחפש ולייצא בלבד. טעינה, מחיקה ושינוי יעדים חסומים.</div>
     <small><ShieldCheck size={15}/> מנהלים מתחברים באמצעות Supabase Auth. מצב צפייה פועל ללא חשבון ובקריאה בלבד. · Sprint 11.8.2 Build 2</small>
   </form></div>
-  if (session && profileLoading) return <div className="auth-page" dir="rtl"><div className="auth-card auth-loading"><div className="auth-icon"><ShieldCheck/></div><h1>בודק הרשאות משתמש...</h1><p>המערכת מאמתת את תפקיד המשתמש לפני טעינת הדשבורד.</p></div></div>
+  if (session && profileLoading && !profile) return <div className="auth-page" dir="rtl"><div className="auth-card auth-loading"><div className="auth-icon"><ShieldCheck/></div><h1>בודק הרשאות משתמש...</h1><p>המערכת מאמתת את תפקיד המשתמש לפני טעינת הדשבורד.</p></div></div>
   if (session && !profile) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>לא נמצא פרופיל הרשאה</h1><p>יש להגדיר למשתמש פרופיל פעיל בטבלת profiles.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   return <DashboardApp currentUser={session.user} userRole={profile.role} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>
