@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2
 } from 'lucide-react'
 import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
 import { supabase } from './supabase'
@@ -493,6 +493,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('iml-ui-sidebar-collapsed') === '1')
   const [managementMode, setManagementMode] = useState(() => localStorage.getItem('iml-ui-management-mode') === '1')
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+  const [showHome, setShowHome] = useState(true)
 
   useEffect(() => { localStorage.setItem('iml-ui-sidebar-collapsed', sidebarCollapsed ? '1' : '0') }, [sidebarCollapsed])
   useEffect(() => { localStorage.setItem('iml-ui-management-mode', managementMode ? '1' : '0') }, [managementMode])
@@ -1664,6 +1665,46 @@ console.log("QUALITY =", qualityForBatchMaterial)
     setSelectedFacilities(current => current.filter(x => x !== id))
   }
 
+  const openHomeArea = (area) => {
+    setShowHome(false)
+    if (area === 'quality') setActiveTab('quality')
+    if (area === 'production' || area === 'recent') setActiveTab('production')
+    if (area === 'admin') setActiveTab(canManageData ? 'mapping-center' : 'production')
+    window.setTimeout(() => {
+      const targetId = area === 'planning' ? 'planning-section' : area === 'daily' ? 'daily-management-section' : area === 'quality' || area === 'recent' || area === 'admin' ? 'details-section' : 'control-tower-section'
+      document.getElementById(targetId)?.scrollIntoView({ behavior:'smooth', block:'start' })
+    }, 80)
+  }
+
+  if (showHome) return <div className="command-home" dir="rtl">
+    <header className="command-home-header">
+      <div className="command-home-brand"><img src="/icons/mark-128.png" alt="IML"/><div><strong>חדר בקרה — מתקני אריזה</strong><span>COMMAND CENTER</span></div></div>
+      <div className="command-home-user"><Home size={19}/><b>דף ראשי</b><span></span><div><strong>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</strong><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></div></div>
+    </header>
+    <main className="command-home-main">
+      <section className="command-home-status">
+        <article><div className={`home-status-icon cloud ${cloudState.mode}`}><Cloud/></div><span>מצב מערכת</span><b>{cloudState.mode === 'cloud' ? 'מחובר לענן' : cloudState.mode === 'connecting' ? 'מתחבר...' : 'מצב מקומי'}</b><small>{cloudState.lastSync ? `עדכון אחרון ${new Date(cloudState.lastSync).toLocaleString('he-IL')}` : 'ממתין לסנכרון'}</small></article>
+        <article><Database/><span>כמויות</span><b>{fmt(production.length)}</b><small>רשומות</small></article>
+        <article><FlaskConical/><span>איכות</span><b>{fmt(quality.length)}</b><small>תוצאות</small></article>
+        <article><AlertTriangle/><span>מנות חריגות</span><b>{fmt(openDeviations.length)}</b><small>פתוחות בטווח</small></article>
+        <article className="home-range"><CalendarDays/><span>טווח תאריכים נוכחי</span><b>{from || '—'} — {to || '—'}</b><small>{planningMonth || 'ללא חודש תכנון'}</small></article>
+      </section>
+      <section className="command-home-welcome"><span>IML CONTROL</span><h1>ברוך הבא לחדר הבקרה</h1><p>בחר אזור לצפייה ולניתוח נתונים</p></section>
+      <section className="command-home-cards">
+        <button className="home-nav-card teal" onClick={()=>openHomeArea('production')}><div className="home-nav-icon"><BarChart3/></div><h2>סקירת מתקנים</h2><p>סקירה כוללת של כל המתקנים, ביצועים מול יעדים ותחזית חודשית</p><span>כניסה לאזור <ChevronLeft/></span></button>
+        <button className="home-nav-card green" onClick={()=>openHomeArea('daily')}><div className="home-nav-icon"><ClipboardList/></div><h2>ניהול יומי</h2><p>ניהול ותפעול יומי של מתקנים, קווים, תקלות והערות</p><span>כניסה לאזור <ChevronLeft/></span></button>
+        <button className="home-nav-card purple" onClick={()=>openHomeArea('planning')}><div className="home-nav-icon"><Factory/></div><h2>תחזית חודשית לפי מתקן</h2><p>תחזית ביצועים חודשית לפי מתקן עם ניתוח קצבים ועמידה ביעדים</p><span>כניסה לאזור <ChevronLeft/></span></button>
+        <button className="home-nav-card orange" onClick={()=>openHomeArea('quality')}><div className="home-nav-icon"><FlaskConical/></div><h2>איכות</h2><p>סקירת איכות, מנות חריגות, תוצאות מעבדה וכרטיסי מנה</p><span>כניסה לאזור <ChevronLeft/></span></button>
+        <button className="home-nav-card blue" onClick={()=>openHomeArea('recent')}><div className="home-nav-icon"><ClipboardList/></div><h2>רשומות תפוקה אחרונות</h2><p>רשומות התפוקה האחרונות ומעקב אחר המנות והחומרים שיוצרו</p><span>כניסה לאזור <ChevronLeft/></span></button>
+      </section>
+      <section className="command-home-bottom">
+        <article className="home-attention"><div className="home-bottom-title"><BellRing/><h3>דורש תשומת לב</h3></div>{openDeviations.length ? <div className="home-alert-row"><AlertTriangle/><b>{openDeviations.length} מנות חריגות פתוחות</b><span>מומלץ לעבור למסך האיכות לבדיקה</span><button onClick={()=>openHomeArea('quality')}>לצפייה <ChevronLeft/></button></div> : <div className="home-ok"><CheckCircle2/> אין כרגע חריגות פתוחות בטווח שנבחר</div>}</article>
+        <article className="home-quick"><div className="home-bottom-title"><Activity/><h3>פעולות מהירות</h3></div><div className="home-quick-grid"><button onClick={()=>openHomeArea('production')}><BarChart3/> סקירת מתקנים</button><button onClick={()=>openHomeArea('quality')}><FlaskConical/> איכות</button><button onClick={()=>openHomeArea('planning')}><Target/> יעדים ותחזית</button>{canManageData && <button onClick={()=>openHomeArea('admin')}><Settings2/> מרכז ניהול</button>}</div></article>
+      </section>
+    </main>
+    <footer className="command-home-footer"><span>IML CONTROL © 2026</span><b>{BUILD_LABEL}</b><span className={cloudState.mode === 'cloud' ? 'online' : ''}>● {cloudState.mode === 'cloud' ? 'ONLINE' : 'OFFLINE'}</span></footer>
+  </div>
+
   return <div className={`dashboard ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${managementMode ? 'management-mode' : ''}`} dir="rtl">
     <aside className="side filter-side">
       <button type="button" className="side-collapse-button" onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'פתיחת מסננים' : 'כיווץ מסננים'}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}</button>
@@ -1680,11 +1721,11 @@ console.log("QUALITY =", qualityForBatchMaterial)
       <div className="side-note">{BUILD_LABEL} · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
     </aside>
 
-    <main className="main">
+    <main className="main" id="control-tower-section">
       <header className="header">
         <div><h1>חדר בקרה — מתקני אריזה</h1><p>{BUILD_LABEL}</p></div>
         <div className="header-actions">
-          <div className="ui-refresh-controls">
+          <div className="ui-refresh-controls"><button type="button" className="action ui-control home-return" onClick={() => setShowHome(true)}><Home size={18}/><span>דף ראשי</span></button>
             <button type="button" className="action ui-control" onClick={() => setSidebarCollapsed(v => !v)}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}<span>{sidebarCollapsed ? 'פתח מסננים' : 'כווץ מסננים'}</span></button>
             <button type="button" className={`action ui-control ${managementMode ? 'active' : ''}`} onClick={() => setManagementMode(v => !v)}>{managementMode ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}<span>{managementMode ? 'יציאה ממצב ניהולי' : 'מצב ניהולי'}</span></button>
           </div>
@@ -1837,7 +1878,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         </div>
       </section>
 
-      <section className="daily-management">
+      <section className="daily-management" id="daily-management-section">
         <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!planningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
         <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימים נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
           {visiblePlanningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
