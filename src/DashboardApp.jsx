@@ -1882,7 +1882,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="8" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch + מק״ט.</p><div className="table-wrap"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{iso(r.sampleDate) || '—'}</td><td>{r.sampleDate ? new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="10" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
     </main>
-    {selectedResource && <ResourceDetailModal resource={selectedResource} onClose={() => setSelectedResource(null)} onOpenBatch={batch => { setSelectedResource(null); openBatchCard(batch) }}/>}
+    {selectedResource && <ResourceDetailModal resource={selectedResource} onClose={() => setSelectedResource(null)} onOpenBatch={(batch, material='') => { setSelectedResource(null); openBatchCard(batch, material) }}/>}
     {selectedBatchData && <BatchControlCard data={selectedBatchData} onClose={() => { setSelectedBatch(''); setSelectedBatchMaterial('') }}/>}
   </div>
 }
@@ -1898,23 +1898,51 @@ function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
   const rows = resource.productionRows || []
   const batches = [...new Set(rows.map(row => row.batch).filter(Boolean))]
   const orders = [...new Set(rows.map(row => row.order).filter(Boolean))]
+  const materials = [...rows.reduce((map,row) => {
+    const key = normalize(row.material) || 'ללא מק״ט'
+    const current = map.get(key) || { material:key, description:row.desc || '', qty:0, batches:new Set(), orders:new Set(), rows:0 }
+    current.qty += Number(row.qty) || 0
+    current.rows += 1
+    if (row.batch) current.batches.add(row.batch)
+    if (row.order) current.orders.add(row.order)
+    if (!current.description && row.desc) current.description = row.desc
+    map.set(key,current)
+    return map
+  }, new Map()).values()].sort((a,b)=>b.qty-a.qty)
+  const calculatedActual = rows.reduce((sum,row)=>sum+(Number(row.qty)||0),0)
   const progress = resource.target ? Math.min(100, resource.actual / resource.target * 100) : 0
+  const exportRows = () => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(materials.map(item => ({
+      Material:item.material, Description:item.description, Quantity:item.qty, Batches:item.batches.size, Orders:item.orders.size, Rows:item.rows,
+    }))), 'Materials')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map(row => ({
+      Date:row.productionDay || iso(row.date), Facility:row.facility, RoutingGroup:row.routingGroup, OrderType:row.orderType,
+      Order:row.order, Batch:row.batch, Material:row.material, Description:row.desc, Quantity:row.qty,
+    }))), 'Calculation Rows')
+    XLSX.writeFile(wb, `IML_${String(resource.resource || 'resource').replace(/[^a-zA-Z0-9_-]+/g,'_')}_${planningSafeMonth(resource)}.xlsx`)
+  }
   return <div className="resource-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-    <section className="resource-detail-modal" role="dialog" aria-modal="true" aria-label={`פירוט ${resource.resource}`}>
-      <header><div><span>RESOURCE CONTROL CENTER</span><h2>{resource.resource}</h2><p>{[resource.station && `Station ${resource.station}`, resource.description, resource.lineName].filter(Boolean).join(' · ')}</p></div><button onClick={onClose} aria-label="סגירה"><X/></button></header>
+    <section className="resource-detail-modal resource-detail-modal-audit" role="dialog" aria-modal="true" aria-label={`פירוט ${resource.resource}`}>
+      <header><div><span>RESOURCE CONTROL CENTER</span><h2>{resource.resource}</h2><p>{[resource.station && `Station ${resource.station}`, resource.description, resource.lineName].filter(Boolean).join(' · ')}</p></div><div className="resource-head-actions"><button className="resource-export-btn" onClick={exportRows}><FileSpreadsheet size={17}/> ייצוא חישוב</button><button onClick={onClose} aria-label="סגירה"><X/></button></div></header>
       <div className={`resource-status-banner ${resource.state}`}><strong>{resource.label}</strong><span>תחזית {fmt(resource.forecast)} מול יעד {fmt(resource.target)}</span></div>
       <div className="resource-detail-kpis">
-        <BatchMetric label="יעד חודשי" value={fmt(resource.target)}/><BatchMetric label="בוצע" value={fmt(resource.actual)}/><BatchMetric label="עמידה" value={pctFmt(resource.pct)}/><BatchMetric label="תחזית" value={fmt(resource.forecast)}/><BatchMetric label="קצב נדרש" value={fmt(resource.requiredDaily)}/><BatchMetric label="קצב אחרון" value={fmt(resource.recentAverage)}/><BatchMetric label="ימים נותרו" value={resource.remainingWorkdays}/><BatchMetric label="שיא מוכח" value={fmt(resource.provenMax)}/>
+        <BatchMetric label="יעד חודשי" value={fmt(resource.target)}/><BatchMetric label="בוצע" value={fmt(resource.actual)}/><BatchMetric label="סכום רשומות" value={fmt(calculatedActual)}/><BatchMetric label="מק״טים" value={materials.length}/><BatchMetric label="מנות" value={batches.length}/><BatchMetric label="Orders" value={orders.length}/><BatchMetric label="תחזית" value={fmt(resource.forecast)}/><BatchMetric label="קצב נדרש" value={fmt(resource.requiredDaily)}/>
       </div>
       <div className="resource-detail-progress"><div><span>התקדמות חודשית</span><b>{Math.round(progress)}%</b></div><i><em style={{width:`${progress}%`}}/></i></div>
-      <div className="resource-detail-grid">
-        <article><h3>נתוני משאב</h3><dl><div><dt>תחנה</dt><dd>{resource.station || '—'}</dd></div><div><dt>Description</dt><dd>{resource.description || '—'}</dd></div><div><dt>Orders</dt><dd>{orders.length}</dd></div><div><dt>Batches</dt><dd>{batches.length}</dd></div><div><dt>חריגות פתוחות</dt><dd>{resource.deviationsCount || 0}</dd></div><div><dt>Capacity</dt><dd>{fmt(resource.capacity)}</dd></div></dl></article>
-        <article><h3>הערות ומגבלות</h3><p>{resource.notes || 'לא הוזנה הערה בקובץ היעדים.'}</p><dl><div><dt>Recycling Plan</dt><dd>{fmt(resource.recyclingPlan)}</dd></div><div><dt>Recycled</dt><dd>{fmt(resource.recycled)}</dd></div><div><dt>For Packing</dt><dd>{fmt(resource.forPacking)}</dd></div><div><dt>Restricted recycling</dt><dd>{fmt(resource.restrictedRecycling)}</dd></div><div><dt>Risk for disposal</dt><dd>{fmt(resource.restrictedDisposal)}</dd></div></dl></article>
-      </div>
-      <section className="resource-batches"><div><h3>מנות פעילות</h3><span>{batches.length} מנות</span></div><div>{batches.slice(0,24).map(batch => <button key={batch} onClick={() => onOpenBatch(batch)}>{batch}<ArrowLeft size={15}/></button>)}{!batches.length && <p>לא נמצאו מנות למשאב בחודש הנבחר.</p>}</div></section>
+      <section className="resource-audit-section">
+        <div className="resource-audit-title"><div><h3>מק״טים שנכנסו לחישוב</h3><p>הסכום בטבלה הוא בדיוק מקור נתון ה״בוצע״ בכרטיס.</p></div><span>{materials.length} מק״טים · {fmt(calculatedActual)}</span></div>
+        <div className="table-wrap resource-audit-table"><table><thead><tr><th>מק״ט</th><th>תיאור</th><th>כמות בחישוב</th><th>מנות</th><th>Orders</th><th>רשומות</th></tr></thead><tbody>{materials.map(item=><tr key={item.material}><td><b>{item.material}</b></td><td>{item.description || '—'}</td><td><b>{fmt(item.qty)}</b></td><td>{item.batches.size}</td><td>{item.orders.size}</td><td>{item.rows}</td></tr>)}{!materials.length&&<tr><td colSpan="6" className="empty">לא נמצאו מק״טים בחישוב.</td></tr>}</tbody></table></div>
+      </section>
+      <section className="resource-audit-section">
+        <div className="resource-audit-title"><div><h3>פירוט מלא — מנות ורשומות תפוקה</h3><p>כל שורה שהמנוע כלל בחישוב המשאב.</p></div><span>{rows.length} רשומות</span></div>
+        <div className="table-wrap resource-audit-table resource-row-audit"><table><thead><tr><th>תאריך</th><th>תחנה</th><th>Routing</th><th>Order Type</th><th>Order</th><th>Batch</th><th>מק״ט</th><th>תיאור</th><th>כמות</th></tr></thead><tbody>{rows.slice().sort((a,b)=>String(b.productionDay||'').localeCompare(String(a.productionDay||''))).map((row,index)=><tr key={`${row.order}-${row.batch}-${row.material}-${index}`}><td>{row.productionDay || iso(row.date) || '—'}</td><td>{row.facility || '—'}</td><td>{row.routingGroup || '—'}</td><td>{row.orderType || '—'}</td><td>{row.order || '—'}</td><td>{row.batch ? <button type="button" className="batch-link" onClick={()=>onOpenBatch(row.batch,row.material)}>{row.batch}</button> : '—'}</td><td>{row.material || '—'}</td><td>{row.desc || '—'}</td><td><b>{fmt(row.qty)}</b></td></tr>)}{!rows.length&&<tr><td colSpan="9" className="empty">לא נמצאו רשומות בחישוב.</td></tr>}</tbody></table></div>
+      </section>
     </section>
   </div>
 }
+
+const planningSafeMonth = resource => String(resource?.month || new Date().toISOString().slice(0,7))
 
 const BATCH_MODAL_WIDE_STYLES = `
 .batch-modal-backdrop{padding:10px!important;align-items:stretch!important;justify-content:stretch!important}

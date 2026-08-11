@@ -56,6 +56,12 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   if (/WG\s*SMALL\s+PACKS?\s*\(19\)/.test(targetName)) return station === '1519' && isSmallPack19(row)
   if (/^WG\s*\(19\)/.test(targetName)) return station === '1519' && !isSmallPack19(row)
 
+  // CS (25,40): approved product rule. Only material 20000000722 belongs to CS.
+  // Keep the station scope explicit as 1525/1540 so legacy 1125/1140 aliases cannot leak in.
+  if (/^CS\s*\(25\s*,\s*40\)/.test(targetName)) {
+    return (station === '1525' || station === '1540') && upper(row.material) === '20000000722'
+  }
+
   // Bromacil: production is reported under station 1540.
   // Prefer the DATA-sheet Item Code list when it is present on the target row.
   // The BRMC fallback keeps legacy/cached target rows working until the DATA mapping
