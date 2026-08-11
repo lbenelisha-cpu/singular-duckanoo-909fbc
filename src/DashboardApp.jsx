@@ -453,7 +453,146 @@ function classifyFile(rows) {
   return 'unknown'
 }
 
+
+
+// Global table tools — generic search/filter/sort controls for every data table.
+// Implemented at the DOM layer so existing calculation logic and row renderers stay untouched.
+const useUniversalTableTools = () => {
+  useEffect(() => {
+    const normalizeTableText = value => String(value ?? '').trim().toLowerCase()
+
+    const cellSortValue = cell => {
+      const raw = String(cell?.innerText || '').trim()
+      const numeric = Number(raw.replace(/,/g, '').replace(/[^0-9.\-]/g, ''))
+      if (raw && Number.isFinite(numeric) && /\d/.test(raw)) return { numeric:true, value:numeric }
+      const dateMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+      if (dateMatch) return { numeric:true, value:new Date(raw).getTime() }
+      return { numeric:false, value:raw.toLocaleLowerCase('he-IL') }
+    }
+
+    const applyView = table => {
+      if (!table?.tBodies?.[0]) return
+      const toolbar = table.parentElement?.querySelector(':scope > .smart-table-toolbar')
+      if (!toolbar) return
+      const globalQuery = normalizeTableText(toolbar.querySelector('[data-smart-global]')?.value)
+      const columnIndex = Number(toolbar.querySelector('[data-smart-column]')?.value ?? -1)
+      const columnQuery = normalizeTableText(toolbar.querySelector('[data-smart-value]')?.value)
+      let visible = 0
+      const rows = [...table.tBodies[0].rows]
+      rows.forEach(row => {
+        if (row.classList.contains('smart-empty-row')) return
+        const cells = [...row.cells]
+        const allText = normalizeTableText(cells.map(cell => cell.innerText).join(' '))
+        const selectedText = columnIndex >= 0 ? normalizeTableText(cells[columnIndex]?.innerText) : allText
+        const matchesGlobal = !globalQuery || allText.includes(globalQuery)
+        const matchesColumn = !columnQuery || selectedText.includes(columnQuery)
+        const show = matchesGlobal && matchesColumn
+        row.style.display = show ? '' : 'none'
+        if (show) visible += 1
+      })
+      const count = toolbar.querySelector('[data-smart-count]')
+      if (count) count.textContent = `${visible} רשומות`
+    }
+
+    const sortTable = (table, columnIndex, direction) => {
+      const body = table?.tBodies?.[0]
+      if (!body || columnIndex < 0 || !direction) return
+      const rows = [...body.rows].filter(row => row.cells.length > columnIndex)
+      rows.sort((a,b) => {
+        const av = cellSortValue(a.cells[columnIndex])
+        const bv = cellSortValue(b.cells[columnIndex])
+        let result
+        if (av.numeric && bv.numeric) result = av.value - bv.value
+        else result = String(av.value).localeCompare(String(bv.value), 'he', { numeric:true, sensitivity:'base' })
+        return direction === 'desc' ? -result : result
+      })
+      rows.forEach(row => body.appendChild(row))
+      applyView(table)
+    }
+
+    const enhanceTable = table => {
+      if (!table || table.dataset.smartTableReady === '1' || table.dataset.noSmartTable === '1') return
+      const headerCells = [...(table.tHead?.rows?.[0]?.cells || [])]
+      if (!headerCells.length || !table.tBodies?.length) return
+      table.dataset.smartTableReady = '1'
+      table.classList.add('smart-table-enabled')
+      const wrap = table.parentElement
+      if (!wrap) return
+
+      const toolbar = document.createElement('div')
+      toolbar.className = 'smart-table-toolbar'
+      const options = headerCells.map((cell,index) => `<option value="${index}">${String(cell.innerText || `עמודה ${index+1}`).trim()}</option>`).join('')
+      toolbar.innerHTML = `
+        <div class="smart-table-search"><span>⌕</span><input data-smart-global type="search" placeholder="חיפוש בכל הטבלה..." autocomplete="off" /></div>
+        <label class="smart-table-column"><span>עמודה</span><select data-smart-column><option value="-1">כל העמודות</option>${options}</select></label>
+        <div class="smart-table-search smart-table-value"><span>≡</span><input data-smart-value type="search" placeholder="ערך לסינון, למשל A1" autocomplete="off" /></div>
+        <label class="smart-table-sort"><span>מיון</span><select data-smart-sort><option value="">ללא</option><option value="asc">עולה ↑</option><option value="desc">יורד ↓</option></select></label>
+        <button type="button" class="smart-table-clear">נקה סינון</button>
+        <b data-smart-count>${table.tBodies[0].rows.length} רשומות</b>
+      `
+      wrap.insertBefore(toolbar, table)
+
+      const onFilter = () => applyView(table)
+      toolbar.querySelector('[data-smart-global]')?.addEventListener('input', onFilter)
+      toolbar.querySelector('[data-smart-column]')?.addEventListener('change', () => {
+        applyView(table)
+        const direction = toolbar.querySelector('[data-smart-sort]')?.value
+        const index = Number(toolbar.querySelector('[data-smart-column]')?.value ?? -1)
+        if (direction && index >= 0) sortTable(table,index,direction)
+      })
+      toolbar.querySelector('[data-smart-value]')?.addEventListener('input', onFilter)
+      toolbar.querySelector('[data-smart-sort]')?.addEventListener('change', event => {
+        const index = Number(toolbar.querySelector('[data-smart-column]')?.value ?? -1)
+        if (index >= 0 && event.target.value) sortTable(table,index,event.target.value)
+      })
+      toolbar.querySelector('.smart-table-clear')?.addEventListener('click', () => {
+        const global = toolbar.querySelector('[data-smart-global]')
+        const value = toolbar.querySelector('[data-smart-value]')
+        const column = toolbar.querySelector('[data-smart-column]')
+        const sort = toolbar.querySelector('[data-smart-sort]')
+        if (global) global.value = ''
+        if (value) value.value = ''
+        if (column) column.value = '-1'
+        if (sort) sort.value = ''
+        applyView(table)
+      })
+
+      headerCells.forEach((cell,index) => {
+        if (cell.querySelector('button')) return
+        cell.classList.add('smart-sortable-header')
+        cell.title = 'לחץ למיון עולה / יורד'
+        cell.addEventListener('click', event => {
+          if (event.target.closest('input,select,button,a')) return
+          const next = cell.dataset.sortDirection === 'asc' ? 'desc' : 'asc'
+          headerCells.forEach(other => { if (other !== cell) delete other.dataset.sortDirection })
+          cell.dataset.sortDirection = next
+          sortTable(table,index,next)
+        })
+      })
+      applyView(table)
+    }
+
+    const scan = () => document.querySelectorAll('.dashboard table').forEach(enhanceTable)
+    let scheduled = false
+    const scheduleScan = () => {
+      if (scheduled) return
+      scheduled = true
+      requestAnimationFrame(() => {
+        scheduled = false
+        scan()
+        document.querySelectorAll('.dashboard table[data-smart-table-ready="1"]').forEach(applyView)
+      })
+    }
+    scan()
+    const observer = new MutationObserver(scheduleScan)
+    observer.observe(document.body, { childList:true, subtree:true })
+    return () => observer.disconnect()
+  }, [])
+}
+
 export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut }) {
+  useUniversalTableTools()
+
   const canManageData = ['admin', 'manager'].includes(userRole)
   const canDeleteData = userRole === 'admin'
 
