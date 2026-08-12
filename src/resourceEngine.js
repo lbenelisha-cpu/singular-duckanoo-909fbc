@@ -23,8 +23,9 @@ const resourceCode = row => upper(`${row.routingGroup || ''} ${row.routingDescri
 const isSmallPack19 = row => ['19PWG-01','19PWG-05','19PWG-15'].some(code => resourceCode(row).includes(code))
 
 const matchProductionToTarget = (row, target, manualMappings = []) => {
+  // Approved business rules below take precedence over manual/legacy mappings.
+  // This prevents old mappings from leaking 10L rows into 1L or unrelated stations into product families.
   const manualDecision = mappingMatchesTarget(row, target, manualMappings)
-  if (manualDecision !== null) return manualDecision
 
   const targetName = upper(target.resource)
   const station = upper(row.facility)
@@ -59,7 +60,16 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   // CS (25,40): approved product rule. Only material 20000000722 belongs to CS.
   // Keep the station scope explicit as 1525/1540 so legacy 1125/1140 aliases cannot leak in.
   if (/^CS\s*\(25\s*,\s*40\)/.test(targetName)) {
-    return (station === '1525' || station === '1540') && upper(row.material) === '20000000722'
+    return station === '1525' && upper(row.material) === '20000000722'
+  }
+
+  // Approved exact-material rules from the production quantities audit (12/08/2026).
+  if (/^METAZACHLOR\b/.test(targetName)) {
+    return station === '1541' && upper(row.material) === '30000000097'
+  }
+  if (/^SAFLUFENACIL\s+TECH\b/.test(targetName)) {
+    const facilities = target.facilities?.length ? target.facilities.map(upper) : [upper(target.facility)].filter(Boolean)
+    return facilities.includes(station) && upper(row.material) === '10000015999'
   }
 
   // Bromacil: production is reported under station 1540.
@@ -77,6 +87,9 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
     const bromacilText = upper(`${row.desc || ''} ${row.routingDescription || ''}`)
     return /(^|\s)BRMC\d*/.test(bromacilText) || bromacilText.includes('BROMACIL')
   }
+
+  // For all remaining resources, an explicit manual mapping may still override the generic DATA/family rule.
+  if (manualDecision !== null) return manualDecision
 
   // Production families: DATA sheet Item Codes are the source of truth.
   // 1542 and 1519 are handled above and are deliberately excluded from this mechanism.

@@ -454,6 +454,18 @@ function classifyFile(rows) {
 }
 
 
+const displayDatasetName = (kind, month = '') => {
+  if (kind === 'production') return 'קובץ כמויות יצור ואריזה'
+  if (kind === 'quality') return 'קובץ איכות תוצאות'
+  if (kind === 'deviations') return 'קובץ איכות החלטת שימוש'
+  if (kind === 'targets') {
+    const mm = String(month || '').match(/-(\d{2})$/)?.[1] || String(new Date().getMonth()+1).padStart(2,'0')
+    return `יעדים לחודש ${mm}`
+  }
+  return 'קובץ נתונים'
+}
+
+
 
 // Global table tools — generic search/filter/sort controls for every data table.
 // Implemented at the DOM layer so existing calculation logic and row renderers stay untouched.
@@ -492,6 +504,17 @@ const useUniversalTableTools = () => {
       })
       const count = toolbar.querySelector('[data-smart-count]')
       if (count) count.textContent = `${visible} רשומות`
+      const sumBadge = toolbar.querySelector('[data-smart-sum]')
+      const sumColumn = Number(table.dataset.smartSumColumn ?? -1)
+      if (sumBadge && sumColumn >= 0) {
+        const total = rows.reduce((sum,row) => {
+          if (row.style.display === 'none' || row.classList.contains('smart-empty-row')) return sum
+          const raw = String(row.cells[sumColumn]?.innerText || '').replace(/,/g,'').replace(/[^0-9.\-]/g,'')
+          const value = Number(raw)
+          return sum + (Number.isFinite(value) ? value : 0)
+        }, 0)
+        sumBadge.textContent = `סה״כ כמות: ${new Intl.NumberFormat('he-IL',{maximumFractionDigits:2}).format(total)}`
+      }
     }
 
     const sortTable = (table, columnIndex, direction) => {
@@ -528,6 +551,7 @@ const useUniversalTableTools = () => {
         <div class="smart-table-search smart-table-value"><span>≡</span><input data-smart-value type="search" placeholder="ערך לסינון, למשל A1" autocomplete="off" /></div>
         <label class="smart-table-sort"><span>מיון</span><select data-smart-sort><option value="">ללא</option><option value="asc">עולה ↑</option><option value="desc">יורד ↓</option></select></label>
         <button type="button" class="smart-table-clear">נקה סינון</button>
+        ${table.dataset.smartSumColumn != null ? '<b data-smart-sum>סה״כ כמות: 0</b>' : ''}
         <b data-smart-count>${table.tBodies[0].rows.length} רשומות</b>
       `
       wrap.insertBefore(toolbar, table)
@@ -971,12 +995,13 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           storedCount=parsed.length; rowsForCloud=parsed; if(parsed[0]?.month) setPlanningMonth(parsed[0].month)
         } else throw new Error(`${file.name}: סוג הקובץ לא זוהה. השתמש באזור הטעינה המתאים במרכז הנתונים.`)
         const facilitiesFound = new Set(rows.slice(0, 5000).map(r => canonicalFacility(getField(r, ['Storage Location','Inspection Lot Storage Location','Process Order Storage Location','Facility','Production Line','מתקן']))).filter(Boolean)).size
-        const nextMeta = { fileName:file.name, rows:storedCount, rawRows:rows.length, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
-        setStatus(`מעלה את ${file.name} למסד המשותף...`)
-        setUploadProgress({ fileName:file.name, kind, phase:'prepare', percent:0, message:'מכין את הנתונים' })
+        const displayName = displayDatasetName(kind, kind === 'targets' ? rowsForCloud?.[0]?.month : '')
+        const nextMeta = { fileName:displayName, originalFileName:file.name, rows:storedCount, rawRows:rows.length, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
+        setStatus(`מעלה את ${displayName} למסד המשותף...`)
+        setUploadProgress({ fileName:displayName, kind, phase:'prepare', percent:0, message:'מכין את הנתונים' })
         const progressHandler = progress => {
-          setUploadProgress({ fileName:file.name, kind, ...progress })
-          setStatus(`${file.name}: ${progress.message} (${progress.percent}%)`)
+          setUploadProgress({ fileName:displayName, kind, ...progress })
+          setStatus(`${displayName}: ${progress.message} (${progress.percent}%)`)
         }
         const savedMeta = kind === 'quality'
           ? await uploadCloudDatasetIncremental(kind, rowsForCloud, { ...nextMeta, existingRows:quality.length }, currentUser, progressHandler)
@@ -987,7 +1012,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         else if (kind === 'targets') setTargets(normalizeStoredTargets(rowsForCloud))
         setDataMeta(current => ({ ...current, [kind]: savedMeta }))
         setCloudState({ mode:'cloud', lastSync:savedMeta.loadedAt, message:'מחובר ומסונכרן עם Supabase', latencyMs:cloudState.latencyMs, live:true })
-        loaded.push(`${file.name}: ${fmt(storedCount)} רשומות בענן`)
+        loaded.push(`${displayName}: ${fmt(storedCount)} רשומות בענן`)
       }
       setStatus(`הטעינה לענן הושלמה — ${loaded.join(' | ')}`)
     } catch (e) {
@@ -2041,7 +2066,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.unmatched + mappingSimulation.summary.duplicate})</button>}
         {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
-      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span></div><div className="table-wrap"><table className="sortable-production-table"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!filtered.length && <tr><td colSpan="9" className="empty">טען קובץ תפוקות כדי להציג נתונים</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
         <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מציג לאיזה יעד כל רשומת SAP נכנסת. בשורה בעייתית לחץ "שייך" כדי לראות את ההשפעה לפני שמירה.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
         {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
