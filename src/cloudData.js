@@ -8,6 +8,7 @@ export const FUTURE_CLOUD_KINDS = [...CLOUD_KINDS, 'packaging_plan']
 // statement timeouts in the previous build.
 const ROWS_PER_CHUNK = 75
 const CHUNKS_PER_UPLOAD_REQUEST = 1
+const CHUNKS_PER_SERVER_COPY_REQUEST = 200
 const CHUNKS_PER_DOWNLOAD_PAGE = 100
 const MAX_RETRIES = 4
 const RETRY_BASE_MS = 700
@@ -414,7 +415,11 @@ export async function uploadCloudDatasetIncremental(kind, newRows, meta, user, o
   for (let index = 0; index < newRows.length; index += ROWS_PER_CHUNK) chunks.push(newRows.slice(index, index + ROWS_PER_CHUNK))
   emit(onProgress, 'prepare', 1, 1, `נמצאו ${newRows.length} רשומות חדשות בלבד`)
 
-  const { data: seed, error: seedError } = await supabase.rpc('iml_create_incremental_dataset_version', {
+  // Build 2: do NOT clone the complete active quality dataset in one PostgreSQL
+  // statement. With 800K+ quality rows that single INSERT ... SELECT exceeded
+  // Supabase's statement timeout (57014). We now create the new version first
+  // and copy the old chunks server-side in small bounded pages.
+  const { data: seed, error: seedError } = await supabase.rpc('iml_prepare_incremental_dataset_version', {
     p_kind: kind,
     p_file_name: meta.fileName || '',
     p_raw_row_count: meta.rawRows ?? newRows.length,
@@ -425,17 +430,37 @@ export async function uploadCloudDatasetIncremental(kind, newRows, meta, user, o
     p_uploaded_by_email: user?.email || '',
   })
   if (seedError) {
-    const text = `${seedError.message || ''} ${seedError.hint || ''}`
-    if (/iml_create_incremental_dataset_version|schema cache|could not find/i.test(text)) {
-      throw new Error('מנגנון טעינת איכות מצטברת עדיין לא מותקן ב-Supabase. יש להריץ פעם אחת את SPRINT_11_5_0_BUILD4_INCREMENTAL_QUALITY.sql.')
+    const message = `${seedError.message || ''} ${seedError.details || ''} ${seedError.hint || ''}`
+    if (/iml_prepare_incremental_dataset_version|schema cache|could not find|does not exist/i.test(message)) {
+      throw new Error('מנגנון העלאת איכות מהירה עדיין לא מותקן ב-Supabase. יש להריץ פעם אחת את SPRINT_11_9_1_QUALITY_INCREMENTAL_TIMEOUT_FIX.sql.')
     }
     throw seedError
   }
+
   const version = Array.isArray(seed) ? seed[0] : seed
   if (!version?.version_id) throw new Error('Supabase לא החזיר מזהה לגרסת האיכות המצטברת')
   const baseChunkIndex = Number(version.base_chunk_count) || 0
+  const previousVersionId = version.previous_version_id || null
 
   try {
+    if (previousVersionId && baseChunkIndex > 0) {
+      emit(onProgress, 'copy', 0, baseChunkIndex, 'מעתיק את נתוני האיכות הקיימים במנות קטנות')
+      for (let fromIndex = 0; fromIndex < baseChunkIndex; fromIndex += CHUNKS_PER_SERVER_COPY_REQUEST) {
+        const toIndex = Math.min(baseChunkIndex - 1, fromIndex + CHUNKS_PER_SERVER_COPY_REQUEST - 1)
+        await withRetry(async () => {
+          const { error } = await supabase.rpc('iml_copy_dataset_chunks_range', {
+            p_source_version_id: previousVersionId,
+            p_target_version_id: version.version_id,
+            p_from_chunk_index: fromIndex,
+            p_to_chunk_index: toIndex,
+          })
+          if (error) throw error
+        }, `העתקת איכות קיימת ${fromIndex + 1}-${toIndex + 1}`)
+        emit(onProgress, 'copy', toIndex + 1, baseChunkIndex, 'מעתיק את נתוני האיכות הקיימים במנות קטנות')
+        await sleep(0)
+      }
+    }
+
     for (let offset = 0; offset < chunks.length; offset += CHUNKS_PER_UPLOAD_REQUEST) {
       const batch = chunks.slice(offset, offset + CHUNKS_PER_UPLOAD_REQUEST).map((payload, batchIndex) => ({
         version_id: version.version_id,
@@ -452,8 +477,10 @@ export async function uploadCloudDatasetIncremental(kind, newRows, meta, user, o
     }
 
     emit(onProgress, 'verify', 0, 1, 'מאמת ומפעיל את גרסת האיכות המצטברת')
-    const { error: activateError } = await supabase.rpc('iml_activate_dataset_version', { p_version_id:version.version_id })
-    if (activateError) throw activateError
+    await withRetry(async () => {
+      const { error } = await supabase.rpc('iml_activate_dataset_version', { p_version_id:version.version_id })
+      if (error) throw error
+    }, 'אימות גרסת האיכות')
     emit(onProgress, 'verify', 1, 1, 'האימות הסתיים בהצלחה')
 
     const totalRows = Number(version.total_row_count) || ((Number(meta.existingRows) || 0) + newRows.length)
