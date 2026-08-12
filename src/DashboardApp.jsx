@@ -657,6 +657,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [managementMode, setManagementMode] = useState(() => localStorage.getItem('iml-ui-management-mode') === '1')
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [showHome, setShowHome] = useState(true)
+  const [facilityPickerOpen, setFacilityPickerOpen] = useState(false)
 
   useEffect(() => { localStorage.setItem('iml-ui-sidebar-collapsed', sidebarCollapsed ? '1' : '0') }, [sidebarCollapsed])
   useEffect(() => { localStorage.setItem('iml-ui-management-mode', managementMode ? '1' : '0') }, [managementMode])
@@ -1779,6 +1780,41 @@ console.log("QUALITY =", qualityForBatchMaterial)
     planningRows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:r.station||r.facility,line:r.lineName||r.routingGroup||'—',target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),days:r.remainingWorkdays,required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),forecast:fmt(r.forecast),status:r.label}))
   )
 
+
+  const selectedFacilityLabel = () => selectedFacilities.length ? selectedFacilities.join(', ') : 'כל המתקנים'
+  const rowMatchesSelectedFacilities = row => {
+    if (!selectedFacilities.length) return true
+    const ids = row.facilityIds || row.facilities || [row.station, row.facility].filter(Boolean)
+    return ids.some(id => selectedFacilities.includes(String(id)))
+  }
+  const printFacilityOverview = () => {
+    const rows = visibleControlTowerFacilities.filter(rowMatchesSelectedFacilities)
+    openPrintReport('סקירת מתקנים', `מתקנים: ${selectedFacilityLabel()}`, [
+      {key:'resource',label:'משאב / סימניה'},{key:'station',label:'תחנה'},{key:'target',label:'יעד'},{key:'actual',label:'בוצע'},
+      {key:'forecast',label:'תחזית'},{key:'gap',label:'פער צפוי'},{key:'required',label:'קצב נדרש'},{key:'health',label:'Health Score'},{key:'deviations',label:'חריגות'}
+    ], rows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:(r.facilityIds||r.facilities||[]).join(', ')||r.station||'—',target:fmt(r.target),actual:fmt(r.actual),forecast:fmt(r.forecast),gap:fmt(r.gap),required:fmt(r.requiredDaily),health:r.healthScore,deviations:r.deviationsCount})))
+  }
+  const printMonthlyForecast = () => {
+    const rows = visiblePlanningRows.filter(rowMatchesSelectedFacilities)
+    openPrintReport('תחזית חודשית לפי מתקן', `מתקנים: ${selectedFacilityLabel()}`, [
+      {key:'resource',label:'משאב / סימניה'},{key:'station',label:'תחנה'},{key:'target',label:'יעד חודשי'},{key:'actual',label:'בוצע'},
+      {key:'pct',label:'% ביצוע'},{key:'remaining',label:'נותר'},{key:'required',label:'נדרש ליום'},{key:'avg7',label:'ממוצע 7 ימים'},{key:'max',label:'שיא מוכח'},{key:'forecast',label:'תחזית'},{key:'status',label:'סטטוס'}
+    ], rows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:r.station||r.facility,target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),max:fmt(r.provenMax),forecast:fmt(r.forecast),status:r.label})))
+  }
+  const printFacilityPerformance = () => {
+    const rows = facilityStats.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.id))
+    openPrintReport('ביצועים לפי מתקן בטווח המסונן', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'}`, [
+      {key:'facility',label:'מתקן'},{key:'qty',label:'כמות'},{key:'orders',label:'Orders'},{key:'batches',label:'מנות'}
+    ], rows.map(r => ({facility:r.id,qty:fmt(r.actual),orders:r.orders||0,batches:new Set(baseFiltered.filter(x => x.facility === r.id).map(x => x.batch).filter(Boolean)).size})))
+  }
+  const printRecentProduction = () => {
+    const rows = sortedRecentProduction.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility))
+    openPrintReport('רשומות תפוקה אחרונות', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'}`, [
+      {key:'date',label:'תאריך'},{key:'ud',label:'החלטת שימוש (UD)'},{key:'facility',label:'משאב יעד'},{key:'routing',label:'מתקן / תחנה'},
+      {key:'order',label:'הזמנה'},{key:'batch',label:'Batch'},{key:'material',label:'מק״ט חומר'},{key:'desc',label:'תיאור חומר'},{key:'qty',label:'כמות'}
+    ], rows.map(r => ({date:iso(r.date),ud:productionUsageDecision(r),facility:r.facility,routing:r.routingGroup||'—',order:r.order||'—',batch:r.batch||'—',material:r.material||'—',desc:r.desc||'—',qty:fmt(r.qty)})))
+  }
+
   const printMonthlyTargets = () => {
     const rows = targets.filter(t => !planningMonth || t.month === planningMonth)
     openPrintReport('קובץ יעדים חודשי', 'תצוגת יעדים ושיוכי תחנות לצורך בקרה ועדכון', [
@@ -1878,7 +1914,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       <label className="side-field"><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
       <label className="side-field"><span>מתאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => { setFrom(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
       <label className="side-field"><span>עד תאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => { setTo(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
-      <label className="side-field"><span>מתקן</span><select value={selectedFacilities.length === 1 ? selectedFacilities[0] : ''} onChange={e => setSelectedFacilities(e.target.value ? [e.target.value] : [])}><option value="">כל המתקנים</option>{facilities.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
+      <div className="side-field facility-multi-field"><span>מתקנים</span><button type="button" className={`facility-multi-trigger ${selectedFacilities.length ? 'active' : ''}`} onClick={() => setFacilityPickerOpen(v => !v)}><Factory size={16}/><b>{selectedFacilities.length ? `${selectedFacilities.length} מתקנים נבחרו` : 'כל המתקנים'}</b><span>⌄</span></button>{facilityPickerOpen && <div className="facility-multi-menu"><div className="facility-multi-menu-head"><strong>בחירת מתקנים</strong><button type="button" onClick={() => setSelectedFacilities([])}>נקה הכול</button></div>{facilities.map(id => <label key={id}><input type="checkbox" checked={selectedFacilities.includes(id)} onChange={() => toggleFacility(id)}/><span>{id}</span></label>)}</div>}</div>
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
@@ -1952,7 +1988,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>
 
       <section className="tower-facility-section">
-        <div className="panel-head facility-panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><div className="facility-head-actions">{facilityViewFilters}<span>{visibleControlTowerFacilities.length} מתקנים במעקב</span><button type="button" className="section-toggle" onClick={() => setShowFacilityOverview(v => !v)}>{showFacilityOverview ? 'הסתר' : 'הצג'}</button></div></div>
+        <div className="panel-head facility-panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><div className="facility-head-actions">{facilityViewFilters}<span>{visibleControlTowerFacilities.length} מתקנים במעקב</span><button type="button" className="section-print-btn" onClick={printFacilityOverview}><Printer size={16}/> הדפסה</button><button type="button" className="section-toggle" onClick={() => setShowFacilityOverview(v => !v)}>{showFacilityOverview ? 'הסתר' : 'הצג'}</button></div></div>
         {showFacilityOverview && <div className="tower-facility-grid">
           {visibleControlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => setSelectedResource(row)}>
             <div className="tower-facility-head"><div><i></i><strong>{row.facility}</strong></div><span>{row.state === 'good' ? 'תקין' : row.state === 'warning' ? 'דורש תשומת לב' : row.state === 'risk' ? 'בסיכון' : 'ללא יעד'}</span></div>
@@ -2028,7 +2064,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <Summary title="איכות לא תקינה" value={qualityBad.length} sub="לפי קובץ האיכות" warn/>
       </section>
 
-      <div className="section-title facility-title"><div className="section-title-text"><Gauge/><div><h2>תחזית חודשית לפי מתקן</h2><p>יעד חודשי, קצב נדרש, קצב אחרון, שיא מוכח ותחזית</p></div></div><div className="facility-head-actions">{facilityViewFilters}<button type="button" className="section-toggle" onClick={() => setShowMonthlyForecast(v => !v)}>{showMonthlyForecast ? 'הסתר' : 'הצג'}</button><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת הכול' : 'בחירת כל המתקנים'}</button></div></div>
+      <div className="section-title facility-title"><div className="section-title-text"><Gauge/><div><h2>תחזית חודשית לפי מתקן</h2><p>יעד חודשי, קצב נדרש, קצב אחרון, שיא מוכח ותחזית</p></div></div><div className="facility-head-actions">{facilityViewFilters}<button type="button" className="section-print-btn" onClick={printMonthlyForecast}><Printer size={16}/> הדפסה</button><button type="button" className="section-toggle" onClick={() => setShowMonthlyForecast(v => !v)}>{showMonthlyForecast ? 'הסתר' : 'הצג'}</button><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת הכול' : 'בחירת כל המתקנים'}</button></div></div>
       {showMonthlyForecast && <section className="forecast-grid" id="planning-section">
         {visiblePlanningRows.map(row => <ForecastCard key={row.id} {...row} selected={(row.facilities || [row.facility]).some(id => selectedFacilities.includes(id))} onClick={() => setSelectedFacilities(row.facilities || [row.facility])}/>) }
         {!visiblePlanningRows.length && <div className="empty wide-empty">אין מתקנים התואמים למסנן התצוגה.</div>}
@@ -2055,7 +2091,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <div className="trend-bars">{dailyTrend.map(([date, value]) => <div className="trend-item" key={date} title={`${date}: ${fmt(value)}`}><div className="trend-value">{fmt(value)}</div><div className="trend-track"><i style={{height: `${Math.max(5, value / maxDaily * 100)}%`}}/></div><small>{date.slice(5)}</small></div>)}{!dailyTrend.length && <div className="empty trend-empty">טען קובץ תפוקות להצגת מגמה</div>}</div>
       </section>
 
-      <div className="section-title facility-title"><div className="section-title-text"><Factory/><div><h2>ביצועים לפי מתקן בטווח המסונן</h2><p>לחיצה על כרטיס מסננת תפוקה, איכות וחריגות</p></div></div></div>
+      <div className="section-title facility-title"><div className="section-title-text"><Factory/><div><h2>ביצועים לפי מתקן בטווח המסונן</h2><p>לחיצה על כרטיס מסננת תפוקה, איכות וחריגות</p></div></div><button type="button" className="section-print-btn" onClick={printFacilityPerformance}><Printer size={16}/> הדפסה</button></div>
       <section className="facility-grid">{facilityStats.map(x => <Facility key={x.id} {...x} selected={selectedFacilities.includes(x.id)} onClick={() => toggleFacility(x.id)}/>)}</section>
 
       <section className="tabs" id="details-section">
@@ -2066,7 +2102,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.unmatched + mappingSimulation.summary.duplicate})</button>}
         {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
-      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td>{fmt(r.qty)}</td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
         <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מציג לאיזה יעד כל רשומת SAP נכנסת. בשורה בעייתית לחץ "שייך" כדי לראות את ההשפעה לפני שמירה.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
         {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
@@ -2116,6 +2152,15 @@ function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
   }, new Map()).values()].sort((a,b)=>b.qty-a.qty)
   const calculatedActual = rows.reduce((sum,row)=>sum+(Number(row.qty)||0),0)
   const progress = resource.target ? Math.min(100, resource.actual / resource.target * 100) : 0
+  const printRows = () => {
+    const popup = window.open('', '_blank', 'width=1400,height=900')
+    if (!popup) return
+    const esc = value => String(value ?? '').replace(/[&<>\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]))
+    const body = rows.slice().sort((a,b)=>String(b.productionDay||'').localeCompare(String(a.productionDay||''))).map((row,index)=>`<tr><td>${index+1}</td><td>${esc(row.productionDay || iso(row.date) || '—')}</td><td>${esc(row.facility||'—')}</td><td>${esc(row.routingGroup||'—')}</td><td>${esc(row.orderType||'—')}</td><td>${esc(row.order||'—')}</td><td>${esc(row.batch||'—')}</td><td>${esc(row.material||'—')}</td><td>${esc(row.desc||'—')}</td><td>${esc(fmt(row.qty))}</td></tr>`).join('')
+    popup.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${esc(resource.resource)}</title><style>@page{size:A4 landscape;margin:8mm}body{font-family:Arial,sans-serif;color:#173b57}.head{display:flex;justify-content:space-between;border-bottom:4px solid #159b83;padding-bottom:12px;margin-bottom:14px}.head h1{margin:0}.meta{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}.meta span{background:#eaf7f3;padding:7px 10px;border-radius:10px;font-weight:700}table{width:100%;border-collapse:collapse;font-size:10px}th{background:#173b57;color:#fff;padding:7px}td{padding:6px;border-bottom:1px solid #dce7ec;text-align:center}tr:nth-child(even) td{background:#f7fafc}</style></head><body><div class="head"><div><h1>${esc(resource.resource)}</h1><p>${esc([resource.station&&`Station ${resource.station}`,resource.description,resource.lineName].filter(Boolean).join(' · '))}</p></div><b>IML CONTROL</b></div><div class="meta"><span>יעד ${esc(fmt(resource.target))}</span><span>בוצע ${esc(fmt(resource.actual))}</span><span>תחזית ${esc(fmt(resource.forecast))}</span><span>מק״טים ${materials.length}</span><span>מנות ${batches.length}</span></div><table><thead><tr><th>#</th><th>תאריך</th><th>תחנה</th><th>Routing</th><th>Order Type</th><th>Order</th><th>Batch</th><th>מק״ט</th><th>תיאור</th><th>כמות</th></tr></thead><tbody>${body}</tbody></table><script>window.onload=()=>setTimeout(()=>window.print(),200)<\/script></body></html>`)
+    popup.document.close()
+  }
+
   const exportRows = () => {
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(materials.map(item => ({
@@ -2129,7 +2174,7 @@ function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
   }
   return <div className="resource-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <section className="resource-detail-modal resource-detail-modal-audit" role="dialog" aria-modal="true" aria-label={`פירוט ${resource.resource}`}>
-      <header><div><span>RESOURCE CONTROL CENTER</span><h2>{resource.resource}</h2><p>{[resource.station && `Station ${resource.station}`, resource.description, resource.lineName].filter(Boolean).join(' · ')}</p></div><div className="resource-head-actions"><button className="resource-export-btn" onClick={exportRows}><FileSpreadsheet size={17}/> ייצוא חישוב</button><button onClick={onClose} aria-label="סגירה"><X/></button></div></header>
+      <header><div><span>RESOURCE CONTROL CENTER</span><h2>{resource.resource}</h2><p>{[resource.station && `Station ${resource.station}`, resource.description, resource.lineName].filter(Boolean).join(' · ')}</p></div><div className="resource-head-actions"><button className="resource-export-btn" onClick={printRows}><Printer size={17}/> הדפסת סימניה</button><button className="resource-export-btn" onClick={exportRows}><FileSpreadsheet size={17}/> ייצוא חישוב</button><button onClick={onClose} aria-label="סגירה"><X/></button></div></header>
       <div className={`resource-status-banner ${resource.state}`}><strong>{resource.label}</strong><span>תחזית {fmt(resource.forecast)} מול יעד {fmt(resource.target)}</span></div>
       <div className="resource-detail-kpis">
         <BatchMetric label="יעד חודשי" value={fmt(resource.target)}/><BatchMetric label="בוצע" value={fmt(resource.actual)}/><BatchMetric label="סכום רשומות" value={fmt(calculatedActual)}/><BatchMetric label="מק״טים" value={materials.length}/><BatchMetric label="מנות" value={batches.length}/><BatchMetric label="Orders" value={orders.length}/><BatchMetric label="תחזית" value={fmt(resource.forecast)}/><BatchMetric label="קצב נדרש" value={fmt(resource.requiredDaily)}/>

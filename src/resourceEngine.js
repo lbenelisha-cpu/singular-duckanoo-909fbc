@@ -47,9 +47,10 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   // Facility 42: identify packaging line by the actual SAP Routing group.
   // Keep the previous 42-P-* aliases and Description text as fallbacks for older files.
   const isFacility42Zfin = station === '1542' && upper(row.orderType).includes('ZFIN')
-  const lq1 = route.includes('LQ-P-1') || route.includes('42-P-02') || route.includes('LIQUID 1 LITER')
-  const lq5 = route.includes('LQ-P-5') || route.includes('42-P-03') || route.includes('LIQUID 5 LITER')
-  const lq1020 = route.includes('LQ-P-10') || route.includes('42-P-04') || route.includes('LIQUID 10/20 LITER')
+  // Exact routing matching is critical: `LQ-P-1` must NOT match `LQ-P-10`.
+  const lq1 = /(^|\s)LQ-P-1(\s|$)/.test(route) || route.includes('42-P-02') || route.includes('LIQUID 1 LITER')
+  const lq5 = /(^|\s)LQ-P-5(\s|$)/.test(route) || route.includes('42-P-03') || route.includes('LIQUID 5 LITER')
+  const lq1020 = /(^|\s)LQ-P-10(\s|$)/.test(route) || route.includes('42-P-04') || route.includes('LIQUID 10/20 LITER')
   if (/LQ\s*1\s*(LT|L)\b/.test(targetName)) return isFacility42Zfin && lq1
   if (/LQ\s*5\s*(LT|L)\b/.test(targetName)) return isFacility42Zfin && lq5
   if (/LQ\s*10\s*\/\s*20/.test(targetName)) return isFacility42Zfin && lq1020

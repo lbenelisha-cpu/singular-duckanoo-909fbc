@@ -233,3 +233,13 @@ body{background:linear-gradient(180deg,#f5f8fa 0,#eef3f6 100%);}
 .sortable-production-table th,.sortable-production-table td{text-align:center!important;vertical-align:middle!important}
 .sortable-production-table th button{width:100%;justify-content:center;text-align:center}
 .smart-table-toolbar [data-smart-sum]{background:#e8f8f3;color:#087865;border:1px solid #c6e9df;border-radius:999px;padding:6px 11px;font-size:12px;white-space:nowrap}
+
+/* Build 12.8.2 — multi-facility picker + section printing */
+.facility-multi-field{position:relative}
+.facility-multi-trigger{width:100%;display:flex;align-items:center;gap:8px;justify-content:flex-start;border:1px solid rgba(255,255,255,.16);background:#fff;color:#173b57;border-radius:10px;padding:10px 11px;cursor:pointer;font:inherit}
+.facility-multi-trigger b{flex:1;text-align:right;font-size:13px}.facility-multi-trigger.active{border-color:#34b69c;box-shadow:0 0 0 2px rgba(52,182,156,.12)}
+.facility-multi-menu{position:absolute!important;z-index:80;top:calc(100% + 5px);right:0;left:0;display:block!important;background:#fff!important;color:#173b57!important;border:1px solid #d8e4ea;border-radius:12px!important;padding:8px!important;box-shadow:0 16px 38px rgba(8,36,53,.2);max-height:310px;overflow:auto}
+.facility-multi-menu-head{display:flex!important;align-items:center!important;justify-content:space-between!important;background:#f3f8fa!important;padding:7px 8px!important;border-radius:8px!important;margin-bottom:5px}.facility-multi-menu-head button{border:0;background:transparent;color:#0d8b76;font-weight:800;cursor:pointer}
+.facility-multi-menu label{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;cursor:pointer}.facility-multi-menu label:hover{background:#edf7f4}.facility-multi-menu input{width:auto!important;margin:0}.facility-multi-menu label span{margin:0!important;color:#173b57!important;font-size:13px!important}
+.section-print-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid #b9d9d1;background:#effaf6;color:#087d69;border-radius:9px;padding:7px 11px;font:inherit;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap}.section-print-btn:hover{background:#dff5ee;border-color:#72c6b4}.details-title-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+@media(max-width:900px){.details-title-actions{width:100%;justify-content:space-between}.section-print-btn{min-height:36px}}
