@@ -465,6 +465,18 @@ const displayDatasetName = (kind, month = '') => {
   return 'קובץ נתונים'
 }
 
+const normalizeDatasetMeta = (kind, meta, targetMonth = '') => {
+  if (!meta) return null
+  const month = kind === 'targets'
+    ? (String(targetMonth || meta.month || '').match(/\d{4}-\d{2}/)?.[0] || '')
+    : ''
+  return {
+    ...meta,
+    fileName: displayDatasetName(kind, month),
+    originalFileName: meta.originalFileName || meta.fileName || '',
+  }
+}
+
 
 
 // Global table tools — generic search/filter/sort controls for every data table.
@@ -705,7 +717,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
       if (kind === 'deviations') setDeviations(rows)
       if (kind === 'targets') setTargets(normalizeStoredTargets(rows))
-      setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
+      setDataMeta(current => ({ ...current, [kind]:normalizeDatasetMeta(kind, dataset?.meta || null, kind === 'targets' ? (rows?.[0]?.month || planningMonth) : '') }))
       return rows.length
     }
 
@@ -731,7 +743,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           setQuality(cached.quality || [])
           setDeviations(cached.deviations || [])
           setTargets(normalizeStoredTargets(cached.targets || []))
-          setDataMeta(cached.dataMeta || { production:null, quality:null, deviations:null, targets:null })
+          setDataMeta({
+            production: normalizeDatasetMeta('production', cached.dataMeta?.production),
+            quality: normalizeDatasetMeta('quality', cached.dataMeta?.quality),
+            deviations: normalizeDatasetMeta('deviations', cached.dataMeta?.deviations),
+            targets: normalizeDatasetMeta('targets', cached.dataMeta?.targets, (cached.targets || [])[0]?.month || planningMonth),
+          })
           setStatus('מוצג מטמון מקומי — בודק עדכונים מהשרת...')
           setCloudState({ mode:'connecting', lastSync:cached.savedAt || null, message:'הדשבורד זמין; בודק גרסאות חדשות ברקע...', latencyMs:null, live:false })
           setPerformance(current => ({ ...current, cache:'HIT', rows:(cached.production?.length||0)+(cached.quality?.length||0)+(cached.deviations?.length||0)+(cached.targets?.length||0), phase:'בדיקת גרסאות' }))
@@ -874,7 +891,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     try {
       const loaded = []
       for (const file of files) {
-        setStatus(`קורא את ${file.name}...`)
+        const initialDisplayName = forcedKind ? displayDatasetName(forcedKind, forcedKind === 'targets' ? planningMonth : '') : file.name
+        setStatus(`קורא את ${initialDisplayName}...`)
         if (forcedKind === 'targets') {
           const originalBuffer = await file.arrayBuffer()
           await idbSetKey(TARGET_FILE_KEY, {
@@ -943,16 +961,16 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             qualitative: normalize(getField(r, ['Qualitative'])),
             udCode: normalize(getField(r, ['UD Code', 'Usage Decision', 'Usage decision', 'החלטת שימוש'])),
           })).filter(r => r.batch || r.inspectionLot)
-          setStatus(`בודק אילו רשומות איכות חדשות קיימות ב-${file.name}...`)
-          setUploadProgress({ fileName:file.name, kind, phase:'dedupe', percent:0, message:'משווה מול נתוני האיכות הקיימים' })
+          setStatus(`בודק אילו רשומות איכות חדשות קיימות ב-${displayDatasetName('quality')}...`)
+          setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent:0, message:'משווה מול נתוני האיכות הקיימים' })
           const fresh = await filterNewQualityRows(quality, compact, (completed,total) => {
             const percent = total ? Math.round(completed / total * 100) : 100
-            setUploadProgress({ fileName:file.name, kind, phase:'dedupe', percent, message:'מסנן רשומות שכבר קיימות' })
+            setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent, message:'מסנן רשומות שכבר קיימות' })
           })
           storedCount = fresh.length; rowsForCloud = fresh
           if (!fresh.length) {
-            loaded.push(`${file.name}: לא נמצאו רשומות איכות חדשות`)
-            setStatus(`${file.name}: כל ${fmt(compact.length)} הרשומות כבר קיימות — לא בוצעה העלאה`)
+            loaded.push(`${displayDatasetName('quality')}: לא נמצאו רשומות איכות חדשות`)
+            setStatus(`${displayDatasetName('quality')}: כל ${fmt(compact.length)} הרשומות כבר קיימות — לא בוצעה העלאה`)
             continue
           }
         } else if (kind === 'deviations') {}
@@ -1768,6 +1786,8 @@ console.log("QUALITY =", qualityForBatchMaterial)
     popup.document.close()
   }
 
+  const planningDisplayStation = row => /^EC\s*\(23\)/i.test(normalize(row?.resource)) ? '1523' : (row?.station || row?.facility || '—')
+
   const printDailyManagement = () => openPrintReport(
     'Daily Management — ניהול יומי',
     'יעדים, ביצוע, תחזית וקצב נדרש לכל משאב פעיל',
@@ -1777,7 +1797,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       {key:'remaining',label:'נותר'},{key:'days',label:'ימים נותרו'},{key:'required',label:'נדרש ליום'},
       {key:'avg7',label:'ממוצע 7 ימים'},{key:'forecast',label:'תחזית'},{key:'status',label:'סטטוס'}
     ],
-    planningRows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:r.station||r.facility,line:r.lineName||r.routingGroup||'—',target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),days:r.remainingWorkdays,required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),forecast:fmt(r.forecast),status:r.label}))
+    planningRows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:planningDisplayStation(r),line:r.lineName||r.routingGroup||'—',target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),days:r.remainingWorkdays,required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),forecast:fmt(r.forecast),status:r.label}))
   )
 
 
@@ -1799,7 +1819,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     openPrintReport('תחזית חודשית לפי מתקן', `מתקנים: ${selectedFacilityLabel()}`, [
       {key:'resource',label:'משאב / סימניה'},{key:'station',label:'תחנה'},{key:'target',label:'יעד חודשי'},{key:'actual',label:'בוצע'},
       {key:'pct',label:'% ביצוע'},{key:'remaining',label:'נותר'},{key:'required',label:'נדרש ליום'},{key:'avg7',label:'ממוצע 7 ימים'},{key:'max',label:'שיא מוכח'},{key:'forecast',label:'תחזית'},{key:'status',label:'סטטוס'}
-    ], rows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:r.station||r.facility,target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),max:fmt(r.provenMax),forecast:fmt(r.forecast),status:r.label})))
+    ], rows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:planningDisplayStation(r),target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),max:fmt(r.provenMax),forecast:fmt(r.forecast),status:r.label})))
   }
   const printFacilityPerformance = () => {
     const rows = facilityStats.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.id))
@@ -2081,7 +2101,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       <section className="daily-management" id="daily-management-section">
         <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!planningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
         <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימים נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
-          {visiblePlanningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{r.station || r.facility}</td><td>{[r.station, r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+          {visiblePlanningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{planningDisplayStation(r)}</td><td>{[planningDisplayStation(r), r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
           {!visiblePlanningRows.length && <tr><td colSpan="14" className="empty">אין מתקנים התואמים למסנן התצוגה</td></tr>}
         </tbody></table></div>
       </section>

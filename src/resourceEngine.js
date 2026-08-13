@@ -198,7 +198,7 @@ const latestDate = monthRows.reduce((latest, row) => {
       id:`${targetRow.resource || targetRow.facility || index}::${index}`, targetKey:targetMappingKey(targetRow),
       resource:targetRow.resource || `מתקן ${targetRow.facility}`,
       facility:facilities.join(','), facilities,
-      routingGroup:targetRow.routingGroup || '', station:targetRow.station || facilities.join(','),
+      routingGroup:targetRow.routingGroup || '', station:/^EC\s*\(23\)/i.test(String(targetRow.resource || '').trim()) ? '1523' : (targetRow.station || facilities.join(',')),
       description:(targetRow.descriptionTokens || []).join(' / '), packagingType:packagingTypeForTarget(targetRow), lineName:targetRow.lineName || targetRow.resource || '', activity:targetRow.activity || 'ייצור / אריזה',
       target, capacity, actual, pct:target ? actual / target * 100 : 0, remaining, requiredDaily,
       average, recentAverage, provenMax, forecast, capacityForecast, elapsedWorkdays, remainingWorkdays, totalWorkdays,
