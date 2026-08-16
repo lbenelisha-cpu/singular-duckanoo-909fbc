@@ -233,6 +233,24 @@ const canonicalFacility = (value) => {
   const digits = clean.match(/15\d{2}/)?.[0]
   return digits || clean
 }
+
+// Production rows mapped to facility 1542 must actually belong to one of the
+// approved Facility 42 packaging routings. Storage aliases such as T42A are
+// logistical locations and, on their own, are not proof that the row was
+// produced/packed on Facility 42. This prevents rows such as M85NOCST from
+// inflating Facility 42 and the recent-production table.
+const isFacility42PackagingRoute = (routingGroup, routingDescription = '') => {
+  const route = normalize(`${routingGroup || ''} ${routingDescription || ''}`).toUpperCase()
+  return /(^|\s)LQ-P-(1|5|10)(\s|$)/.test(route) ||
+    route.includes('42-P-02') || route.includes('42-P-03') || route.includes('42-P-04') ||
+    route.includes('LIQUID 1 LITER') || route.includes('LIQUID 5 LITER') || route.includes('LIQUID 10/20 LITER')
+}
+
+const productionFacility = (facilityValue, routingGroup, routingDescription = '') => {
+  const facility = canonicalFacility(facilityValue)
+  if (facility !== '1542') return facility
+  return isFacility42PackagingRoute(routingGroup, routingDescription) ? '1542' : ''
+}
 const matchesDateRange = (date, from, to) => {
   const value = iso(date)
   if (!from && !to) return true
@@ -913,7 +931,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         if (kind === 'production') {
           const compact = rows.map(r => ({
             __compactProduction: true,
-            facility: canonicalFacility(getField(r, ['Storage Location', 'Storage location'])),
+            facility: productionFacility(
+              getField(r, ['Storage Location', 'Storage location']),
+              getField(r, ['Routing group', 'Routing Group', 'RoutingGroup']),
+              getField(r, ['Description', 'Routing Description'])
+            ),
             productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
             finishDate: localDateTimeString(
   combineExcelDateTime(
@@ -1054,7 +1076,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const prod = useMemo(() => production.map(r => {
     if (r?.__compactProduction) {
       return {
-        facility: canonicalFacility(r.facility),
+        facility: productionFacility(r.facility, r.routingGroup, r.routingDescription),
         productionDay: normalize(r.productionDay) || iso(r.finishDate),
         date: productionDateFromDay(r.productionDay) || (r.finishDate ? new Date(r.finishDate) : null),
         qty: num(r.qty),
@@ -1075,7 +1097,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       getField(r, ['Release date (actual)', 'Time Stamp'])
     )
     return {
-      facility: canonicalFacility(getField(r, ['Storage Location', 'Storage location'])),
+      facility: productionFacility(
+        getField(r, ['Storage Location', 'Storage location']),
+        getField(r, ['Routing group', 'Routing Group', 'RoutingGroup']),
+        getField(r, ['Description', 'Routing Description'])
+      ),
       productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
       date: productionDateFromDay(localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date']))) || finish,
       qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
