@@ -352,18 +352,51 @@ const normalizeStoredTargets = rows => (rows || [])
   .filter(row => !isLegacyCombinedTarget(row?.resource || row?.lineName || ''))
 
 
-const qualityRowKey = (row) => [
-  normalize(row?.inspectionLot), normalize(row?.batch), normalize(row?.material),
-  normalize(row?.characteristic), row?.date ? new Date(row.date).toISOString() : '',
-  normalize(row?.value), normalize(row?.qualitative), normalize(row?.status)
+const stableDateKey = value => {
+  if (!value) return ''
+  const date = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(date.getTime()) ? normalize(value) : date.toISOString()
+}
+
+// Stable row identities used to prevent duplicate records when a file is loaded again.
+const productionRowKey = row => [
+  normalize(row?.facility), normalize(row?.productionDay), stableDateKey(row?.finishDate || row?.date),
+  normalize(row?.order), normalize(row?.batch), normalize(row?.material), normalize(row?.routingGroup),
+  normalize(row?.orderType), String(Number(row?.qty) || 0), String(Number(row?.plannedQty) || 0)
 ].join('|')
 
-async function filterNewQualityRows(existingRows, incomingRows, onProgress) {
+const qualityRowKey = row => [
+  normalize(row?.inspectionLot), normalize(row?.batch), normalize(row?.material),
+  normalize(row?.characteristic), stableDateKey(row?.date), normalize(row?.value),
+  normalize(row?.qualitative)
+].join('|')
+
+const deviationRawRowKey = row => [
+  normalize(getField(row, ['Inspection Lot','Inspection Lot #'])),
+  normalize(getField(row, ['Batch','Batch Number'])),
+  normalize(getField(row, ['Material #','Material Number','Material No.','מקט','מק"ט','מק״ט','Material'])),
+  normalize(getField(row, ['UD Code','Usage Decision','Usage decision','החלטת שימוש'])),
+  stableDateKey(excelDate(getField(row, ['Inspection Lot UD Date','Date of Lot Creation','Process Order Delivered Date','Start Date of Inspection'])))
+].join('|')
+
+const dedupeRows = (rows, keyFn) => {
+  const seen = new Set()
+  const output = []
+  for (const row of rows || []) {
+    const key = keyFn(row)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    output.push(row)
+  }
+  return output
+}
+
+async function filterNewRows(existingRows, incomingRows, keyFn, onProgress) {
   const keys = new Set()
   const total = existingRows.length + incomingRows.length
   let done = 0
   for (let i = 0; i < existingRows.length; i += 4000) {
-    existingRows.slice(i, i + 4000).forEach(row => keys.add(qualityRowKey(row)))
+    existingRows.slice(i, i + 4000).forEach(row => keys.add(keyFn(row)))
     done += Math.min(4000, existingRows.length - i)
     onProgress?.(done, total)
     await new Promise(resolve => setTimeout(resolve, 0))
@@ -371,8 +404,10 @@ async function filterNewQualityRows(existingRows, incomingRows, onProgress) {
   const fresh = []
   for (let i = 0; i < incomingRows.length; i += 4000) {
     incomingRows.slice(i, i + 4000).forEach(row => {
-      const key = qualityRowKey(row)
-      if (!keys.has(key)) { keys.add(key); fresh.push(row) }
+      const key = keyFn(row)
+      if (!key || keys.has(key)) return
+      keys.add(key)
+      fresh.push(row)
     })
     done += Math.min(4000, incomingRows.length - i)
     onProgress?.(done, total)
@@ -721,7 +756,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       const rows = dataset?.rows || []
       if (kind === 'production') {
   setProduction(
-    rows.map(row => {
+    dedupeRows(rows, productionRowKey).map(row => {
       const sourceDate = row.finishDate || row.date
 
       return {
@@ -733,8 +768,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     })
   )
 }
-      if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
-      if (kind === 'deviations') setDeviations(rows)
+      if (kind === 'quality') setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
+      if (kind === 'deviations') setDeviations(dedupeRows(rows, deviationRawRowKey))
       if (kind === 'targets') setTargets(normalizeStoredTargets(rows))
       setDataMeta(current => ({ ...current, [kind]:normalizeDatasetMeta(kind, dataset?.meta || null, kind === 'targets' ? (rows?.[0]?.month || planningMonth) : '') }))
       return rows.length
@@ -746,7 +781,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         cached = await idbGet()
         if (active && cached) {
           setProduction(
-  (cached.production || []).map(row => {
+  dedupeRows((cached.production || []), productionRowKey).map(row => {
     const sourceDate = row.finishDate || row.date
 
     return {
@@ -759,8 +794,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     }
   })
 )
-          setQuality(cached.quality || [])
-          setDeviations(cached.deviations || [])
+          setQuality(dedupeRows(cached.quality || [], qualityRowKey))
+          setDeviations(dedupeRows(cached.deviations || [], deviationRawRowKey))
           setTargets(normalizeStoredTargets(cached.targets || []))
           setDataMeta({
             production: normalizeDatasetMeta('production', cached.dataMeta?.production),
@@ -838,7 +873,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             const rows = dataset?.rows || []
             if (kind === 'production') {
   setProduction(
-    rows.map(row => {
+    dedupeRows(rows, productionRowKey).map(row => {
       const sourceDate = row.finishDate || row.date
 
       return {
@@ -850,8 +885,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     })
   )
 }
-            if (kind === 'quality') setQuality(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row))
-            if (kind === 'deviations') setDeviations(rows)
+            if (kind === 'quality') setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
+            if (kind === 'deviations') setDeviations(dedupeRows(rows, deviationRawRowKey))
             if (kind === 'targets') setTargets(normalizeStoredTargets(rows))
             setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
             setCloudState(current => ({ ...current, mode:'cloud', live:true, lastSync:new Date().toISOString(), message:`עודכן ${kind} בלבד` }))
@@ -930,7 +965,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         let storedCount = rows.length
         let rowsForCloud = rows
         if (kind === 'production') {
-          const compact = rows.map(r => ({
+          const compact = dedupeRows(rows.map(r => ({
             __compactProduction: true,
             facility: productionFacility(
               getField(r, ['Storage Location', 'Storage location']),
@@ -954,12 +989,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             orderType: normalize(getField(r, ['Order Type'])),
             routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup'])),
             routingDescription: normalize(getField(r, ['Description', 'Routing Description'])),
-          })).filter(r => r.facility && (r.qty || r.order || r.batch))
+          })).filter(r => r.facility && (r.qty || r.order || r.batch)), productionRowKey)
           storedCount = compact.length
           rowsForCloud = compact
         }
         else if (kind === 'quality') {
-          const compact = rows.map(r => ({
+          const compact = dedupeRows(rows.map(r => ({
             __compactQuality: true,
             facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
             date: combineExcelDateTime(
@@ -984,10 +1019,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             line: normalize(getField(r, ['Production Line'])), remarks: normalize(getField(r, ['Charactristic Remarks', 'Characteristic Remarks', 'Batch Remarks'])),
             qualitative: normalize(getField(r, ['Qualitative'])),
             udCode: normalize(getField(r, ['UD Code', 'Usage Decision', 'Usage decision', 'החלטת שימוש'])),
-          })).filter(r => r.batch || r.inspectionLot)
+          })).filter(r => r.batch || r.inspectionLot), qualityRowKey)
           setStatus(`בודק אילו רשומות איכות חדשות קיימות ב-${displayDatasetName('quality')}...`)
           setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent:0, message:'משווה מול נתוני האיכות הקיימים' })
-          const fresh = await filterNewQualityRows(quality, compact, (completed,total) => {
+          const fresh = await filterNewRows(quality, compact, qualityRowKey, (completed,total) => {
             const percent = total ? Math.round(completed / total * 100) : 100
             setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent, message:'מסנן רשומות שכבר קיימות' })
           })
@@ -997,7 +1032,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             setStatus(`${displayDatasetName('quality')}: כל ${fmt(compact.length)} הרשומות כבר קיימות — לא בוצעה העלאה`)
             continue
           }
-        } else if (kind === 'deviations') {}
+        } else if (kind === 'deviations') {
+          rowsForCloud = dedupeRows(rows, deviationRawRowKey)
+          storedCount = rowsForCloud.length
+        }
         else if (kind === 'targets') {
           const fallbackMonth = targetMonthFromTitle(file.name, new Date())
           const parsed = rows.flatMap(r => {
@@ -1050,7 +1088,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           ? await uploadCloudDatasetIncremental(kind, rowsForCloud, { ...nextMeta, existingRows:quality.length }, currentUser, progressHandler)
           : await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progressHandler)
         if (kind === 'production') setProduction(rowsForCloud)
-        else if (kind === 'quality') setQuality(current => [...current, ...rowsForCloud])
+        else if (kind === 'quality') setQuality(current => dedupeRows([...current, ...rowsForCloud], qualityRowKey))
         else if (kind === 'deviations') setDeviations(rowsForCloud)
         else if (kind === 'targets') setTargets(normalizeStoredTargets(rowsForCloud))
         setDataMeta(current => ({ ...current, [kind]: savedMeta }))
