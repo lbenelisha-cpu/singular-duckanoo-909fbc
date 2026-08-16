@@ -2421,6 +2421,7 @@ function BatchMetric({label,value}) { return <div className="batch-metric"><span
 
 function DataSource({ title, icon, meta, count, rows = [], showYearBreakdown = false, acceptLabel, busy, onFiles, canManage }) {
   const [breakdownOpen, setBreakdownOpen] = useState(false)
+  const [selectedYear, setSelectedYear] = useState(null)
   const loaded = Boolean(meta || count)
   const loadedAt = meta?.loadedAt ? new Date(meta.loadedAt).toLocaleString('he-IL') : 'טרם נטען'
   const yearBreakdown = useMemo(() => {
@@ -2438,6 +2439,19 @@ function DataSource({ title, icon, meta, count, rows = [], showYearBreakdown = f
     if (noDate) result.push({ year:'ללא תאריך', value:noDate })
     return result
   }, [rows, showYearBreakdown])
+  const monthBreakdown = useMemo(() => {
+    if (!showYearBreakdown || !selectedYear) return []
+    const months = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, value: 0 }))
+    rows.forEach(row => {
+      const raw = row?.date
+      const d = raw instanceof Date ? raw : (raw ? new Date(raw) : null)
+      if (!d || !Number.isFinite(d.getTime()) || d.getFullYear() !== Number(selectedYear)) return
+      months[d.getMonth()].value += 1
+    })
+    return months
+  }, [rows, showYearBreakdown, selectedYear])
+  const selectedYearTotal = monthBreakdown.reduce((sum, item) => sum + item.value, 0)
+  const monthNames = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר']
   return <>
     <article className={`data-source ${loaded ? 'ready' : ''}`}>
       <div className="data-source-head"><div className="data-source-icon">{icon}</div><div><h3>{title}</h3><span>{loaded ? 'תקין וזמין' : 'ממתין לקובץ'}</span></div></div>
@@ -2450,7 +2464,14 @@ function DataSource({ title, icon, meta, count, rows = [], showYearBreakdown = f
       <section className="year-breakdown-modal" role="dialog" aria-modal="true" aria-label="פירוט מאגר איכות לפי שנה">
         <header><div><small>QUALITY DATABASE</small><h3>פירוט מאגר תוצאות איכות</h3><p>פילוח הרשומות הייחודיות שנמצאות כרגע באפליקציה לפי שנת תאריך הבדיקה.</p></div><button type="button" onClick={()=>setBreakdownOpen(false)} aria-label="סגירה"><X size={20}/></button></header>
         <div className="year-breakdown-total"><span>סה״כ רשומות ייחודיות</span><b>{fmt(count)}</b></div>
-        <div className="year-breakdown-list">{yearBreakdown.map(item => <div key={item.year}><span>{item.year}</span><b>{fmt(item.value)}</b><em>{count ? `${(item.value/count*100).toFixed(1)}%` : '0%'}</em></div>)}</div>
+        {!selectedYear ? <>
+          <div className="year-breakdown-list">{yearBreakdown.map(item => <button type="button" className={item.year === 'ללא תאריך' ? 'year-breakdown-row disabled' : 'year-breakdown-row'} key={item.year} disabled={item.year === 'ללא תאריך'} onClick={()=>item.year !== 'ללא תאריך' && setSelectedYear(item.year)}><span>{item.year}</span><b>{fmt(item.value)}</b><em>{count ? `${(item.value/count*100).toFixed(1)}%` : '0%'}</em></button>)}</div>
+          <div className="year-breakdown-hint">לחץ על שנה כדי לראות פירוט חודשי</div>
+        </> : <div className="month-audit">
+          <div className="month-audit-head"><button type="button" onClick={()=>setSelectedYear(null)}>← חזרה לשנים</button><div><small>MONTHLY AUDIT</small><h4>פירוט חודשי — {selectedYear}</h4></div></div>
+          <div className="month-audit-total"><span>סה״כ בשנת {selectedYear}</span><b>{fmt(selectedYearTotal)}</b></div>
+          <div className="month-audit-list">{monthBreakdown.map(item => <div key={item.month}><span>{monthNames[item.month-1]}</span><b>{fmt(item.value)}</b><em>{selectedYearTotal ? `${(item.value/selectedYearTotal*100).toFixed(1)}%` : '0%'}</em></div>)}</div>
+        </div>}
         <footer><small>הפילוח אינו מוחק או משנה נתונים ב-Supabase — הוא כלי בדיקה בלבד.</small></footer>
       </section>
     </div>}
