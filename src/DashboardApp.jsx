@@ -2130,7 +2130,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <p className="data-center-help">כל קובץ נבדק בדפדפן ולאחר מכן נשמר ב־Supabase. מרגע שהטעינה מסתיימת, אותו מידע זמין לכל המשתמשים המחוברים.</p>
         <div className="data-source-grid">
           <DataSource title="תפוקות" icon={<Factory/>} meta={dataMeta.production} count={production.length} acceptLabel="טען קובץ תפוקות" busy={busy} onFiles={files => loadFiles(files, 'production')} canManage={canManageData}/>
-          <DataSource title="תוצאות איכות" icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} acceptLabel="הוסף תוצאות איכות חדשות" busy={busy} onFiles={files => loadFiles(files, 'quality')} canManage={canManageData}/>
+          <DataSource title="תוצאות איכות" icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} rows={quality} showYearBreakdown acceptLabel="הוסף תוצאות איכות חדשות" busy={busy} onFiles={files => loadFiles(files, 'quality')} canManage={canManageData}/>
           <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
           <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')} canManage={canManageData}/>
         </div>
@@ -2419,15 +2419,42 @@ function BatchControlCard({ data, onClose }) {
 }
 function BatchMetric({label,value}) { return <div className="batch-metric"><span>{label}</span><b>{value}</b></div> }
 
-function DataSource({ title, icon, meta, count, acceptLabel, busy, onFiles, canManage }) {
+function DataSource({ title, icon, meta, count, rows = [], showYearBreakdown = false, acceptLabel, busy, onFiles, canManage }) {
+  const [breakdownOpen, setBreakdownOpen] = useState(false)
   const loaded = Boolean(meta || count)
   const loadedAt = meta?.loadedAt ? new Date(meta.loadedAt).toLocaleString('he-IL') : 'טרם נטען'
-  return <article className={`data-source ${loaded ? 'ready' : ''}`}>
-    <div className="data-source-head"><div className="data-source-icon">{icon}</div><div><h3>{title}</h3><span>{loaded ? 'תקין וזמין' : 'ממתין לקובץ'}</span></div></div>
-    <div className="data-source-count"><b>{fmt(count)}</b><span>רשומות ייחודיות במאגר</span></div>{meta?.lastFileRows ? <div className="data-source-last-file"><b>{fmt(meta.lastFileRows)}</b><span>רשומות בקובץ האחרון</span>{meta?.lastFileUniqueRows != null && <small>ייחודיות בקובץ: {fmt(meta.lastFileUniqueRows)}</small>}</div> : null}
-    <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
-    {canManage ? <label className={`source-upload ${busy ? 'disabled' : ''}`}><RefreshCw size={16}/>{acceptLabel}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; onFiles(files) }}/></label> : <div className="viewer-lock"><ShieldCheck size={16}/> צפייה בלבד</div>}
-  </article>
+  const yearBreakdown = useMemo(() => {
+    if (!showYearBreakdown) return []
+    const counts = new Map()
+    let noDate = 0
+    rows.forEach(row => {
+      const raw = row?.date
+      const d = raw instanceof Date ? raw : (raw ? new Date(raw) : null)
+      const year = d && Number.isFinite(d.getTime()) ? d.getFullYear() : null
+      if (year && year >= 2000 && year <= 2100) counts.set(year, (counts.get(year) || 0) + 1)
+      else noDate += 1
+    })
+    const result = [...counts.entries()].sort((a,b) => b[0]-a[0]).map(([year,value]) => ({ year:String(year), value }))
+    if (noDate) result.push({ year:'ללא תאריך', value:noDate })
+    return result
+  }, [rows, showYearBreakdown])
+  return <>
+    <article className={`data-source ${loaded ? 'ready' : ''}`}>
+      <div className="data-source-head"><div className="data-source-icon">{icon}</div><div><h3>{title}</h3><span>{loaded ? 'תקין וזמין' : 'ממתין לקובץ'}</span></div></div>
+      <div className="data-source-count"><b>{fmt(count)}</b><span>רשומות ייחודיות במאגר</span></div>{meta?.lastFileRows ? <div className="data-source-last-file"><b>{fmt(meta.lastFileRows)}</b><span>רשומות בקובץ האחרון</span>{meta?.lastFileUniqueRows != null && <small>ייחודיות בקובץ: {fmt(meta.lastFileUniqueRows)}</small>}</div> : null}
+      {showYearBreakdown && loaded && <button type="button" className="source-breakdown-btn" onClick={()=>setBreakdownOpen(true)}>פירוט מאגר לפי שנה</button>}
+      <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
+      {canManage ? <label className={`source-upload ${busy ? 'disabled' : ''}`}><RefreshCw size={16}/>{acceptLabel}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; onFiles(files) }}/></label> : <div className="viewer-lock"><ShieldCheck size={16}/> צפייה בלבד</div>}
+    </article>
+    {breakdownOpen && <div className="year-breakdown-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setBreakdownOpen(false)}}>
+      <section className="year-breakdown-modal" role="dialog" aria-modal="true" aria-label="פירוט מאגר איכות לפי שנה">
+        <header><div><small>QUALITY DATABASE</small><h3>פירוט מאגר תוצאות איכות</h3><p>פילוח הרשומות הייחודיות שנמצאות כרגע באפליקציה לפי שנת תאריך הבדיקה.</p></div><button type="button" onClick={()=>setBreakdownOpen(false)} aria-label="סגירה"><X size={20}/></button></header>
+        <div className="year-breakdown-total"><span>סה״כ רשומות ייחודיות</span><b>{fmt(count)}</b></div>
+        <div className="year-breakdown-list">{yearBreakdown.map(item => <div key={item.year}><span>{item.year}</span><b>{fmt(item.value)}</b><em>{count ? `${(item.value/count*100).toFixed(1)}%` : '0%'}</em></div>)}</div>
+        <footer><small>הפילוח אינו מוחק או משנה נתונים ב-Supabase — הוא כלי בדיקה בלבד.</small></footer>
+      </section>
+    </div>}
+  </>
 }
 
 function Summary({ title, value, sub, warn }) { return <div className={`summary ${warn ? 'warn' : ''}`}><span>{title}</span><b>{value}</b><small>{sub}</small></div> }
