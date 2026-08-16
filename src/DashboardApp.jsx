@@ -365,11 +365,15 @@ const productionRowKey = row => [
   normalize(row?.orderType), String(Number(row?.qty) || 0), String(Number(row?.plannedQty) || 0)
 ].join('|')
 
-const qualityRowKey = row => [
-  normalize(row?.inspectionLot), normalize(row?.batch), normalize(row?.material),
-  normalize(row?.characteristic), stableDateKey(row?.date), normalize(row?.value),
-  normalize(row?.qualitative)
+const qualityBusinessRowKey = row => [
+  normalize(row?.inspectionLot), normalize(row?.sampleNo), normalize(row?.operationActivity),
+  normalize(row?.characteristic), normalize(row?.material), normalize(row?.batch)
 ].join('|')
+const qualityLegacyRowKey = row => [
+  normalize(row?.inspectionLot), normalize(row?.batch), normalize(row?.material),
+  normalize(row?.characteristic), stableDateKey(row?.date), normalize(row?.value), normalize(row?.qualitative)
+].join('|')
+const qualityRowKey = row => (normalize(row?.sampleNo) || normalize(row?.operationActivity)) ? qualityBusinessRowKey(row) : qualityLegacyRowKey(row)
 
 const deviationRawRowKey = row => [
   normalize(getField(row, ['Inspection Lot','Inspection Lot #'])),
@@ -412,6 +416,30 @@ async function filterNewRows(existingRows, incomingRows, keyFn, onProgress) {
     done += Math.min(4000, incomingRows.length - i)
     onProgress?.(done, total)
     await new Promise(resolve => setTimeout(resolve, 0))
+  }
+  return fresh
+}
+
+
+async function filterNewQualityRows(existingRows, incomingRows, onProgress) {
+  const businessKeys = new Set(), legacyKeys = new Set()
+  const total = existingRows.length + incomingRows.length
+  let done = 0
+  for (let i = 0; i < existingRows.length; i += 4000) {
+    existingRows.slice(i, i + 4000).forEach(row => {
+      if (normalize(row?.sampleNo) || normalize(row?.operationActivity)) businessKeys.add(qualityBusinessRowKey(row))
+      legacyKeys.add(qualityLegacyRowKey(row))
+    })
+    done += Math.min(4000, existingRows.length - i); onProgress?.(done,total); await new Promise(r=>setTimeout(r,0))
+  }
+  const fresh=[]
+  for (let i = 0; i < incomingRows.length; i += 4000) {
+    incomingRows.slice(i, i + 4000).forEach(row => {
+      const bk=qualityBusinessRowKey(row), lk=qualityLegacyRowKey(row)
+      if (businessKeys.has(bk) || legacyKeys.has(lk)) return
+      businessKeys.add(bk); legacyKeys.add(lk); fresh.push(row)
+    })
+    done += Math.min(4000, incomingRows.length - i); onProgress?.(done,total); await new Promise(r=>setTimeout(r,0))
   }
   return fresh
 }
@@ -1013,6 +1041,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 ])),
             order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])), status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
             approval: normalize(getField(r, ['QA Approval'])), inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
+            sampleNo: normalize(getField(r, ['Sample #', 'Sample Number', 'Sample'])),
+            operationActivity: normalize(getField(r, ['Operation Activity', 'Operation activity', 'Operation'])),
+            operationText: normalize(getField(r, ['Operation short text', 'Operation Short Text'])),
             characteristic: normalize(getField(r, ['Master Insp Charactristic', 'Master Inspection Characteristic'])),
             value: normalize(getField(r, ['Arithmetic Mean of Valid Measured Values'])), lower: normalize(getField(r, ['Lower Specif Limit', 'Lower Spec Limit'])),
             upper: normalize(getField(r, ['Upper Specif Limit', 'Upper Spec Limit'])), unit: normalize(getField(r, ['Unit of Measurement'])),
@@ -1022,7 +1053,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           })).filter(r => r.batch || r.inspectionLot), qualityRowKey)
           setStatus(`בודק אילו רשומות איכות חדשות קיימות ב-${displayDatasetName('quality')}...`)
           setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent:0, message:'משווה מול נתוני האיכות הקיימים' })
-          const fresh = await filterNewRows(quality, compact, qualityRowKey, (completed,total) => {
+          const fresh = await filterNewQualityRows(quality, compact, (completed,total) => {
             const percent = total ? Math.round(completed / total * 100) : 100
             setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent, message:'מסנן רשומות שכבר קיימות' })
           })
@@ -1077,7 +1108,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         } else throw new Error(`${file.name}: סוג הקובץ לא זוהה. השתמש באזור הטעינה המתאים במרכז הנתונים.`)
         const facilitiesFound = new Set(rows.slice(0, 5000).map(r => canonicalFacility(getField(r, ['Storage Location','Inspection Lot Storage Location','Process Order Storage Location','Facility','Production Line','מתקן']))).filter(Boolean)).size
         const displayName = displayDatasetName(kind, kind === 'targets' ? rowsForCloud?.[0]?.month : '')
-        const nextMeta = { fileName:displayName, originalFileName:file.name, rows:storedCount, rawRows:rows.length, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
+        const nextMeta = { fileName:displayName, originalFileName:file.name, rows:storedCount, rawRows:rows.length, lastFileRows:rows.length, lastFileUniqueRows:kind === 'quality' ? compact?.length : storedCount, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
         setStatus(`מעלה את ${displayName} למסד המשותף...`)
         setUploadProgress({ fileName:displayName, kind, phase:'prepare', percent:0, message:'מכין את הנתונים' })
         const progressHandler = progress => {
@@ -2393,7 +2424,7 @@ function DataSource({ title, icon, meta, count, acceptLabel, busy, onFiles, canM
   const loadedAt = meta?.loadedAt ? new Date(meta.loadedAt).toLocaleString('he-IL') : 'טרם נטען'
   return <article className={`data-source ${loaded ? 'ready' : ''}`}>
     <div className="data-source-head"><div className="data-source-icon">{icon}</div><div><h3>{title}</h3><span>{loaded ? 'תקין וזמין' : 'ממתין לקובץ'}</span></div></div>
-    <div className="data-source-count"><b>{fmt(count)}</b><span>רשומות פעילות</span></div>
+    <div className="data-source-count"><b>{fmt(count)}</b><span>רשומות ייחודיות במאגר</span></div>{meta?.lastFileRows ? <div className="data-source-last-file"><b>{fmt(meta.lastFileRows)}</b><span>רשומות בקובץ האחרון</span>{meta?.lastFileUniqueRows != null && <small>ייחודיות בקובץ: {fmt(meta.lastFileUniqueRows)}</small>}</div> : null}
     <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
     {canManage ? <label className={`source-upload ${busy ? 'disabled' : ''}`}><RefreshCw size={16}/>{acceptLabel}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; onFiles(files) }}/></label> : <div className="viewer-lock"><ShieldCheck size={16}/> צפייה בלבד</div>}
   </article>

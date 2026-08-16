@@ -356,3 +356,4 @@ body{background:linear-gradient(180deg,#f5f8fa 0,#eef3f6 100%);}
   .quantity-variance-grid { grid-template-columns: repeat(2, 1fr); }
   .quantity-variance-meta { grid-template-columns: 1fr; }
 }
+.data-source-last-file{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;margin-top:-2px;color:#53677b;font-size:12px}.data-source-last-file b{font-size:15px;color:#0d766c}.data-source-last-file small{width:100%;color:#728399}
