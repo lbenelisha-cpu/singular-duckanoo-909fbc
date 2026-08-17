@@ -1139,14 +1139,45 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               // from current production using the DATA-sheet material list.
               if (targetRow.facilities?.length) return targetRow
               const materialSet = new Set((targetRow.materials || []).map(normalize).filter(Boolean))
-              if (!materialSet.size) return { ...targetRow, mappingStatus:'requires-mapping' }
-              const inferred = [...new Set(production
-                .filter(prodRow => materialSet.has(normalize(prodRow.material)))
-                .map(prodRow => normalize(prodRow.facility))
-                .filter(Boolean))]
-              return inferred.length
-                ? { ...targetRow, facility:inferred[0], facilities:inferred, station:inferred.join(','), mappingStatus:'inferred' }
-                : { ...targetRow, mappingStatus:'requires-mapping' }
+              if (!materialSet.size) return { ...targetRow, mappingStatus:'requires-mapping', mappingReason:'לא נמצאו מק״טים למשפחה בגיליון DATA' }
+
+              // Dynamic Mapping V3: infer only when the evidence is unambiguous.
+              // Group 11xx/15xx aliases into the same production family, ignore the two
+              // dedicated bulk streams (1142+999 and 1119+777), and never guess when
+              // the same target materials are reported in more than one station family.
+              const evidence = production.filter(prodRow => {
+                if (!materialSet.has(normalize(prodRow.material))) return false
+                const station = normalize(prodRow.facility)
+                const markerText = normalize(`${prodRow.desc || ''} ${prodRow.routingDescription || ''}`)
+                if (station === '1142' && /(^|\D)999(\D|$)/.test(markerText)) return false
+                if (station === '1119' && /(^|\D)777(\D|$)/.test(markerText)) return false
+                return true
+              })
+              const familyCounts = new Map()
+              evidence.forEach(prodRow => {
+                const family = stationFamily(prodRow.facility)
+                if (!family) return
+                familyCounts.set(family, (familyCounts.get(family) || 0) + 1)
+              })
+              const candidates = [...familyCounts.entries()].sort((a,b) => b[1]-a[1])
+              if (candidates.length !== 1) {
+                return {
+                  ...targetRow,
+                  mappingStatus:'requires-mapping',
+                  mappingCandidates:candidates.map(([facility, rows]) => ({ facility, rows })),
+                  mappingReason:candidates.length ? 'נמצאה תפוקה ביותר ממשפחת תחנה אחת — נדרש אישור מנהל' : 'לא נמצאה תפוקה תואמת למק״טים בקובץ הכמויות'
+                }
+              }
+              const inferredFacility = candidates[0][0]
+              return {
+                ...targetRow,
+                facility:inferredFacility,
+                facilities:[inferredFacility],
+                station:inferredFacility,
+                mappingStatus:'inferred',
+                mappingConfidence:'high',
+                mappingReason:`זוהה אוטומטית לפי מק״טים בגיליון DATA ותפוקה במשפחת תחנה ${inferredFacility}`
+              }
             })
           if(!parsed.length) throw new Error(`${file.name}: לא נמצאו שורות יעד תקינות. ודא שקיימות עמודות Resource, Capacity ו-Plan.`)
           storedCount=parsed.length; rowsForCloud=parsed; if(parsed[0]?.month) setPlanningMonth(parsed[0].month)
