@@ -5,7 +5,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2
 } from 'lucide-react'
-import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth } from './cloudData'
+import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
@@ -42,7 +42,7 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.1 Trial 13 — Facility 42 Bulk Balance'
+const BUILD_LABEL = 'Sprint 11.9.2 — Dynamic Targets Cloud Workbook Sync'
 const isoDate = value => {
   if (!value) return ''
 
@@ -869,6 +869,22 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           await new Promise(resolve => setTimeout(resolve, 0))
         }
 
+        // Keep the exact target workbook synchronized as well as the normalized rows.
+        // This solves the case where computer B sees the new target cards but still
+        // downloads an older local template.
+        if (remoteMeta.targets) {
+          try {
+            const localWorkbook = await idbGetKey(TARGET_FILE_KEY)
+            const remoteTargetVersion = String(remoteMeta.targets.active_version_id || '')
+            if (!localWorkbook?.bytes || (remoteTargetVersion && String(localWorkbook?.targetVersionId || '') !== remoteTargetVersion)) {
+              const cloudWorkbook = await loadActiveTargetWorkbook()
+              if (cloudWorkbook?.bytes) await idbSetKey(TARGET_FILE_KEY, cloudWorkbook)
+            }
+          } catch (workbookError) {
+            console.warn('Target workbook background sync skipped', workbookError)
+          }
+        }
+
         const health = await getCloudHealth().catch(() => null)
         if (!active) return
         const elapsed = Math.round(performance.now() - startedAt)
@@ -915,7 +931,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 }
             if (kind === 'quality') setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
             if (kind === 'deviations') setDeviations(dedupeRows(rows, deviationRawRowKey))
-            if (kind === 'targets') setTargets(normalizeStoredTargets(rows))
+            if (kind === 'targets') {
+              setTargets(normalizeStoredTargets(rows))
+              try {
+                const cloudWorkbook = await loadActiveTargetWorkbook()
+                if (cloudWorkbook?.bytes) await idbSetKey(TARGET_FILE_KEY, cloudWorkbook)
+              } catch (workbookError) {
+                console.warn('Live target workbook sync skipped', workbookError)
+              }
+            }
             setDataMeta(current => ({ ...current, [kind]:dataset?.meta || null }))
             setCloudState(current => ({ ...current, mode:'cloud', live:true, lastSync:new Date().toISOString(), message:`עודכן ${kind} בלבד` }))
             setPerformance(current => ({ ...current, queries:current.queries + 1, rows:rows.length, phase:'עדכון חי' }))
@@ -975,15 +999,17 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       for (const file of files) {
         const initialDisplayName = forcedKind ? displayDatasetName(forcedKind, forcedKind === 'targets' ? planningMonth : '') : file.name
         setStatus(`קורא את ${initialDisplayName}...`)
+        let targetWorkbookOriginal = null
         if (forcedKind === 'targets') {
           const originalBuffer = await file.arrayBuffer()
-          await idbSetKey(TARGET_FILE_KEY, {
+          targetWorkbookOriginal = {
             name: file.name,
             type: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             lastModified: file.lastModified || Date.now(),
             savedAt: new Date().toISOString(),
             bytes: originalBuffer,
-          })
+          }
+          await idbSetKey(TARGET_FILE_KEY, targetWorkbookOriginal)
         }
         const rows = forcedKind === 'targets' ? await readTargetWorkbook(file) : await readWorkbook(file)
         const detected = forcedKind === 'targets' ? 'targets' : classifyFile(rows)
@@ -1140,7 +1166,26 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         if (kind === 'production') setProduction(rowsForCloud)
         else if (kind === 'quality') setQuality(current => dedupeRows([...current, ...rowsForCloud], qualityRowKey))
         else if (kind === 'deviations') setDeviations(rowsForCloud)
-        else if (kind === 'targets') setTargets(normalizeStoredTargets(rowsForCloud))
+        else if (kind === 'targets') {
+          setTargets(normalizeStoredTargets(rowsForCloud))
+          if (targetWorkbookOriginal) {
+            try {
+              const workbookMeta = await saveActiveTargetWorkbook({
+                ...targetWorkbookOriginal,
+                versionId: savedMeta?.versionId || '',
+              }, currentUser)
+              await idbSetKey(TARGET_FILE_KEY, {
+                ...targetWorkbookOriginal,
+                targetVersionId: workbookMeta?.target_version_id || savedMeta?.versionId || '',
+                savedAt: workbookMeta?.updated_at || targetWorkbookOriginal.savedAt,
+                source: 'cloud',
+              })
+            } catch (workbookError) {
+              console.warn('Target workbook cloud sync failed', workbookError)
+              loaded.push(`אזהרה: קובץ היעדים נטען, אך סנכרון קובץ ה-Excel המלא נכשל (${workbookError?.message || 'שגיאה'})`)
+            }
+          }
+        }
         setDataMeta(current => ({ ...current, [kind]: savedMeta }))
         setCloudState({ mode:'cloud', lastSync:savedMeta.loadedAt, message:'מחובר ומסונכרן עם Supabase', latencyMs:cloudState.latencyMs, live:true })
         loaded.push(`${displayName}: ${fmt(storedCount)} רשומות בענן`)
@@ -1891,7 +1936,17 @@ console.log("QUALITY =", qualityForBatchMaterial)
   }
   const downloadTargetWorkbook = async () => {
     try {
-      const stored = await idbGetKey(TARGET_FILE_KEY)
+      // Cloud is the source of truth. Every computer should receive the exact
+      // workbook that was last uploaded, including newly added target rows.
+      let stored = null
+      try {
+        stored = await loadActiveTargetWorkbook()
+        if (stored?.bytes) await idbSetKey(TARGET_FILE_KEY, stored)
+      } catch (cloudWorkbookError) {
+        console.warn('Cloud target workbook unavailable; using local fallback', cloudWorkbookError)
+      }
+
+      if (!stored?.bytes) stored = await idbGetKey(TARGET_FILE_KEY)
       if (stored?.bytes) {
         const blob = new Blob([stored.bytes], { type: stored.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
         const url = URL.createObjectURL(blob)
@@ -1902,12 +1957,13 @@ console.log("QUALITY =", qualityForBatchMaterial)
         link.click()
         link.remove()
         setTimeout(() => URL.revokeObjectURL(url), 1500)
-        setStatus(`קובץ היעדים המקורי הורד — ניתן לערוך ב-Excel ולהטעין מחדש`)
+        setStatus(stored.source === 'cloud'
+          ? 'הורד קובץ היעדים הפעיל מהענן — זהה בכל המחשבים'
+          : 'הורד קובץ היעדים המקומי. הענן לא היה זמין ולכן נעשה שימוש בגיבוי המקומי.')
         return
       }
 
-      // If no newer target workbook was uploaded in this browser, download
-      // the full approved master workbook bundled with the application.
+      // First installation fallback: master workbook bundled with the application.
       const response = await fetch('/templates/IML_Targets_Master.xlsx', { cache:'no-store' })
       if (!response.ok) throw new Error('קובץ תבנית היעדים המלא לא נמצא באפליקציה')
       const blob = await response.blob()
@@ -1919,7 +1975,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       link.click()
       link.remove()
       setTimeout(() => URL.revokeObjectURL(url), 1500)
-      setStatus('הורדה תבנית היעדים המלאה. לאחר טעינת קובץ יעדים חדש, הכפתור יוריד את הקובץ האחרון שנטען.')
+      setStatus('לא נמצא עדיין קובץ יעדים פעיל בענן — הורדה תבנית ראשונית מהאפליקציה')
     } catch (error) {
       console.error('Target workbook download failed', error)
       setStatus(`הורדת קובץ היעדים נכשלה: ${error?.message || 'שגיאה לא ידועה'}`)

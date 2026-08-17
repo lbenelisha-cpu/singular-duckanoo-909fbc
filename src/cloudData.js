@@ -496,3 +496,79 @@ export async function uploadCloudDatasetIncremental(kind, newRows, meta, user, o
     throw error
   }
 }
+
+
+// Sprint 11.9.2 — keep the original monthly-target workbook as a shared cloud asset.
+// The normalized target rows remain the source for calculations; this singleton copy
+// preserves the exact Excel workbook so every computer downloads the same template.
+function arrayBufferToBase64(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+  let binary = ''
+  const step = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += step) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + step, bytes.length)))
+  }
+  return btoa(binary)
+}
+
+function base64ToUint8Array(base64) {
+  const binary = atob(base64 || '')
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return bytes
+}
+
+function targetWorkbookSchemaError(error) {
+  if (isMissingSchema(error, ['iml_target_workbook'])) {
+    return new Error('סנכרון קובץ היעדים המלא עדיין לא מותקן ב-Supabase. יש להריץ SPRINT_11_9_2_TARGET_WORKBOOK_SYNC.sql פעם אחת.')
+  }
+  return error
+}
+
+export async function saveActiveTargetWorkbook(workbook, user = null) {
+  requireClient()
+  if (!workbook?.bytes) throw new Error('קובץ היעדים המקורי חסר')
+  const bytes = workbook.bytes instanceof Uint8Array ? workbook.bytes : new Uint8Array(workbook.bytes)
+  const row = {
+    id: 1,
+    file_name: workbook.name || 'IML_Monthly_Targets.xlsx',
+    mime_type: workbook.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    byte_count: bytes.byteLength,
+    bytes_base64: arrayBufferToBase64(bytes),
+    last_modified: workbook.lastModified ? new Date(workbook.lastModified).toISOString() : null,
+    target_version_id: workbook.versionId || null,
+    uploaded_by: user?.id || null,
+    uploaded_by_email: user?.email || '',
+    updated_at: new Date().toISOString(),
+  }
+  const { data, error } = await supabase
+    .from('iml_target_workbook')
+    .upsert(row, { onConflict:'id' })
+    .select('id,file_name,mime_type,byte_count,last_modified,target_version_id,uploaded_by_email,updated_at')
+    .single()
+  if (error) throw targetWorkbookSchemaError(error)
+  return data
+}
+
+export async function loadActiveTargetWorkbook() {
+  requireClient()
+  const { data, error } = await supabase
+    .from('iml_target_workbook')
+    .select('id,file_name,mime_type,byte_count,bytes_base64,last_modified,target_version_id,uploaded_by_email,updated_at')
+    .eq('id', 1)
+    .maybeSingle()
+  if (error) throw targetWorkbookSchemaError(error)
+  if (!data?.bytes_base64) return null
+  const bytes = base64ToUint8Array(data.bytes_base64)
+  return {
+    name: data.file_name,
+    type: data.mime_type,
+    lastModified: data.last_modified ? new Date(data.last_modified).getTime() : 0,
+    savedAt: data.updated_at,
+    targetVersionId: data.target_version_id || '',
+    uploadedBy: data.uploaded_by_email || '',
+    byteCount: Number(data.byte_count || bytes.byteLength),
+    bytes,
+    source: 'cloud',
+  }
+}
