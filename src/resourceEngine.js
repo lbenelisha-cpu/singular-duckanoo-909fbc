@@ -40,7 +40,12 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   if (/^LQ\s*43\b/.test(targetName)) return station === '1543' && isLq43Resource
   if (/^EC\s*\(23\)/.test(targetName)) return station === '1523'
   if (/^EC\s*\(25\)/.test(targetName)) return station === '1525'
-  if (/^SHAKED\s+ISO\s+42$/.test(targetName)) return station === '1142'
+  if (/^SHAKED\s+ISO\s+42$/.test(targetName)) {
+    // Station 1142 rows marked 999 are Facility 42 bulk input and belong ONLY
+    // to the dedicated Facility 42 balance card, never to Shaked ISO 42.
+    const bulkMarkerText = upper(`${row.desc || ''} ${row.routingDescription || ''}`)
+    return station === '1142' && !/(^|\D)999(\D|$)/.test(bulkMarkerText)
+  }
   if (/^SHAKED\s+ISO\s+23$/.test(targetName)) return station === '1123'
   if (/^PILOT\s*\(1521\)$/.test(targetName)) return station === '1521'
 
@@ -157,7 +162,9 @@ const latestDate = monthRows.reduce((latest, row) => {
   ]
   const sourceRows = [...baseSourceRows]
   standaloneStations.forEach(item => {
-    const hasProduction = monthRows.some(row => upper(row.facility) === item.facility)
+    const hasProduction = item.facility === '1142'
+      ? monthRows.some(row => upper(row.facility) === '1142' && !/(^|\D)999(\D|$)/.test(upper(`${row.desc || ''} ${row.routingDescription || ''}`)))
+      : monthRows.some(row => upper(row.facility) === item.facility)
     const alreadyExists = sourceRows.some(row => upper(row.resource) === upper(item.resource) || (row.facilities || [row.facility]).includes(item.facility))
     if (hasProduction && !alreadyExists) sourceRows.push({ facility:item.facility, facilities:[item.facility], resource:item.resource, target:0, capacity:0, descriptionTokens:[], station:item.facility, lineName:item.resource })
   })
