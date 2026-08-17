@@ -388,3 +388,14 @@ body{background:linear-gradient(180deg,#f5f8fa 0,#eef3f6 100%);}
 .facility42-balance-card.negative .balance-card-footer>div:first-child b{color:#c93636}
 .balance-card-note{display:block;margin-top:10px;color:#6b7b88;line-height:1.35}
 @media(max-width:700px){.balance-card-main,.balance-card-footer{grid-template-columns:1fr}.balance-card-lines{grid-template-columns:1fr 1fr 1fr}}
+
+/* Sprint 11.9.2 — Facility 42 balance in Control Tower overview */
+.facility42-overview-balance{border-top-color:#0c9b82;background:linear-gradient(180deg,#fbfffe 0%,#f5fbfa 100%)}
+.facility42-overview-balance .tower-facility-head span{background:#eef3f6;color:#617184}
+.facility42-overview-main{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.facility42-overview-main>div{background:#fff;border:1px solid #dce7ec;border-radius:12px;padding:10px;text-align:center}
+.facility42-overview-main span{display:block;color:#64748b;font-size:12px}.facility42-overview-main b{display:block;margin-top:4px;font-size:22px;color:#173b57}
+.facility42-overview-lines{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:0 0 12px}
+.facility42-overview-lines span{background:#fff;border:1px solid #e1eaee;border-radius:10px;padding:8px 5px;color:#64748b;font-size:12px;text-align:center}.facility42-overview-lines b{display:block;color:#173b57;font-size:15px;margin-top:3px}
+.facility42-overview-balance.negative dl .negative{color:#c93636}.facility42-overview-balance.positive dl .positive{color:#0d766f}
+@media(max-width:700px){.facility42-overview-main{grid-template-columns:1fr}}
