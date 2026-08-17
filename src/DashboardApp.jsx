@@ -735,6 +735,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [mappingDialog, setMappingDialog] = useState(null)
   const [mappingTargetKey, setMappingTargetKey] = useState('')
   const [mappingMessage, setMappingMessage] = useState('')
+  const [targetMappings, setTargetMappings] = useState([])
+  const [targetMappingDialog, setTargetMappingDialog] = useState(null)
+  const [targetMappingFamily, setTargetMappingFamily] = useState('')
   const [planningMonth, setPlanningMonth] = useState('')
   const [additionalFacilities, setAdditionalFacilities] = useState([])
   const [facilityToAdd, setFacilityToAdd] = useState('')
@@ -770,6 +773,20 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           family:row.facility_family, targetKey:row.target_key, targetResource:row.target_resource,
           status:row.status, active:row.active !== false, createdBy:row.created_by_email || '',
           createdAt:row.created_at, approvedAt:row.approved_at || null, cloud:true,
+        })))
+      })
+    return () => { active = false }
+  }, [currentUser?.id])
+
+  useEffect(() => {
+    if (!supabase || !currentUser?.id) return
+    let active = true
+    supabase.from('iml_target_mappings').select('*').eq('active', true).order('updated_at', { ascending:false })
+      .then(({ data, error }) => {
+        if (!active || error) return
+        setTargetMappings((data || []).map(row => ({
+          id:row.id, resource:row.target_resource, month:row.target_month || '', family:row.facility_family,
+          createdBy:row.created_by_email || '', createdAt:row.created_at, updatedAt:row.updated_at, cloud:true,
         })))
       })
     return () => { active = false }
@@ -1667,13 +1684,20 @@ console.log("QUALITY =", qualityForBatchMaterial)
   const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
   const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
 
+  const targetsWithAdminMappings = useMemo(() => targets.map(target => {
+    const resourceKey = normalize(target.resource).toUpperCase()
+    const saved = targetMappings.find(mapping => normalize(mapping.resource).toUpperCase() === resourceKey && (!mapping.month || mapping.month === target.month))
+    if (!saved?.family) return target
+    return { ...target, facility:saved.family, facilities:[saved.family], station:saved.family, mappingStatus:'manual-approved', mappingReason:`מיפוי מנהל מאושר למשפחת תחנה ${saved.family}` }
+  }), [targets, targetMappings])
+
   const planningRows = useMemo(() => buildResourceRows({
     production: prod,
-    targets,
+    targets:targetsWithAdminMappings,
     planningMonth,
     fallbackFacilities: facilities,
     manualMappings,
-  }), [planningMonth, prod, targets, facilities, manualMappings])
+  }), [planningMonth, prod, targetsWithAdminMappings, facilities, manualMappings])
 
 
   const mappingTargets = useMemo(() => planningRows.map(row => ({
@@ -1752,6 +1776,38 @@ console.log("QUALITY =", qualityForBatchMaterial)
     await syncMappingToCloud(updated)
   }
 
+
+  const availableTargetFamilies = useMemo(() => [...new Set(prod.map(row => stationFamily(row.facility)).filter(Boolean))].sort(), [prod])
+  const unmappedPlanningTargets = useMemo(() => planningRows.filter(row => row.mappingStatus === 'requires-mapping'), [planningRows])
+
+  const openTargetMappingDialog = row => {
+    setTargetMappingDialog(row)
+    const firstCandidate = row.mappingCandidates?.[0]?.facility || availableTargetFamilies[0] || ''
+    setTargetMappingFamily(firstCandidate)
+    setMappingMessage('')
+  }
+
+  const saveTargetMapping = async () => {
+    if (!targetMappingDialog || !targetMappingFamily || !supabase || !currentUser?.id) return
+    const payload = {
+      target_resource:targetMappingDialog.resource, target_month:planningMonth || '', facility_family:targetMappingFamily,
+      active:true, created_by:currentUser.id, created_by_email:currentUser.email || '', updated_at:new Date().toISOString(),
+    }
+    const { data, error } = await supabase.from('iml_target_mappings').upsert(payload, { onConflict:'target_resource,target_month' }).select().maybeSingle()
+    if (error) { setMappingMessage(`שמירת המיפוי נכשלה: ${error.message}`); return }
+    const mapped = { id:data?.id, resource:targetMappingDialog.resource, month:planningMonth || '', family:targetMappingFamily, createdBy:currentUser.email || '', createdAt:data?.created_at, updatedAt:data?.updated_at, cloud:true }
+    setTargetMappings(current => [mapped, ...current.filter(item => !(normalize(item.resource).toUpperCase() === normalize(mapped.resource).toUpperCase() && item.month === mapped.month))])
+    setTargetMappingDialog(null)
+    setMappingMessage(`המיפוי של ${targetMappingDialog.resource} נשמר ואושר לכל המשתמשים`)
+  }
+
+  const removeTargetMapping = async mapping => {
+    if (!mapping?.id || !supabase) return
+    const { error } = await supabase.from('iml_target_mappings').update({ active:false, updated_at:new Date().toISOString() }).eq('id', mapping.id)
+    if (error) { setMappingMessage(`ביטול המיפוי נכשל: ${error.message}`); return }
+    setTargetMappings(current => current.filter(item => item.id !== mapping.id))
+    setMappingMessage(`המיפוי של ${mapping.resource} בוטל`)
+  }
 
   const mappingSimulation = useMemo(() => {
     const assignments = new Map()
@@ -2442,10 +2498,18 @@ console.log("QUALITY =", qualityForBatchMaterial)
 
       {activeTab === 'mapping-center' && canManageData && <section className="details mapping-center">
         <div className="mapping-simulator-head"><div><h2>מרכז בקרת מיפויים</h2><p className="details-note">אישור, דחייה וביטול של שיוכים. שיוך משפיע על הדשבורד רק לאחר אישור.</p></div></div>
-        <div className="mapping-summary-grid"><article className="mapping-duplicate"><span>ממתינים לאישור</span><b>{manualMappings.filter(item => item.active !== false && item.status === 'pending').length}</b></article><article className="mapping-ok"><span>מאושרים</span><b>{manualMappings.filter(item => item.active !== false && item.status === 'approved').length}</b></article><article className="mapping-unmatched"><span>נדחו / בוטלו</span><b>{manualMappings.filter(item => item.status === 'rejected' || item.active === false).length}</b></article><article><span>אירועי היסטוריה</span><b>{mappingTimeline.length}</b></article></div>
+        {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
+        <div className="mapping-summary-grid"><article className="mapping-duplicate"><span>יעדים דורשי מיפוי</span><b>{unmappedPlanningTargets.length}</b></article><article className="mapping-ok"><span>מיפויי יעד מאושרים</span><b>{targetMappings.length}</b></article><article className="mapping-duplicate"><span>מיפויי תפוקה ממתינים</span><b>{manualMappings.filter(item => item.active !== false && item.status === 'pending').length}</b></article><article className="mapping-ok"><span>מיפויי תפוקה מאושרים</span><b>{manualMappings.filter(item => item.active !== false && item.status === 'approved').length}</b></article></div>
+        <h3 className="shift-subtitle">יעדים שדורשים מיפוי</h3>
+        <div className="table-wrap"><table><thead><tr><th>יעד</th><th>חודש</th><th>סיבה</th><th>מועמדים</th><th>פעולה</th></tr></thead><tbody>{unmappedPlanningTargets.map(row => <tr key={`unmapped-${row.id}`}><td><b>{row.resource}</b></td><td>{planningMonth}</td><td>{row.mappingReason || 'לא נמצאה התאמה חד-משמעית'}</td><td>{row.mappingCandidates?.length ? row.mappingCandidates.map(item => `${item.facility} (${item.rows})`).join(', ') : '—'}</td><td><button className="mapping-assign-btn" onClick={() => openTargetMappingDialog(row)}>הגדר מיפוי</button></td></tr>)}{!unmappedPlanningTargets.length && <tr><td colSpan="5" className="empty">כל היעדים משויכים ✓</td></tr>}</tbody></table></div>
+        <h3 className="shift-subtitle">מיפויי יעד מאושרים בענן</h3>
+        <div className="table-wrap"><table><thead><tr><th>יעד</th><th>חודש</th><th>משפחת תחנה</th><th>נוצר ע״י</th><th>פעולה</th></tr></thead><tbody>{targetMappings.map(mapping => <tr key={`target-map-${mapping.id || mapping.resource}`}><td><b>{mapping.resource}</b></td><td>{mapping.month || 'כל החודשים'}</td><td>{mapping.family}</td><td>{mapping.createdBy || 'מנהל'}</td><td><button className="danger" onClick={() => removeTargetMapping(mapping)}>בטל</button></td></tr>)}{!targetMappings.length && <tr><td colSpan="5" className="empty">אין מיפויי יעד ידניים</td></tr>}</tbody></table></div>
+        <h3 className="shift-subtitle">מיפויי רשומות תפוקה</h3>
         <div className="table-wrap"><table><thead><tr><th>סטטוס</th><th>מתקן</th><th>מק״ט</th><th>תיאור</th><th>יעד</th><th>נוצר ע״י</th><th>תאריך</th><th>פעולות</th></tr></thead><tbody>{manualMappings.map(mapping => <tr key={mapping.id}><td><span className={`mapping-status mapping-status-${mapping.status === 'approved' ? 'matched' : mapping.status === 'pending' ? 'duplicate' : 'unmatched'}`}>{mapping.status === 'approved' ? 'מאושר' : mapping.status === 'pending' ? 'ממתין' : 'נדחה'}</span></td><td>{mapping.family}</td><td>{mapping.material || '—'}</td><td>{mapping.description || '—'}</td><td>{mapping.targetResource}</td><td>{mapping.createdBy || 'מנהל'}</td><td>{mapping.createdAt ? new Date(mapping.createdAt).toLocaleString('he-IL') : '—'}</td><td><div className="mapping-row-actions">{mapping.status === 'pending' && <><button onClick={() => updateMappingStatus(mapping,'approved')}>אשר</button><button className="danger" onClick={() => updateMappingStatus(mapping,'rejected')}>דחה</button></>}{mapping.status === 'approved' && mapping.active !== false && <button className="danger" onClick={() => rollbackMapping(mapping)}>בטל שיוך</button>}</div></td></tr>)}{!manualMappings.length && <tr><td colSpan="8" className="empty">עדיין לא נוצרו מיפויים ידניים</td></tr>}</tbody></table></div>
         <div className="mapping-timeline"><h3>Timeline החלטות</h3>{mappingTimeline.slice(0,30).map(event => <div key={event.id}><time>{new Date(event.at).toLocaleString('he-IL')}</time><b>{event.action}</b><span>{event.material || '—'} → {event.targetResource || '—'}</span><small>{event.user} · {event.note}</small></div>)}</div>
       </section>}
+
+      {targetMappingDialog && <div className="mapping-dialog-backdrop"><div className="mapping-dialog"><button className="mapping-dialog-close" onClick={() => setTargetMappingDialog(null)}><X/></button><h2>הגדרת מיפוי ליעד</h2><div className="mapping-source-card"><b>{targetMappingDialog.resource}</b><span>{targetMappingDialog.mappingReason || 'נדרש מיפוי מנהל'}</span><small>חודש {planningMonth} · יעד {fmt(targetMappingDialog.target)}</small></div><label>בחר משפחת תחנה<select value={targetMappingFamily} onChange={event => setTargetMappingFamily(event.target.value)}><option value="">בחר תחנה...</option>{availableTargetFamilies.map(family => <option key={family} value={family}>{family}</option>)}</select></label>{targetMappingDialog.mappingCandidates?.length > 0 && <div className="mapping-impact"><h3>ראיות שנמצאו</h3>{targetMappingDialog.mappingCandidates.map(item => <div key={item.facility}><span>משפחת תחנה {item.facility}</span><b>{item.rows} רשומות</b></div>)}</div>}<p className="details-note">לאחר שמירה המיפוי נשמר בענן ומשפיע על כל המחשבים. מאזן 42 (1142+999) ומאזן 19 (1119+777) נשארים כללים ייעודיים ואינם משתנים כאן.</p><button className="mapping-save-btn" disabled={!targetMappingFamily} onClick={saveTargetMapping}><Save size={17}/> שמור ואשר מיפוי</button></div></div>}
 
       {mappingDialog && <div className="mapping-dialog-backdrop"><div className="mapping-dialog"><button className="mapping-dialog-close" onClick={() => setMappingDialog(null)}><X/></button><h2>שיוך חומר ליעד</h2><div className="mapping-source-card"><b>{mappingDialog.row.material || 'ללא מק״ט'}</b><span>{mappingDialog.row.desc || 'ללא תיאור'}</span><small>תחנה {mappingDialog.row.facility} · משפחה {mappingDialog.family} · כמות {fmt(mappingDialog.row.qty)}</small></div><label>בחר יעד<select value={mappingTargetKey} onChange={event => setMappingTargetKey(event.target.value)}><option value="">בחר יעד...</option>{mappingDialog.candidates.map(target => <option key={target.key} value={target.key}>{target.resource} — יעד {fmt(target.target)} — בוצע {fmt(target.actual)}</option>)}</select></label>{(() => { const target=mappingTargets.find(item => item.key===mappingTargetKey); if(!target) return null; const impacted=mappingSimulation.rows.filter(item => item.family===mappingDialog.family && productionMappingKey(item.row)===productionMappingKey(mappingDialog.row)); const qty=impacted.reduce((sum,item)=>sum+(Number(item.row.qty)||0),0); const before=target.actual||0; const after=before+qty; return <div className="mapping-impact"><h3>סימולציית השפעה</h3><div><span>כמות שתשויך</span><b>{fmt(qty)}</b></div><div><span>ביצוע לפני</span><b>{fmt(before)}</b></div><div><span>ביצוע אחרי</span><b>{fmt(after)}</b></div><div><span>עמידה ביעד</span><b>{target.target ? `${Math.round(before/target.target*100)}% → ${Math.round(after/target.target*100)}%` : 'ללא יעד'}</b></div><p>השינוי לא ישפיע על הדשבורד עד לאישור במרכז המיפויים.</p></div> })()}<button className="mapping-save-btn" disabled={!mappingTargetKey} onClick={savePendingMapping}><Save size={17}/> שמור כממתין לאישור</button></div></div>}
 
