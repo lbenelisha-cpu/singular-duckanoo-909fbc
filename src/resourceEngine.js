@@ -60,8 +60,12 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   if (/LQ\s*5\s*(LT|L)\b/.test(targetName)) return isFacility42Zfin && lq5
   if (/LQ\s*10\s*\/\s*20/.test(targetName)) return isFacility42Zfin && lq1020
 
-  if (/WG\s*SMALL\s+PACKS?\s*\(19\)/.test(targetName)) return station === '1519' && isSmallPack19(row)
-  if (/^WG\s*\(19\)/.test(targetName)) return station === '1519' && !isSmallPack19(row)
+  // Facility 19: rows marked 777 are bulk input and belong only to the dedicated
+  // Facility 19 material-balance view. Never count them again as packed WG output.
+  const facility19MarkerText = upper(`${row.desc || ''} ${row.routingDescription || ''}`)
+  const isFacility19Bulk = /(^|\D)777(\D|$)/.test(facility19MarkerText)
+  if (/WG\s*SMALL\s+PACKS?\s*\(19\)/.test(targetName)) return station === '1519' && !isFacility19Bulk && isSmallPack19(row)
+  if (/^WG\s*\(19\)/.test(targetName)) return station === '1519' && !isFacility19Bulk && !isSmallPack19(row)
 
   // CS (25,40): approved product rule. Only material 20000000722 belongs to CS.
   // Keep the station scope explicit as 1525/1540 so legacy 1125/1140 aliases cannot leak in.

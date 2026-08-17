@@ -399,3 +399,9 @@ body{background:linear-gradient(180deg,#f5f8fa 0,#eef3f6 100%);}
 .facility42-overview-lines span{background:#fff;border:1px solid #e1eaee;border-radius:10px;padding:8px 5px;color:#64748b;font-size:12px;text-align:center}.facility42-overview-lines b{display:block;color:#173b57;font-size:15px;margin-top:3px}
 .facility42-overview-balance.negative dl .negative{color:#c93636}.facility42-overview-balance.positive dl .positive{color:#0d766f}
 @media(max-width:700px){.facility42-overview-main{grid-template-columns:1fr}}
+
+/* Sprint 11.9.3 — Facility 19 bulk (777) vs WG / Small Packs balance */
+.facility19-overview-lines{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.facility19-balance-lines{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+.facility19-balance .balance-kpi-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}
+@media(max-width:900px){.facility19-balance .balance-kpi-grid{grid-template-columns:repeat(2,minmax(140px,1fr))}}

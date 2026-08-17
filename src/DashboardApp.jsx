@@ -42,7 +42,7 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.2 — Dynamic Targets Cloud Workbook Sync'
+const BUILD_LABEL = 'Sprint 11.9.3 — Facility 19 Bulk Balance'
 const isoDate = value => {
   if (!value) return ''
 
@@ -1545,6 +1545,37 @@ console.log("QUALITY =", qualityForBatchMaterial)
     return { bulkRows, packedRows, bulk, byLine, packed, balance, utilization }
   }, [prod, from, to])
 
+  // Dedicated Facility 19 material balance. Bulk is identified by the approved
+  // business marker 777 in the material description. Packaged output is reported
+  // at station 1519 and is split between normal WG production and small packs.
+  // The station-family check accepts both 1519 and any source station ending in 19
+  // for bulk, while output remains strictly 1519 to avoid unrelated production.
+  const facility19Balance = useMemo(() => {
+    const inRange = prod.filter(r => {
+      const day = r.productionDay || iso(r.date)
+      return (!from || day >= from) && (!to || day <= to)
+    })
+    const has777 = row => /(^|\D)777(\D|$)/.test(normalize(`${row.desc || ''} ${row.routingDescription || ''}`))
+    const stationFamily19 = row => {
+      const digits = normalize(row.facility).replace(/\D/g, '')
+      return digits.length >= 2 && digits.slice(-2) === '19'
+    }
+    const isSmallPack = row => {
+      const route = normalize(`${row.routingGroup || ''} ${row.routingDescription || ''} ${row.resource || ''} ${row.line || ''}`).toUpperCase()
+      return ['19PWG-01','19PWG-05','19PWG-15'].some(code => route.includes(code))
+    }
+    const bulkRows = inRange.filter(r => stationFamily19(r) && has777(r) && normalize(r.orderType).toUpperCase() !== 'ZFIN')
+    const packedRows = inRange.filter(r => normalize(r.facility) === '1519' && !has777(r))
+    const byType = {'WG':0,'SMALL PACKS':0}
+    packedRows.forEach(r => { byType[isSmallPack(r) ? 'SMALL PACKS' : 'WG'] += num(r.qty) })
+    const bulk = bulkRows.reduce((sum,r)=>sum+num(r.qty),0)
+    const packed = Object.values(byType).reduce((a,b)=>a+b,0)
+    const balance = bulk - packed
+    const utilization = bulk > 0 ? packed / bulk * 100 : 0
+    return { bulkRows, packedRows, bulk, byType, packed, balance, utilization, isSmallPack }
+  }, [prod, from, to])
+
+
   const udByBatchMaterial = useMemo(() => {
     const exact = new Map()
     const byBatch = new Map()
@@ -2218,6 +2249,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <div className="panel-head facility-panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><div className="facility-head-actions">{facilityViewFilters}<span>{visibleControlTowerFacilities.length} מתקנים במעקב</span><button type="button" className="section-print-btn" onClick={printFacilityOverview}><Printer size={16}/> הדפסה</button><button type="button" className="section-toggle" onClick={() => setShowFacilityOverview(v => !v)}>{showFacilityOverview ? 'הסתר' : 'הצג'}</button></div></div>
         {showFacilityOverview && <div className="tower-facility-grid">
           <Facility42BalanceOverviewCard balance={facility42Balance} onClick={() => jumpToDetails('bulk-balance')}/>
+          <Facility19BalanceOverviewCard balance={facility19Balance} onClick={() => jumpToDetails('bulk-balance-19')}/>
           {visibleControlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => setSelectedResource(row)}>
             <div className="tower-facility-head"><div><i></i><strong>{row.facility}</strong></div><span>{row.state === 'good' ? 'תקין' : row.state === 'warning' ? 'דורש תשומת לב' : row.state === 'risk' ? 'בסיכון' : 'ללא יעד'}</span></div>
             <div className="tower-health"><div><HeartPulse/><span>Health Score</span></div><b>{row.healthScore}<small>/100</small></b></div>
@@ -2295,6 +2327,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       <div className="section-title facility-title"><div className="section-title-text"><Gauge/><div><h2>תחזית חודשית לפי מתקן</h2><p>יעד חודשי, קצב נדרש, קצב אחרון, שיא מוכח ותחזית</p></div></div><div className="facility-head-actions">{facilityViewFilters}<button type="button" className="section-print-btn" onClick={printMonthlyForecast}><Printer size={16}/> הדפסה</button><button type="button" className="section-toggle" onClick={() => setShowMonthlyForecast(v => !v)}>{showMonthlyForecast ? 'הסתר' : 'הצג'}</button><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת הכול' : 'בחירת כל המתקנים'}</button></div></div>
       {showMonthlyForecast && <section className="forecast-grid" id="planning-section">
         <Facility42BalanceCard balance={facility42Balance}/>
+        <Facility19BalanceCard balance={facility19Balance}/>
         {visiblePlanningRows.map(row => <ForecastCard key={row.id} {...row} selected={(row.facilities || [row.facility]).some(id => selectedFacilities.includes(id))} onClick={() => setSelectedFacilities(row.facilities || [row.facility])}/>) }
         {!visiblePlanningRows.length && <div className="empty wide-empty">אין מתקנים התואמים למסנן התצוגה.</div>}
       </section>}
@@ -2327,6 +2360,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <button className={activeTab === 'production' ? 'active' : ''} onClick={() => setActiveTab('production')}><BarChart3 size={16}/> תפוקה</button>
         <button className={activeTab === 'shifts' ? 'active' : ''} onClick={() => setActiveTab('shifts')}><Clock3 size={16}/> ניתוח משמרות</button>
         <button className={activeTab === 'bulk-balance' ? 'active' : ''} onClick={() => setActiveTab('bulk-balance')}><Activity size={16}/> מאזן מתקן 42</button>
+        <button className={activeTab === 'bulk-balance-19' ? 'active' : ''} onClick={() => setActiveTab('bulk-balance-19')}><Activity size={16}/> מאזן מתקן 19</button>
         <button className={activeTab === 'quality' ? 'active' : ''} onClick={() => setActiveTab('quality')}><FlaskConical size={16}/> איכות ({qualityBad.length})</button>
         <button className={activeTab === 'deviations' ? 'active' : ''} onClick={() => setActiveTab('deviations')}><AlertTriangle size={16}/> מנות חריגות ({openDeviations.length})</button>
         {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.unmatched + mappingSimulation.summary.duplicate})</button>}
@@ -2348,6 +2382,23 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <div className="table-wrap"><table><thead><tr><th>סוג</th><th>מקור</th><th>כמות</th><th>רשומות</th><th>Batch</th><th>Orders</th></tr></thead><tbody>
           <tr><td><b>באלק</b></td><td>1142 + תיאור 999</td><td><b>{fmt(facility42Balance.bulk)}</b></td><td>{facility42Balance.bulkRows.length}</td><td>{new Set(facility42Balance.bulkRows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(facility42Balance.bulkRows.map(r=>r.order).filter(Boolean)).size}</td></tr>
           {['1L','5L','10/20L'].map(line => { const rows=facility42Balance.packedRows.filter(r => { const route=normalize(`${r.routingGroup||''} ${r.routingDescription||''}`).toUpperCase(); return line==='1L' ? (/(^|\s)LQ-P-1(\s|$)/.test(route)||route.includes('42-P-02')||route.includes('LIQUID 1 LITER')) : line==='5L' ? (/(^|\s)LQ-P-5(\s|$)/.test(route)||route.includes('42-P-03')||route.includes('LIQUID 5 LITER')) : !(/(^|\s)LQ-P-(1|5)(\s|$)/.test(route)||route.includes('42-P-02')||route.includes('42-P-03')||route.includes('LIQUID 1 LITER')||route.includes('LIQUID 5 LITER')); }); return <tr key={line}><td><b>אריזה {line}</b></td><td>1542 + ZFIN + Routing</td><td><b>{fmt(facility42Balance.byLine[line])}</b></td><td>{rows.length}</td><td>{new Set(rows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(rows.map(r=>r.order).filter(Boolean)).size}</td></tr> })}
+        </tbody></table></div>
+      </section>}
+      {activeTab === 'bulk-balance-19' && <section className="details facility42-balance facility19-balance">
+        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 19</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: באלק ממשפחת מתקן 19 שתיאורו מכיל 777. תפוקה: דיווחי תחנה 1519, בחלוקה ל-WG ולאריזות קטנות.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
+        <div className="balance-kpi-grid">
+          <article><span>באלק שיוצר</span><b>{fmt(facility19Balance.bulk)}</b><small>ק״ג · {facility19Balance.bulkRows.length} רשומות</small></article>
+          <article><span>מנות ייצור WG</span><b>{fmt(facility19Balance.byType['WG'])}</b><small>ק״ג</small></article>
+          <article><span>אריזות קטנות</span><b>{fmt(facility19Balance.byType['SMALL PACKS'])}</b><small>ק״ג</small></article>
+          <article className="balance-total"><span>סה״כ תפוקה ארוזה</span><b>{fmt(facility19Balance.packed)}</b><small>ק״ג</small></article>
+          <article className={facility19Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>יתרת באלק מול תפוקה</span><b>{fmt(facility19Balance.balance)}</b><small>ק״ג</small></article>
+          <article><span>% ניצול באלק</span><b>{facility19Balance.bulk ? pctFmt(facility19Balance.utilization) : '—'}</b><small>תפוקה ÷ באלק</small></article>
+        </div>
+        <div className="balance-note"><AlertTriangle size={18}/><span>בהשוואה יומית ייתכן פער תזמון בין ייצור הבאלק לבין האריזה. המאזן החודשי מייצג טוב יותר את התהליך.</span></div>
+        <h3 className="shift-subtitle">פירוט לפי סוג דיווח</h3>
+        <div className="table-wrap"><table><thead><tr><th>סוג</th><th>מקור</th><th>כמות</th><th>רשומות</th><th>Batch</th><th>Orders</th></tr></thead><tbody>
+          <tr><td><b>באלק</b></td><td>משפחת תחנה 19 + תיאור 777</td><td><b>{fmt(facility19Balance.bulk)}</b></td><td>{facility19Balance.bulkRows.length}</td><td>{new Set(facility19Balance.bulkRows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(facility19Balance.bulkRows.map(r=>r.order).filter(Boolean)).size}</td></tr>
+          {['WG','SMALL PACKS'].map(type => { const rows=facility19Balance.packedRows.filter(r => (facility19Balance.isSmallPack(r) ? 'SMALL PACKS' : 'WG') === type); return <tr key={type}><td><b>{type === 'WG' ? 'מנות ייצור WG' : 'אריזות קטנות'}</b></td><td>1519 + {type === 'WG' ? 'WG רגיל' : '19PWG-01/05/15'}</td><td><b>{fmt(facility19Balance.byType[type])}</b></td><td>{rows.length}</td><td>{new Set(rows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(rows.map(r=>r.order).filter(Boolean)).size}</td></tr> })}
         </tbody></table></div>
       </section>}
       {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td><button type="button" className={`qty-variance-btn ${num(r.plannedQty)>0 && Math.abs(num(r.qty)-num(r.plannedQty))>0.0001 ? 'has-variance' : ''}`} onClick={()=>setQuantityVarianceRow(r)} title={num(r.plannedQty)>0 ? 'לחץ להצגת כמות מתוכננת, בפועל והפער' : 'לא נמצאה כמות מתוכננת לרשומה'}>{fmt(r.qty)}</button></td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
@@ -2632,6 +2683,28 @@ function Facility42BalanceCard({ balance }) {
     <small className="balance-card-note">המאזן מחושב לפי טווח התאריכים שנבחר. פער יומי יכול לנבוע מאריזה ביום שונה מיום ייצור הבאלק.</small>
   </article>
 }
+function Facility19BalanceOverviewCard({ balance, onClick }) {
+  const diffClass = balance.balance > 0 ? 'positive' : balance.balance < 0 ? 'negative' : 'neutral'
+  return <button type="button" className={`tower-facility-card facility42-overview-balance facility19-overview-balance ${diffClass}`} onClick={onClick}>
+    <div className="tower-facility-head"><div><i></i><strong>מאזן מתקן 19</strong></div><span>ללא יעד</span></div>
+    <div className="facility42-overview-main"><div><span>באלק + 777</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ תפוקה 1519</span><b>{fmt(balance.packed)}</b></div></div>
+    <div className="facility42-overview-lines facility19-overview-lines"><span>WG <b>{fmt(balance.byType['WG'])}</b></span><span>Small Packs <b>{fmt(balance.byType['SMALL PACKS'])}</b></span></div>
+    <dl><div><dt>יתרת באלק</dt><dd className={balance.balance >= 0 ? 'positive' : 'negative'}>{balance.balance >= 0 ? '+' : ''}{fmt(balance.balance)}</dd></div><div><dt>ניצול באלק</dt><dd>{balance.bulk ? pctFmt(balance.utilization) : '—'}</dd></div></dl>
+    <span className="tower-enter">לפירוט המאזן <ArrowLeft size={16}/></span>
+  </button>
+}
+
+function Facility19BalanceCard({ balance }) {
+  const diffClass = balance.balance > 0 ? 'positive' : balance.balance < 0 ? 'negative' : 'neutral'
+  return <article className={`forecast-card facility42-balance-card facility19-balance-card ${diffClass}`}>
+    <div className="forecast-head"><div><small>מאזן תשומות / תפוקות</small><h3>מאזן מתקן 19</h3><div className="forecast-resource"><b>777</b><span>מול WG / SMALL PACKS בתחנה 1519</span></div></div><span className="status-badge no-target">ללא יעד</span></div>
+    <div className="balance-card-main"><div><span>באלק שיוצר</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ תפוקה</span><b>{fmt(balance.packed)}</b></div></div>
+    <div className="balance-card-lines facility19-balance-lines"><span>WG<strong>{fmt(balance.byType['WG'])}</strong></span><span>SMALL PACKS<strong>{fmt(balance.byType['SMALL PACKS'])}</strong></span></div>
+    <div className="balance-card-footer"><div><span>יתרה</span><b>{balance.balance > 0 ? '+' : ''}{fmt(balance.balance)}</b></div><div><span>ניצול באלק</span><b>{balance.bulk ? pctFmt(balance.utilization) : '—'}</b></div></div>
+    <small className="balance-card-note">המאזן מחושב לפי טווח התאריכים שנבחר. פער יומי יכול לנבוע מתזמון שונה בין ייצור הבאלק לאריזה.</small>
+  </article>
+}
+
 function ForecastCard({ facility, facilities, resource, packagingType, routingGroup, station, lineName, target, actual, pct, remaining, requiredDaily, recentAverage, provenMax, forecast, remainingWorkdays, state, label, selected, onClick }) {
   return <article className={`forecast-card ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0">
     <div className="forecast-head"><div><small>משאב / מתקן</small><h3>{resource || facility}</h3>{(facilities || []).includes('1542') && packagingType && <div className="forecast-packaging-type"><span>קו אריזה</span><b>{packagingType}</b></div>}{(routingGroup || station) && <div className="forecast-resource"><b>{station || routingGroup}</b><span>{lineName || routingGroup}</span>{routingGroup && <small>{routingGroup}</small>}</div>}</div><StatusBadge state={state} label={label}/></div>
