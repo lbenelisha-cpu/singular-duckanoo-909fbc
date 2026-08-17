@@ -1546,10 +1546,10 @@ console.log("QUALITY =", qualityForBatchMaterial)
   }, [prod, from, to])
 
   // Dedicated Facility 19 material balance. Bulk is identified by the approved
-  // business marker 777 in the material description. Packaged output is reported
-  // at station 1519 and is split between normal WG production and small packs.
-  // The station-family check accepts both 1519 and any source station ending in 19
-  // for bulk, while output remains strictly 1519 to avoid unrelated production.
+  // business marker 777 in the material description. Bulk is reported strictly
+  // at station 1119. Packaged output is reported at station 1519 and is split
+  // between normal WG production and small packs. Keeping 1119 and 1519 separate
+  // prevents bulk rows from being mixed with packaged production.
   const facility19Balance = useMemo(() => {
     const inRange = prod.filter(r => {
       const day = r.productionDay || iso(r.date)
@@ -1564,7 +1564,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       const route = normalize(`${row.routingGroup || ''} ${row.routingDescription || ''} ${row.resource || ''} ${row.line || ''}`).toUpperCase()
       return ['19PWG-01','19PWG-05','19PWG-15'].some(code => route.includes(code))
     }
-    const bulkRows = inRange.filter(r => stationFamily19(r) && has777(r) && normalize(r.orderType).toUpperCase() !== 'ZFIN')
+    const bulkRows = inRange.filter(r => normalize(r.facility) === '1119' && has777(r))
     const packedRows = inRange.filter(r => normalize(r.facility) === '1519' && !has777(r))
     const byType = {'WG':0,'SMALL PACKS':0}
     packedRows.forEach(r => { byType[isSmallPack(r) ? 'SMALL PACKS' : 'WG'] += num(r.qty) })
@@ -2385,7 +2385,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         </tbody></table></div>
       </section>}
       {activeTab === 'bulk-balance-19' && <section className="details facility42-balance facility19-balance">
-        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 19</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: באלק ממשפחת מתקן 19 שתיאורו מכיל 777. תפוקה: דיווחי תחנה 1519, בחלוקה ל-WG ולאריזות קטנות.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
+        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 19</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: באלק מתחנה 1119 שתיאורו מכיל 777. תפוקה: דיווחי תחנה 1519, בחלוקה ל-WG ולאריזות קטנות.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
         <div className="balance-kpi-grid">
           <article><span>באלק שיוצר</span><b>{fmt(facility19Balance.bulk)}</b><small>ק״ג · {facility19Balance.bulkRows.length} רשומות</small></article>
           <article><span>מנות ייצור WG</span><b>{fmt(facility19Balance.byType['WG'])}</b><small>ק״ג</small></article>
@@ -2397,7 +2397,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <div className="balance-note"><AlertTriangle size={18}/><span>בהשוואה יומית ייתכן פער תזמון בין ייצור הבאלק לבין האריזה. המאזן החודשי מייצג טוב יותר את התהליך.</span></div>
         <h3 className="shift-subtitle">פירוט לפי סוג דיווח</h3>
         <div className="table-wrap"><table><thead><tr><th>סוג</th><th>מקור</th><th>כמות</th><th>רשומות</th><th>Batch</th><th>Orders</th></tr></thead><tbody>
-          <tr><td><b>באלק</b></td><td>משפחת תחנה 19 + תיאור 777</td><td><b>{fmt(facility19Balance.bulk)}</b></td><td>{facility19Balance.bulkRows.length}</td><td>{new Set(facility19Balance.bulkRows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(facility19Balance.bulkRows.map(r=>r.order).filter(Boolean)).size}</td></tr>
+          <tr><td><b>באלק</b></td><td>1119 + תיאור 777</td><td><b>{fmt(facility19Balance.bulk)}</b></td><td>{facility19Balance.bulkRows.length}</td><td>{new Set(facility19Balance.bulkRows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(facility19Balance.bulkRows.map(r=>r.order).filter(Boolean)).size}</td></tr>
           {['WG','SMALL PACKS'].map(type => { const rows=facility19Balance.packedRows.filter(r => (facility19Balance.isSmallPack(r) ? 'SMALL PACKS' : 'WG') === type); return <tr key={type}><td><b>{type === 'WG' ? 'מנות ייצור WG' : 'אריזות קטנות'}</b></td><td>1519 + {type === 'WG' ? 'WG רגיל' : '19PWG-01/05/15'}</td><td><b>{fmt(facility19Balance.byType[type])}</b></td><td>{rows.length}</td><td>{new Set(rows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(rows.map(r=>r.order).filter(Boolean)).size}</td></tr> })}
         </tbody></table></div>
       </section>}
@@ -2687,7 +2687,7 @@ function Facility19BalanceOverviewCard({ balance, onClick }) {
   const diffClass = balance.balance > 0 ? 'positive' : balance.balance < 0 ? 'negative' : 'neutral'
   return <button type="button" className={`tower-facility-card facility42-overview-balance facility19-overview-balance ${diffClass}`} onClick={onClick}>
     <div className="tower-facility-head"><div><i></i><strong>מאזן מתקן 19</strong></div><span>ללא יעד</span></div>
-    <div className="facility42-overview-main"><div><span>באלק + 777</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ תפוקה 1519</span><b>{fmt(balance.packed)}</b></div></div>
+    <div className="facility42-overview-main"><div><span>באלק 1119 + 777</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ תפוקה 1519</span><b>{fmt(balance.packed)}</b></div></div>
     <div className="facility42-overview-lines facility19-overview-lines"><span>WG <b>{fmt(balance.byType['WG'])}</b></span><span>Small Packs <b>{fmt(balance.byType['SMALL PACKS'])}</b></span></div>
     <dl><div><dt>יתרת באלק</dt><dd className={balance.balance >= 0 ? 'positive' : 'negative'}>{balance.balance >= 0 ? '+' : ''}{fmt(balance.balance)}</dd></div><div><dt>ניצול באלק</dt><dd>{balance.bulk ? pctFmt(balance.utilization) : '—'}</dd></div></dl>
     <span className="tower-enter">לפירוט המאזן <ArrowLeft size={16}/></span>
@@ -2697,7 +2697,7 @@ function Facility19BalanceOverviewCard({ balance, onClick }) {
 function Facility19BalanceCard({ balance }) {
   const diffClass = balance.balance > 0 ? 'positive' : balance.balance < 0 ? 'negative' : 'neutral'
   return <article className={`forecast-card facility42-balance-card facility19-balance-card ${diffClass}`}>
-    <div className="forecast-head"><div><small>מאזן תשומות / תפוקות</small><h3>מאזן מתקן 19</h3><div className="forecast-resource"><b>777</b><span>מול WG / SMALL PACKS בתחנה 1519</span></div></div><span className="status-badge no-target">ללא יעד</span></div>
+    <div className="forecast-head"><div><small>מאזן תשומות / תפוקות</small><h3>מאזן מתקן 19</h3><div className="forecast-resource"><b>1119 + 777</b><span>מול WG / SMALL PACKS בתחנה 1519</span></div></div><span className="status-badge no-target">ללא יעד</span></div>
     <div className="balance-card-main"><div><span>באלק שיוצר</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ תפוקה</span><b>{fmt(balance.packed)}</b></div></div>
     <div className="balance-card-lines facility19-balance-lines"><span>WG<strong>{fmt(balance.byType['WG'])}</strong></span><span>SMALL PACKS<strong>{fmt(balance.byType['SMALL PACKS'])}</strong></span></div>
     <div className="balance-card-footer"><div><span>יתרה</span><b>{balance.balance > 0 ? '+' : ''}{fmt(balance.balance)}</b></div><div><span>ניצול באלק</span><b>{balance.bulk ? pctFmt(balance.utilization) : '—'}</b></div></div>
