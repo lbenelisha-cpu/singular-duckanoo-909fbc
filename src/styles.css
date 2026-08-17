@@ -370,3 +370,21 @@ body{background:linear-gradient(180deg,#f5f8fa 0,#eef3f6 100%);}
 .balance-note{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:12px;background:#fff8e6;border:1px solid #f2d38a;color:#715414;margin-bottom:18px}
 @media(max-width:1400px){.balance-kpi-grid{grid-template-columns:repeat(4,minmax(140px,1fr))}}
 @media(max-width:800px){.balance-kpi-grid{grid-template-columns:repeat(2,minmax(130px,1fr))}}
+
+/* Facility 42 standalone balance card in the monthly facility cards area */
+.facility42-balance-card{border:2px solid #b9ddd8;background:linear-gradient(180deg,#fbfffe 0%,#f5fbfa 100%);cursor:default}
+.facility42-balance-card:hover{transform:none}
+.facility42-balance-card .status-badge.no-target{background:#eef3f6;color:#617184;border:1px solid #d7e1e7}
+.balance-card-main{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.balance-card-main>div,.balance-card-footer>div{border:1px solid #dce7ec;border-radius:12px;padding:10px;background:#fff}
+.balance-card-main span,.balance-card-footer span{display:block;color:#64748b;font-size:12px}
+.balance-card-main b{display:block;margin-top:4px;font-size:22px;color:#173b57}
+.balance-card-lines{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.balance-card-lines span{display:flex;flex-direction:column;gap:3px;align-items:center;justify-content:center;border-radius:10px;background:#fff;border:1px solid #e1eaee;padding:8px;color:#64748b;font-size:12px}
+.balance-card-lines strong{color:#173b57;font-size:16px}
+.balance-card-footer{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.balance-card-footer b{display:block;margin-top:4px;font-size:19px;color:#173b57}
+.facility42-balance-card.positive .balance-card-footer>div:first-child b{color:#0d766f}
+.facility42-balance-card.negative .balance-card-footer>div:first-child b{color:#c93636}
+.balance-card-note{display:block;margin-top:10px;color:#6b7b88;line-height:1.35}
+@media(max-width:700px){.balance-card-main,.balance-card-footer{grid-template-columns:1fr}.balance-card-lines{grid-template-columns:1fr 1fr 1fr}}
