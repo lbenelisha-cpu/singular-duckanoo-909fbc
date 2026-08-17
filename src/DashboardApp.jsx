@@ -992,6 +992,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         if (missing.length) throw new Error(`${file.name}: חסרות עמודות חובה — ${missing.join(', ')}`)
         let storedCount = rows.length
         let rowsForCloud = rows
+        let lastFileUniqueRows = rows.length
         if (kind === 'production') {
           const compact = dedupeRows(rows.map(r => ({
             __compactProduction: true,
@@ -1020,6 +1021,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           })).filter(r => r.facility && (r.qty || r.order || r.batch)), productionRowKey)
           storedCount = compact.length
           rowsForCloud = compact
+          lastFileUniqueRows = compact.length
         }
         else if (kind === 'quality') {
           const compact = dedupeRows(rows.map(r => ({
@@ -1051,6 +1053,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             qualitative: normalize(getField(r, ['Qualitative'])),
             udCode: normalize(getField(r, ['UD Code', 'Usage Decision', 'Usage decision', 'החלטת שימוש'])),
           })).filter(r => r.batch || r.inspectionLot), qualityRowKey)
+          lastFileUniqueRows = compact.length
           setStatus(`בודק אילו רשומות איכות חדשות קיימות ב-${displayDatasetName('quality')}...`)
           setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent:0, message:'משווה מול נתוני האיכות הקיימים' })
           const fresh = await filterNewQualityRows(quality, compact, (completed,total) => {
@@ -1108,7 +1111,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         } else throw new Error(`${file.name}: סוג הקובץ לא זוהה. השתמש באזור הטעינה המתאים במרכז הנתונים.`)
         const facilitiesFound = new Set(rows.slice(0, 5000).map(r => canonicalFacility(getField(r, ['Storage Location','Inspection Lot Storage Location','Process Order Storage Location','Facility','Production Line','מתקן']))).filter(Boolean)).size
         const displayName = displayDatasetName(kind, kind === 'targets' ? rowsForCloud?.[0]?.month : '')
-        const nextMeta = { fileName:displayName, originalFileName:file.name, rows:storedCount, rawRows:rows.length, lastFileRows:rows.length, lastFileUniqueRows:kind === 'quality' ? compact?.length : storedCount, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
+        const nextMeta = { fileName:displayName, originalFileName:file.name, rows:storedCount, rawRows:rows.length, lastFileRows:rows.length, lastFileUniqueRows, loadedAt:new Date().toISOString(), facilities:facilitiesFound, valid:true, source:'cloud' }
         setStatus(`מעלה את ${displayName} למסד המשותף...`)
         setUploadProgress({ fileName:displayName, kind, phase:'prepare', percent:0, message:'מכין את הנתונים' })
         const progressHandler = progress => {
