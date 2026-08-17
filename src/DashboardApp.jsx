@@ -42,7 +42,7 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.3 — Facility 19 Bulk Balance'
+const BUILD_LABEL = 'Sprint 11.9.7 — Dynamic Mapping V4.1'
 const isoDate = value => {
   if (!value) return ''
 
@@ -1809,6 +1809,16 @@ console.log("QUALITY =", qualityForBatchMaterial)
     setMappingMessage(`המיפוי של ${mapping.resource} בוטל`)
   }
 
+  const activeTargetFamilies = useMemo(() => new Set(
+    mappingTargets.flatMap(target => (target.facilities || [target.facility]).map(stationFamily)).filter(Boolean)
+  ), [mappingTargets])
+
+  const isDedicatedBulkMappingRow = row => {
+    const facility = normalize(row?.facility)
+    const description = normalize(row?.desc).toUpperCase()
+    return (facility === '1142' && description.includes('999')) || (facility === '1119' && description.includes('777'))
+  }
+
   const mappingSimulation = useMemo(() => {
     const assignments = new Map()
     planningRows.forEach(targetRow => {
@@ -1829,21 +1839,25 @@ console.log("QUALITY =", qualityForBatchMaterial)
       const rowKey = productionMappingKey(row)
       const approvedManual = manualMappings.find(mapping => mapping.active !== false && mapping.status === 'approved' && mapping.rowKey === rowKey)
       const pendingManual = manualMappings.find(mapping => mapping.active !== false && mapping.status === 'pending' && mapping.rowKey === rowKey)
-      const status = matches.length === 0 ? 'unmatched' : matches.length > 1 ? 'duplicate' : 'matched'
       const stationDigits = String(row.facility || '').replace(/\D/g, '')
       const suffix = stationDigits.length >= 2 ? stationDigits.slice(-2) : ''
       const family = suffix ? `15${suffix}` : row.facility || ''
+      const dedicatedBulk = isDedicatedBulkMappingRow(row)
+      const relevantToActiveTarget = activeTargetFamilies.has(stationFamily(family))
+      const rawStatus = matches.length === 0 ? 'unmatched' : matches.length > 1 ? 'duplicate' : 'matched'
+      const status = dedicatedBulk ? 'ignored-bulk' : rawStatus
+      const actionable = !dedicatedBulk && relevantToActiveTarget && rawStatus !== 'matched'
       return {
         key: `${row.order || ''}-${row.batch || ''}-${index}`,
         row,
         matches,
-        status,
+        status, rawStatus, actionable, relevantToActiveTarget, dedicatedBulk,
         family,
         assignedResource: matches.map(item => item.resource).filter(Boolean).join(' | '),
         approvedManual, pendingManual,
-        explanation: status === 'matched'
+        explanation: dedicatedBulk ? (normalize(row.facility) === '1142' ? 'באלק מתקן 42 — מטופל רק במאזן 42 (1142 + 999)' : 'באלק מתקן 19 — מטופל רק במאזן 19 (1119 + 777)') : rawStatus === 'matched'
           ? `שויך ליעד אחד: ${matches[0].resource || matches[0].facility || 'ללא שם'}`
-          : status === 'duplicate'
+          : rawStatus === 'duplicate'
             ? `שויך ל-${matches.length} יעדים — חשש לספירה כפולה`
             : 'לא נמצא יעד תואם לפי כללי המנוע הנוכחיים',
       }
@@ -1855,16 +1869,18 @@ console.log("QUALITY =", qualityForBatchMaterial)
       if (item.status === 'matched') { acc.matched += 1; acc.matchedQty += Number(item.row.qty) || 0 }
       if (item.status === 'unmatched') { acc.unmatched += 1; acc.unmatchedQty += Number(item.row.qty) || 0 }
       if (item.status === 'duplicate') { acc.duplicate += 1; acc.duplicateQty += Number(item.row.qty) || 0 }
+      if (item.status === 'ignored-bulk') { acc.ignoredBulk += 1; acc.ignoredBulkQty += Number(item.row.qty) || 0 }
+      if (item.actionable) { acc.actionable += 1; acc.actionableQty += Number(item.row.qty) || 0 }
       return acc
-    }, { rows:0, quantity:0, matched:0, matchedQty:0, unmatched:0, unmatchedQty:0, duplicate:0, duplicateQty:0 })
+    }, { rows:0, quantity:0, matched:0, matchedQty:0, unmatched:0, unmatchedQty:0, duplicate:0, duplicateQty:0, ignoredBulk:0, ignoredBulkQty:0, actionable:0, actionableQty:0 })
 
     return { rows, summary }
-  }, [filtered, planningRows, manualMappings])
+  }, [filtered, planningRows, manualMappings, activeTargetFamilies])
 
   const visibleMappingSimulation = useMemo(() => (
     simulatorOnlyIssues
-      ? mappingSimulation.rows.filter(item => item.status !== 'matched')
-      : mappingSimulation.rows
+      ? mappingSimulation.rows.filter(item => item.actionable)
+      : mappingSimulation.rows.filter(item => item.status !== 'ignored-bulk')
   ), [mappingSimulation, simulatorOnlyIssues])
 
   const exportMappingSimulation = () => {
@@ -1881,6 +1897,8 @@ console.log("QUALITY =", qualityForBatchMaterial)
       Description: item.row.desc,
       Quantity: item.row.qty,
       MatchStatus: item.status,
+      RelevantToActiveTarget: item.relevantToActiveTarget ? 'YES' : 'NO',
+      ActionRequired: item.actionable ? 'YES' : 'NO',
       AssignedResource: item.assignedResource,
       Explanation: item.explanation,
     }))
@@ -2450,7 +2468,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <button className={activeTab === 'bulk-balance-19' ? 'active' : ''} onClick={() => setActiveTab('bulk-balance-19')}><Activity size={16}/> מאזן מתקן 19</button>
         <button className={activeTab === 'quality' ? 'active' : ''} onClick={() => setActiveTab('quality')}><FlaskConical size={16}/> איכות ({qualityBad.length})</button>
         <button className={activeTab === 'deviations' ? 'active' : ''} onClick={() => setActiveTab('deviations')}><AlertTriangle size={16}/> מנות חריגות ({openDeviations.length})</button>
-        {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.unmatched + mappingSimulation.summary.duplicate})</button>}
+        {canManageData && <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => setActiveTab('mapping-simulator')}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.actionable})</button>}
         {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
       {activeTab === 'bulk-balance' && <section className="details facility42-balance">
@@ -2490,10 +2508,10 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>}
       {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td><button type="button" className={`qty-variance-btn ${num(r.plannedQty)>0 && Math.abs(num(r.qty)-num(r.plannedQty))>0.0001 ? 'has-variance' : ''}`} onClick={()=>setQuantityVarianceRow(r)} title={num(r.plannedQty)>0 ? 'לחץ להצגת כמות מתוכננת, בפועל והפער' : 'לא נמצאה כמות מתוכננת לרשומה'}>{fmt(r.qty)}</button></td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
-        <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מציג לאיזה יעד כל רשומת SAP נכנסת. בשורה בעייתית לחץ "שייך" כדי לראות את ההשפעה לפני שמירה.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
+        <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מתמקד בחריגים שרלוונטיים ליעדים הפעילים. באלק 1142+999 ובאלק 1119+777 מוחרגים אוטומטית ומטופלים רק במאזני 42 ו-19.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
         {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
-        <div className="mapping-summary-grid"><article><span>רשומות בטווח</span><b>{fmt(mappingSimulation.summary.rows)}</b><small>{fmt(mappingSimulation.summary.quantity)} כמות</small></article><article className="mapping-ok"><span>שויכו תקין</span><b>{fmt(mappingSimulation.summary.matched)}</b><small>{fmt(mappingSimulation.summary.matchedQty)} כמות</small></article><article className="mapping-unmatched"><span>לא שויכו</span><b>{fmt(mappingSimulation.summary.unmatched)}</b><small>{fmt(mappingSimulation.summary.unmatchedQty)} כמות</small></article><article className="mapping-duplicate"><span>שיוך כפול</span><b>{fmt(mappingSimulation.summary.duplicate)}</b><small>{fmt(mappingSimulation.summary.duplicateQty)} כמות</small></article></div>
-        <div className="table-wrap mapping-table-wrap"><table><thead><tr><th>סטטוס</th><th>תאריך</th><th>תחנה</th><th>משפחה</th><th>Order</th><th>Batch</th><th>מק״ט</th><th>תיאור מוצר</th><th>כמות</th><th>יעד</th><th>מקור</th><th>פעולה</th></tr></thead><tbody>{visibleMappingSimulation.slice(0,1000).map(item => <tr key={item.key} className={`mapping-row mapping-${item.status}`}><td><span className={`mapping-status mapping-status-${item.status}`}>{item.status === 'matched' ? 'תקין' : item.status === 'duplicate' ? 'כפול' : 'לא שויך'}</span></td><td>{item.row.productionDay || iso(item.row.date)}</td><td>{item.row.facility || '—'}</td><td>{item.family || '—'}</td><td>{item.row.order || '—'}</td><td>{item.row.batch || '—'}</td><td>{item.row.material || '—'}</td><td>{item.row.desc || '—'}</td><td>{fmt(item.row.qty)}</td><td>{item.assignedResource || item.pendingManual?.targetResource || '—'}</td><td>{item.approvedManual ? 'מיפוי ידני מאושר' : item.pendingManual ? 'ממתין לאישור' : item.explanation}</td><td>{item.family !== '1542' && item.status !== 'matched' && !item.pendingManual ? <button className="mapping-assign-btn" onClick={() => openMappingDialog(item)}>שייך</button> : item.pendingManual ? <span className="mapping-pending-chip">ממתין</span> : '—'}</td></tr>)}{!visibleMappingSimulation.length && <tr><td colSpan="12" className="empty">לא נמצאו בעיות שיוך בטווח שנבחר</td></tr>}</tbody></table></div>
+        <div className="mapping-summary-grid"><article><span>רשומות בטווח</span><b>{fmt(mappingSimulation.summary.rows)}</b><small>{fmt(mappingSimulation.summary.quantity)} כמות</small></article><article className="mapping-ok"><span>שויכו תקין</span><b>{fmt(mappingSimulation.summary.matched)}</b><small>{fmt(mappingSimulation.summary.matchedQty)} כמות</small></article><article className="mapping-duplicate"><span>דורשות החלטה</span><b>{fmt(mappingSimulation.summary.actionable)}</b><small>{fmt(mappingSimulation.summary.actionableQty)} כמות</small></article><article><span>באלק מוחרג</span><b>{fmt(mappingSimulation.summary.ignoredBulk)}</b><small>999 / 777 · מטופל במאזנים</small></article></div>
+        <div className="table-wrap mapping-table-wrap"><table><thead><tr><th>סטטוס</th><th>תאריך</th><th>תחנה</th><th>משפחה</th><th>Order</th><th>Batch</th><th>מק״ט</th><th>תיאור מוצר</th><th>כמות</th><th>יעד</th><th>מקור</th><th>פעולה</th></tr></thead><tbody>{visibleMappingSimulation.slice(0,1000).map(item => <tr key={item.key} className={`mapping-row mapping-${item.status}`}><td><span className={`mapping-status mapping-status-${item.status}`}>{item.status === 'matched' ? 'תקין' : item.status === 'duplicate' ? 'כפול' : item.status === 'ignored-bulk' ? 'באלק מוחרג' : 'לא שויך'}</span></td><td>{item.row.productionDay || iso(item.row.date)}</td><td>{item.row.facility || '—'}</td><td>{item.family || '—'}</td><td>{item.row.order || '—'}</td><td>{item.row.batch || '—'}</td><td>{item.row.material || '—'}</td><td>{item.row.desc || '—'}</td><td>{fmt(item.row.qty)}</td><td>{item.assignedResource || item.pendingManual?.targetResource || '—'}</td><td>{item.approvedManual ? 'מיפוי ידני מאושר' : item.pendingManual ? 'ממתין לאישור' : item.explanation}</td><td>{item.actionable && item.family !== '1542' && !item.pendingManual ? <button className="mapping-assign-btn" onClick={() => openMappingDialog(item)}>שייך</button> : item.pendingManual ? <span className="mapping-pending-chip">ממתין</span> : '—'}</td></tr>)}{!visibleMappingSimulation.length && <tr><td colSpan="12" className="empty">לא נמצאו בעיות שיוך בטווח שנבחר</td></tr>}</tbody></table></div>
       </section>}
 
       {activeTab === 'mapping-center' && canManageData && <section className="details mapping-center">
