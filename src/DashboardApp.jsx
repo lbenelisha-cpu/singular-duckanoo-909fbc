@@ -1105,7 +1105,23 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               ]
             }
             return [makeTarget(sourceResource)]
-          }).filter(r=>r.resource&&r.facilities.length&&isApprovedTargetResource(r.resource))
+          }).filter(r => r.resource && (r.target > 0 || r.capacity > 0))
+            .map(targetRow => {
+              // Dynamic Targets v1: the monthly workbook is the source of truth.
+              // New rows are never blocked by a hard-coded resource whitelist.
+              // If the row name does not contain a known station, infer station(s)
+              // from current production using the DATA-sheet material list.
+              if (targetRow.facilities?.length) return targetRow
+              const materialSet = new Set((targetRow.materials || []).map(normalize).filter(Boolean))
+              if (!materialSet.size) return { ...targetRow, mappingStatus:'requires-mapping' }
+              const inferred = [...new Set(production
+                .filter(prodRow => materialSet.has(normalize(prodRow.material)))
+                .map(prodRow => normalize(prodRow.facility))
+                .filter(Boolean))]
+              return inferred.length
+                ? { ...targetRow, facility:inferred[0], facilities:inferred, station:inferred.join(','), mappingStatus:'inferred' }
+                : { ...targetRow, mappingStatus:'requires-mapping' }
+            })
           if(!parsed.length) throw new Error(`${file.name}: לא נמצאו שורות יעד תקינות. ודא שקיימות עמודות Resource, Capacity ו-Plan.`)
           storedCount=parsed.length; rowsForCloud=parsed; if(parsed[0]?.month) setPlanningMonth(parsed[0].month)
         } else throw new Error(`${file.name}: סוג הקובץ לא זוהה. השתמש באזור הטעינה המתאים במרכז הנתונים.`)

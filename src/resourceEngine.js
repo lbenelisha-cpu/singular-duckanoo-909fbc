@@ -210,6 +210,7 @@ const latestDate = monthRows.reduce((latest, row) => {
       target, capacity, actual, pct:target ? actual / target * 100 : 0, remaining, requiredDaily,
       average, recentAverage, provenMax, forecast, capacityForecast, elapsedWorkdays, remainingWorkdays, totalWorkdays,
       orders:orders.size, batches:batches.size, productionRows:rows, dailyEntries, state, label,
+      mappingStatus:targetRow.mappingStatus || '',
       notes:targetRow.notes || '', recyclingPlan:Number(targetRow.recyclingPlan)||0, recycled:Number(targetRow.recycled)||0,
       forPacking:Number(targetRow.forPacking)||0, restrictedRecycling:Number(targetRow.restrictedRecycling)||0,
       restrictedDisposal:Number(targetRow.restrictedDisposal)||0,
