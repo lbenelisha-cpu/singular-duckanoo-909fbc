@@ -2194,7 +2194,14 @@ console.log("QUALITY =", qualityForBatchMaterial)
   }
   const printRecentProduction = () => {
     const rows = sortedRecentProduction.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility))
-    openPrintReport('רשומות תפוקה אחרונות', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'}`, [
+    const totalQty = rows.reduce((sum, row) => sum + num(row.qty), 0)
+    const stationTotals = [...rows.reduce((map, row) => {
+      const station = normalize(row.routingGroup || row.station || row.facility || 'ללא תחנה') || 'ללא תחנה'
+      map.set(station, (map.get(station) || 0) + num(row.qty))
+      return map
+    }, new Map()).entries()].sort((a,b) => b[1] - a[1])
+    const weighingSummary = `סה״כ כמות: ${fmt(totalQty)}${stationTotals.length ? ' · ' + stationTotals.map(([station, qty]) => `${station}: ${fmt(qty)}`).join(' · ') : ''}`
+    openPrintReport('רשומות תפוקה אחרונות', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'} · ${weighingSummary}`, [
       {key:'date',label:'תאריך'},{key:'ud',label:'החלטת שימוש (UD)'},{key:'facility',label:'משאב יעד'},{key:'routing',label:'מתקן / תחנה'},
       {key:'order',label:'הזמנה'},{key:'batch',label:'Batch'},{key:'material',label:'מק״ט חומר'},{key:'desc',label:'תיאור חומר'},{key:'planned',label:'כמות מתוכננת'},{key:'qty',label:'כמות בפועל'},{key:'gap',label:'פער'}
     ], rows.map(r => ({date:iso(r.date),ud:productionUsageDecision(r),facility:r.facility,routing:r.routingGroup||'—',order:r.order||'—',batch:r.batch||'—',material:r.material||'—',desc:r.desc||'—',planned:r.plannedQty?fmt(r.plannedQty):'—',qty:fmt(r.qty),gap:r.plannedQty?fmt(num(r.qty)-num(r.plannedQty)):'—'})))
