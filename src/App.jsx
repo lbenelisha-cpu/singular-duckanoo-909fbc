@@ -14,7 +14,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [connectionStatus, setConnectionStatus] = useState(null)
-  const [publicViewer, setPublicViewer] = useState(false)
+  const [publicViewer, setPublicViewer] = useState(true)
 
   const sessionRef = useRef(null)
 
@@ -124,7 +124,7 @@ export default function App() {
   }
 
   if (!cloudConfigured || configurationError) return <SetupRequired error={configurationError} />
-  if (publicViewer) return <DashboardApp currentUser={null} userRole="viewer" isGuest={true} onSignOut={signOut}/>
+  if (publicViewer) return <DashboardApp currentUser={null} userRole="viewer" isGuest={true} onSignOut={signOut} onRequestAdminLogin={()=>setPublicViewer(false)}/>
   if (!session) return <div className="auth-page" dir="rtl"><form className="auth-card" onSubmit={signIn}>
     <div className="auth-brand"><img src="/icons/icon-192.png" alt="IML Control"/><div className="auth-logo">IML<span>CONTROL</span></div></div>
     <div className="auth-icon"><LockKeyhole/></div><h1>כניסה למערכת</h1><p>התחבר כדי לצפות בנתוני המתקנים המשותפים.</p>
@@ -144,7 +144,7 @@ export default function App() {
   if (session && profileLoading && !profile) return <div className="auth-page" dir="rtl"><div className="auth-card auth-loading"><div className="auth-icon"><ShieldCheck/></div><h1>בודק הרשאות משתמש...</h1><p>המערכת מאמתת את תפקיד המשתמש לפני טעינת הדשבורד.</p></div></div>
   if (session && !profile) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>לא נמצא פרופיל הרשאה</h1><p>יש להגדיר למשתמש פרופיל פעיל בטבלת profiles.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
   if (profile && profile.is_active === false) return <div className="auth-page" dir="rtl"><div className="auth-card"><AlertCircle className="blocked-icon"/><h1>החשבון חסום</h1><p>פנה למנהל המערכת להפעלת המשתמש.</p><button className="auth-submit" onClick={signOut}>יציאה</button></div></div>
-  return <DashboardApp currentUser={session.user} userRole={profile.role} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut}/>
+  return <DashboardApp currentUser={session.user} userRole={profile.role} isGuest={Boolean(profile?.is_guest || session.user.is_anonymous)} onSignOut={signOut} onRequestAdminLogin={()=>setPublicViewer(false)}/>
 }
 
 function SetupRequired({ error }){ return <div className="auth-page" dir="rtl"><div className="auth-card setup-card"><div className="auth-icon"><Cloud/></div><h1>נדרש חיבור לענן</h1><p>{error || 'חסרים משתני החיבור של Supabase.'}</p><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_ANON_KEY</code><small>נתמך גם: VITE_SUPABASE_PUBLISHABLE_KEY</small><div className="setup-note">העתק את Project URL ישירות מ־Supabase, ללא /rest/v1/, ושמור ב־Netlify. לאחר מכן בצע Clear cache and deploy site.</div></div></div> }
