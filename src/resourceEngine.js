@@ -173,6 +173,40 @@ const latestDate = monthRows.reduce((latest, row) => {
     if (hasProduction && !alreadyExists) sourceRows.push({ facility:item.facility, facilities:[item.facility], resource:item.resource, target:0, capacity:0, descriptionTokens:[], station:item.facility, lineName:item.resource })
   })
 
+  // Sprint 11.9.15 — automatically surface newly reported materials that are not
+  // present in the monthly target workbook yet. They appear as zero-target rows
+  // so production is never hidden while waiting for the next target-file update.
+  // Facility 42 (1542) and Facility 19 (1519) keep their approved line/family logic.
+  const autoMaterialExcludedFacilities = new Set(['1542', '1519'])
+  const unmatchedMaterialGroups = new Map()
+  monthRows.forEach(row => {
+    const facility = upper(row.facility)
+    const material = text(row.material)
+    if (!facility || !material || autoMaterialExcludedFacilities.has(facility)) return
+    const alreadyMatched = sourceRows.some(targetRow => matchProductionToTarget(row, targetRow, manualMappings))
+    if (alreadyMatched) return
+    const key = `${facility}::${upper(material)}`
+    if (!unmatchedMaterialGroups.has(key)) unmatchedMaterialGroups.set(key, row)
+  })
+  unmatchedMaterialGroups.forEach(row => {
+    const facility = text(row.facility)
+    const material = text(row.material)
+    const description = text(row.desc) || text(row.routingDescription) || material
+    sourceRows.push({
+      facility, facilities:[facility],
+      resource:description,
+      target:0, capacity:0,
+      materials:[material],
+      descriptionTokens:[],
+      station:facility,
+      lineName:description,
+      activity:'ייצור / אריזה',
+      mappingStatus:'auto-new-material',
+      mappingReason:'חומר חדש שדווח בתפוקה ואינו קיים עדיין בקובץ היעדים',
+      notes:`נוסף אוטומטית מהתפוקה · מק״ט ${material}`,
+    })
+  })
+
   return sourceRows.map((targetRow, index) => {
     const rows = monthRows.filter(row => matchProductionToTarget(row, targetRow, manualMappings))
     const dailyMap = new Map()
