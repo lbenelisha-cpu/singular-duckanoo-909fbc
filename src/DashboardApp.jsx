@@ -42,7 +42,7 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.10 — Unique Facility Colors'
+const BUILD_LABEL = 'Sprint 11.9.11 — Print Facility Colors'
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
 // Stable, collision-free colors for the facilities used by IML CONTROL.
@@ -2206,10 +2206,25 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const popup = window.open('', '_blank', 'width=1400,height=900')
     if (!popup) { setStatus('הדפדפן חסם חלון הדפסה. יש לאפשר חלונות קופצים לאתר.'); return }
     const esc = value => String(value ?? '').replace(/[&<>\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]))
-    const bodyRows = rows.map((row, index) => `<tr class="${esc(row._state || '')}"><td class="index">${index+1}</td>${headers.map(h => `<td>${esc(row[h.key])}</td>`).join('')}</tr>`).join('')
+    const facilityRows = rows.filter(row => row._facility)
+    const facilityIds = [...new Set(facilityRows.map(row => String(row._facility)))]
+    const showFacilityColors = facilityIds.length > 1
+    const facilitySummary = facilityIds.map(facility => {
+      const group = facilityRows.filter(row => String(row._facility) === facility)
+      const hasQty = group.some(row => Number.isFinite(Number(row._qtyRaw)))
+      const qty = group.reduce((sum, row) => sum + (Number.isFinite(Number(row._qtyRaw)) ? Number(row._qtyRaw) : 0), 0)
+      return { facility, count: group.length, qty, hasQty, color: facilityColorFor(facility) }
+    }).sort((a,b) => String(b.facility).localeCompare(String(a.facility), 'he', {numeric:true}))
+    const facilitySummaryHtml = showFacilityColors ? `<div class="facility-summary">${facilitySummary.map(item => `<div class="facility-chip" style="background:${item.color};border-color:${item.color}"><b>מתקן ${esc(item.facility)}</b><span>${item.hasQty ? `סה״כ ${esc(fmt(item.qty))}` : `${item.count} רשומות`}</span></div>`).join('')}</div>` : ''
+    const bodyRows = rows.map((row, index) => {
+      const facility = row._facility ? String(row._facility) : ''
+      const colorStyle = showFacilityColors && facility ? ` style="--facility-bg:${facilityColorFor(facility)}"` : ''
+      const facilityClass = showFacilityColors && facility ? ' facility-row' : ''
+      return `<tr class="${esc(row._state || '')}${facilityClass}"${colorStyle}><td class="index">${index+1}</td>${headers.map(h => `<td>${esc(row[h.key])}</td>`).join('')}</tr>`
+    }).join('')
     popup.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
-      @page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,"Segoe UI",sans-serif;color:#16324a;margin:0;background:#f4f8fb}.sheet{background:white;padding:22px}.head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #159b83;padding-bottom:14px;margin-bottom:18px}.head h1{margin:0;font-size:28px}.head p{margin:5px 0 0;color:#64748b}.brand{font-weight:800;color:#159b83;font-size:19px}.summary{display:flex;gap:10px;margin:0 0 16px;flex-wrap:wrap}.chip{background:#eaf7f3;border:1px solid #c7eadf;padding:8px 12px;border-radius:12px;font-weight:700}table{width:100%;border-collapse:separate;border-spacing:0;font-size:11px;overflow:hidden;border:1px solid #dbe5ec;border-radius:12px}th{background:#173b57;color:white;padding:9px 6px}td{padding:8px 6px;border-bottom:1px solid #e6edf2;text-align:center}tr:nth-child(even) td{background:#f8fbfd}tr.good td,tr.achieved td{background:#effaf5}tr.warning td{background:#fff8e6}tr.risk td{background:#fff0f0}.index{font-weight:700;color:#64748b}.footer{margin-top:12px;color:#64748b;font-size:10px}@media print{body{background:white}.sheet{padding:0}.no-print{display:none}}
-    </style></head><body><div class="sheet"><div class="head"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="brand">IML CONTROL</div></div><div class="summary"><div class="chip">חודש: ${esc(planningMonth || '—')}</div><div class="chip">תאריך הדפסה: ${esc(new Date().toLocaleString('he-IL'))}</div><div class="chip">רשומות: ${rows.length}</div></div><table><thead><tr><th>#</th>${headers.map(h=>`<th>${esc(h.label)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table><div class="footer">דוח ניהולי — IML CONTROL</div></div><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`)
+      @page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,"Segoe UI",sans-serif;color:#16324a;margin:0;background:#f4f8fb}.sheet{background:white;padding:22px}.head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #159b83;padding-bottom:14px;margin-bottom:18px}.head h1{margin:0;font-size:28px}.head p{margin:5px 0 0;color:#64748b}.brand{font-weight:800;color:#159b83;font-size:19px}.summary{display:flex;gap:10px;margin:0 0 12px;flex-wrap:wrap}.chip{background:#eaf7f3;border:1px solid #c7eadf;padding:8px 12px;border-radius:12px;font-weight:700}.facility-summary{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}.facility-chip{display:flex;gap:8px;align-items:center;border:1px solid;padding:8px 12px;border-radius:12px}.facility-chip b{font-size:12px}.facility-chip span{font-size:11px;font-weight:700}.facility-row td{background:var(--facility-bg)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}table{width:100%;border-collapse:separate;border-spacing:0;font-size:11px;overflow:hidden;border:1px solid #dbe5ec;border-radius:12px}th{background:#173b57;color:white;padding:9px 6px}td{padding:8px 6px;border-bottom:1px solid #e6edf2;text-align:center}tr:nth-child(even) td{background:#f8fbfd}tr.good td,tr.achieved td{background:#effaf5}tr.warning td{background:#fff8e6}tr.risk td{background:#fff0f0}.index{font-weight:700;color:#64748b}.footer{margin-top:12px;color:#64748b;font-size:10px}@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}body{background:white}.sheet{padding:0}.no-print{display:none}}
+    </style></head><body><div class="sheet"><div class="head"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="brand">IML CONTROL</div></div><div class="summary"><div class="chip">חודש: ${esc(planningMonth || '—')}</div><div class="chip">תאריך הדפסה: ${esc(new Date().toLocaleString('he-IL'))}</div><div class="chip">רשומות: ${rows.length}</div></div>${facilitySummaryHtml}<table><thead><tr><th>#</th>${headers.map(h=>`<th>${esc(h.label)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table><div class="footer">דוח ניהולי — IML CONTROL</div></div><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`)
     popup.document.close()
   }
 
@@ -2252,7 +2267,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const rows = facilityStats.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.id))
     openPrintReport('ביצועים לפי מתקן בטווח המסונן', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'}`, [
       {key:'facility',label:'מתקן'},{key:'qty',label:'כמות'},{key:'orders',label:'Orders'},{key:'batches',label:'מנות'}
-    ], rows.map(r => ({facility:r.id,qty:fmt(r.actual),orders:r.orders||0,batches:new Set(baseFiltered.filter(x => x.facility === r.id).map(x => x.batch).filter(Boolean)).size})))
+    ], rows.map(r => ({_facility:r.id,_qtyRaw:num(r.actual),facility:r.id,qty:fmt(r.actual),orders:r.orders||0,batches:new Set(baseFiltered.filter(x => x.facility === r.id).map(x => x.batch).filter(Boolean)).size})))
   }
   const printRecentProduction = () => {
     const rows = sortedRecentProduction.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility))
@@ -2266,7 +2281,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     openPrintReport('רשומות תפוקה אחרונות', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'} · ${weighingSummary}`, [
       {key:'date',label:'תאריך'},{key:'ud',label:'החלטת שימוש (UD)'},{key:'facility',label:'משאב יעד'},{key:'routing',label:'מתקן / תחנה'},
       {key:'order',label:'הזמנה'},{key:'batch',label:'Batch'},{key:'material',label:'מק״ט חומר'},{key:'desc',label:'תיאור חומר'},{key:'planned',label:'כמות מתוכננת'},{key:'qty',label:'כמות בפועל'},{key:'gap',label:'פער'}
-    ], rows.map(r => ({date:iso(r.date),ud:productionUsageDecision(r),facility:r.facility,routing:r.routingGroup||'—',order:r.order||'—',batch:r.batch||'—',material:r.material||'—',desc:r.desc||'—',planned:r.plannedQty?fmt(r.plannedQty):'—',qty:fmt(r.qty),gap:r.plannedQty?fmt(num(r.qty)-num(r.plannedQty)):'—'})))
+    ], rows.map(r => ({_facility:r.facility,_qtyRaw:num(r.qty),date:iso(r.date),ud:productionUsageDecision(r),facility:r.facility,routing:r.routingGroup||'—',order:r.order||'—',batch:r.batch||'—',material:r.material||'—',desc:r.desc||'—',planned:r.plannedQty?fmt(r.plannedQty):'—',qty:fmt(r.qty),gap:r.plannedQty?fmt(num(r.qty)-num(r.plannedQty)):'—'})))
   }
 
   const printMonthlyTargets = () => {
