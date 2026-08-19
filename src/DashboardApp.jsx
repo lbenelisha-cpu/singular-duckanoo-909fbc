@@ -42,11 +42,29 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.9 — Facility Summary Colors'
+const BUILD_LABEL = 'Sprint 11.9.10 — Unique Facility Colors'
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
+// Stable, collision-free colors for the facilities used by IML CONTROL.
+// This keeps the same facility color in the table, summary chips, print and Excel export.
+const FACILITY_FIXED_COLORS = {
+  '1123':'#FDEBFF',
+  '1142':'#E8F8FF',
+  '1519':'#E9F8EF',
+  '1521':'#FFF3D9',
+  '1523':'#F4EAFF',
+  '1524':'#F1F1F1',
+  '1525':'#FFE9EC',
+  '1528':'#DFF4FF',
+  '1540':'#FFF0E5',
+  '1541':'#EAF0FF',
+  '1542':'#E6F8ED',
+  '1543':'#FFF0C9',
+}
 const facilityColorFor = facility => {
-  const text = String(facility || '—')
+  const text = String(facility || '—').trim()
+  if (FACILITY_FIXED_COLORS[text]) return FACILITY_FIXED_COLORS[text]
+  // Fallback for a future facility not yet in the fixed map.
   let hash = 0
   for (let i=0;i<text.length;i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0
   return FACILITY_COLOR_PALETTE[Math.abs(hash) % FACILITY_COLOR_PALETTE.length]
