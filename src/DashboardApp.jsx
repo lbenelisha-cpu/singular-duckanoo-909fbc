@@ -42,8 +42,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.25'
-const BUILD_LABEL = 'Sprint 11.9.25 — ADAMA Logo Update Test'
+const APP_VERSION = '11.9.27'
+const BUILD_LABEL = 'Sprint 11.9.27 — Build Asset Update Detection'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -861,36 +861,87 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   useEffect(() => {
     let active = true
-    const checkForUpdate = async () => {
+
+    const currentBundlePath = () => {
+      const scripts = [...document.querySelectorAll('script[type="module"][src]')]
+      const script = scripts.find(node => /\/assets\/[^/]+\.js(?:\?|$)/.test(node.src)) || scripts[0]
+      if (!script?.src) return ''
+      try { return new URL(script.src, window.location.origin).pathname } catch { return script.src }
+    }
+
+    const latestBundlePath = async () => {
+      const response = await fetch(`/index.html?update-check=${Date.now()}`, {
+        cache:'no-store',
+        headers:{ 'Cache-Control':'no-cache, no-store, must-revalidate' },
+      })
+      if (!response.ok) return ''
+      const html = await response.text()
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const scripts = [...doc.querySelectorAll('script[type="module"][src]')]
+      const script = scripts.find(node => /\/assets\/[^/]+\.js(?:\?|$)/.test(node.getAttribute('src') || '')) || scripts[0]
+      const src = script?.getAttribute('src') || ''
+      if (!src) return ''
+      try { return new URL(src, window.location.origin).pathname } catch { return src }
+    }
+
+    const readReleaseInfo = async () => {
       try {
         const response = await fetch(`/version.json?ts=${Date.now()}`, { cache:'no-store' })
-        if (!response.ok) return
-        const remote = await response.json()
-        const remoteVersion = normalize(remote?.version)
-        if (!active || !remoteVersion) return
-        setAvailableUpdate(remoteVersion !== APP_VERSION ? { ...remote, version:remoteVersion } : null)
+        return response.ok ? await response.json() : null
+      } catch { return null }
+    }
+
+    const checkForUpdate = async () => {
+      try {
+        const currentAsset = currentBundlePath()
+        const latestAsset = await latestBundlePath()
+        if (!active || !currentAsset || !latestAsset) return
+
+        if (currentAsset !== latestAsset) {
+          const release = await readReleaseInfo()
+          if (!active) return
+          setAvailableUpdate({
+            ...(release || {}),
+            version:normalize(release?.version) || 'חדשה',
+            currentAsset,
+            latestAsset,
+          })
+        } else {
+          setAvailableUpdate(null)
+        }
       } catch (error) {
-        console.debug('Version check skipped', error)
+        console.debug('Build update check skipped', error)
       }
     }
-    const onVisibility = () => { if (document.visibilityState === 'visible') checkForUpdate() }
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') checkForUpdate()
+    }
+
     checkForUpdate()
     const timer = window.setInterval(checkForUpdate, VERSION_CHECK_INTERVAL_MS)
     document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', checkForUpdate)
+
     return () => {
       active = false
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', checkForUpdate)
     }
   }, [])
 
   const refreshApplication = async () => {
     try {
       const registrations = await navigator.serviceWorker?.getRegistrations?.()
-      await Promise.all((registrations || []).map(registration => registration.update().catch(() => null)))
+      await Promise.all((registrations || []).map(async registration => {
+        try { await registration.update() } catch {}
+        try { await registration.unregister() } catch {}
+      }))
     } catch {}
+
     const url = new URL(window.location.href)
-    url.searchParams.set('v', availableUpdate?.version || Date.now())
+    url.searchParams.set('refresh', String(Date.now()))
     window.location.replace(url.toString())
   }
 
@@ -2520,7 +2571,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
   }
 
   const updateBanner = availableUpdate ? <div role="alert" style={{margin:'10px 18px',padding:'12px 16px',borderRadius:12,background:'#fff3cd',border:'1px solid #f0c36d',display:'flex',alignItems:'center',justifyContent:'space-between',gap:14,boxShadow:'0 4px 14px rgba(15,35,55,.08)',direction:'rtl'}}>
-    <div style={{display:'flex',alignItems:'center',gap:10}}><RefreshCw size={19}/><div><strong style={{display:'block'}}>קיים עדכון חדש ל-IML CONTROL</strong><small>גרסה נוכחית {APP_VERSION} · גרסה חדשה {availableUpdate.version} · נדרש רענון אפליקציה</small></div></div>
+    <div style={{display:'flex',alignItems:'center',gap:10}}><RefreshCw size={19}/><div><strong style={{display:'block'}}>קיים עדכון חדש ל-IML CONTROL</strong><small>{availableUpdate.version && availableUpdate.version !== 'חדשה' ? `גרסה חדשה ${availableUpdate.version} · ` : ''}נמצא Build חדש בשרת · נדרש רענון אפליקציה</small></div></div>
     <button type="button" onClick={refreshApplication} style={{border:0,borderRadius:9,padding:'9px 15px',fontWeight:800,cursor:'pointer',background:'#0f8f7d',color:'#fff',whiteSpace:'nowrap'}}>רענן עכשיו</button>
   </div> : null
 
