@@ -1655,13 +1655,23 @@ console.log("QUALITY =", qualityForBatchMaterial)
       if (/(^|\s)LQ-P-5(\s|$)/.test(route) || route.includes('42-P-03') || route.includes('LIQUID 5 LITER')) return '5L'
       return '10/20L'
     }
+    // Residues are reported to 1542 as ZSEM and explicitly carry a 200L/1000L
+    // packaging description. They are output from the bulk and must therefore
+    // be deducted from the balance, but must NOT be counted as line packaging.
+    const residuePattern = /(^|\\D)(200|1000)\\s*(L|LT|LTR|LITER|LITRE)(\\D|$)/i
+    const residueRows = inRange.filter(r =>
+      normalize(r.facility) === '1542' &&
+      normalize(r.orderType).toUpperCase() === 'ZSEM' &&
+      residuePattern.test(normalize(`${r.desc || ''} ${r.routingDescription || ''}`))
+    )
     const bulk = bulkRows.reduce((sum,r)=>sum+num(r.qty),0)
     const byLine = {'1L':0,'5L':0,'10/20L':0}
     packedRows.forEach(r => { byLine[routeBucket(r)] += num(r.qty) })
     const packed = Object.values(byLine).reduce((a,b)=>a+b,0)
-    const balance = bulk - packed
-    const utilization = bulk > 0 ? packed / bulk * 100 : 0
-    return { bulkRows, packedRows, bulk, byLine, packed, balance, utilization }
+    const residues = residueRows.reduce((sum,r)=>sum+num(r.qty),0)
+    const balance = bulk - packed - residues
+    const utilization = bulk > 0 ? (packed + residues) / bulk * 100 : 0
+    return { bulkRows, packedRows, residueRows, bulk, byLine, packed, residues, balance, utilization }
   }, [prod, from, to])
 
   // Dedicated Facility 19 material balance. Bulk is identified by the approved
@@ -1753,10 +1763,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
   const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
   const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
   const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
-  // Daily Management: 11xx stations are not part of the default/core view,
-  // but remain available in "+ add facility" for products reported there.
-  const dailyCoreFacilities = useMemo(() => PRIMARY_FACILITIES.filter(id => !String(id).startsWith('11')), [])
-  const dailyFacilities = useMemo(() => [...new Set([...dailyCoreFacilities, ...dailyAdditionalFacilities])], [dailyCoreFacilities, dailyAdditionalFacilities])
+  const dailyFacilities = useMemo(() => [...new Set([...PRIMARY_FACILITIES, ...dailyAdditionalFacilities])], [dailyAdditionalFacilities])
   const dailyOptionalFacilities = useMemo(() => discoveredFacilities.filter(id => !dailyFacilities.includes(id)), [discoveredFacilities, dailyFacilities])
   const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
 
@@ -2594,7 +2601,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       <section className="daily-management" id="daily-management-section">
         <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!dailyPlanningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
         <div className="extra-facilities">
-          <div><Factory size={18}/><strong>מתקנים ב-Daily Management</strong><span>מתקני הליבה מוצגים תמיד. תחנות 11 אינן מוצגות כברירת מחדל, אך זמינות להוספה ידנית יחד עם כל מתקן נוסף שמופיע בנתונים.</span></div>
+          <div><Factory size={18}/><strong>מתקנים ב-Daily Management</strong><span>מתקני הליבה מוצגים תמיד. ניתן להוסיף כל מתקן נוסף שמופיע בנתונים.</span></div>
           <div className="extra-facility-actions"><select value={dailyFacilityToAdd} onChange={e => setDailyFacilityToAdd(e.target.value)}><option value="">בחר מתקן נוסף</option>{dailyOptionalFacilities.map(id => <option key={id} value={id}>{id}</option>)}</select><button onClick={addDailyFacility} disabled={!dailyFacilityToAdd}>+ הוסף מתקן</button></div>
           {!!dailyAdditionalFacilities.length && <div className="extra-facility-chips">{dailyAdditionalFacilities.map(id => <button key={id} onClick={() => removeDailyFacility(id)}>{id}<X size={14}/></button>)}</div>}
         </div>
@@ -2623,15 +2630,16 @@ console.log("QUALITY =", qualityForBatchMaterial)
         {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
       {activeTab === 'bulk-balance' && <section className="details facility42-balance">
-        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 42</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: תחנה 1142 ותיאור המכיל 999. תפוקה: כל האריזות 1, 5, 10/20 ליטר במתקן 42.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
+        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 42</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: תחנה 1142 ותיאור המכיל 999. תפוקה: כל האריזות 1, 5, 10/20 ליטר במתקן 42. שאריות: דיווחי 200/1000 ליטר בתחנה 1542.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
         <div className="balance-kpi-grid">
           <article><span>באלק שיוצר</span><b>{fmt(facility42Balance.bulk)}</b><small>ליטר · {facility42Balance.bulkRows.length} רשומות</small></article>
           <article><span>אריזה 1 ליטר</span><b>{fmt(facility42Balance.byLine['1L'])}</b><small>ליטר</small></article>
           <article><span>אריזה 5 ליטר</span><b>{fmt(facility42Balance.byLine['5L'])}</b><small>ליטר</small></article>
           <article><span>אריזה 10/20 ליטר</span><b>{fmt(facility42Balance.byLine['10/20L'])}</b><small>ליטר</small></article>
           <article className="balance-total"><span>סה״כ נארז</span><b>{fmt(facility42Balance.packed)}</b><small>ליטר</small></article>
-          <article className={facility42Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>יתרת באלק מול אריזה</span><b>{fmt(facility42Balance.balance)}</b><small>ליטר</small></article>
-          <article><span>% ניצול באלק</span><b>{facility42Balance.bulk ? pctFmt(facility42Balance.utilization) : '—'}</b><small>נארז ÷ באלק</small></article>
+          <article><span>שאריות 200/1000 ליטר</span><b>{fmt(facility42Balance.residues)}</b><small>ליטר · {facility42Balance.residueRows.length} רשומות</small></article>
+          <article className={facility42Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>יתרה: באלק − אריזה − שאריות</span><b>{fmt(facility42Balance.balance)}</b><small>ליטר</small></article>
+          <article><span>% ניצול באלק</span><b>{facility42Balance.bulk ? pctFmt(facility42Balance.utilization) : '—'}</b><small>(אריזה + שאריות) ÷ באלק</small></article>
         </div>
         <div className="balance-note"><AlertTriangle size={18}/><span>בהשוואה יומית ייתכן פער תזמון: באלק שיוצר ביום מסוים יכול להיארז ביום אחר. לכן המאזן החודשי מייצג טוב יותר את התהליך.</span></div>
         <h3 className="shift-subtitle">פירוט לפי סוג דיווח</h3>
