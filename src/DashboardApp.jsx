@@ -42,7 +42,9 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.20C — Excel AutoFit Build Fix'
+const APP_VERSION = '11.9.21'
+const BUILD_LABEL = 'Sprint 11.9.21 — Update Notice + Daily Formulations Export'
+const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
 // Stable, collision-free colors for the facilities used by IML CONTROL.
@@ -845,6 +847,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [showHome, setShowHome] = useState(true)
   const [facilityPickerOpen, setFacilityPickerOpen] = useState(false)
   const [showDataCenter, setShowDataCenter] = useState(false)
+  const [availableUpdate, setAvailableUpdate] = useState(null)
 
   useEffect(() => { localStorage.setItem('iml-ui-sidebar-collapsed', sidebarCollapsed ? '1' : '0') }, [sidebarCollapsed])
   useEffect(() => { localStorage.setItem('iml-ui-management-mode', managementMode ? '1' : '0') }, [managementMode])
@@ -855,6 +858,41 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     setShowDataCenter(true)
     window.setTimeout(() => document.getElementById('data-center-section')?.scrollIntoView({behavior:'smooth', block:'start'}), 120)
   }, [canManageData])
+
+  useEffect(() => {
+    let active = true
+    const checkForUpdate = async () => {
+      try {
+        const response = await fetch(`/version.json?ts=${Date.now()}`, { cache:'no-store' })
+        if (!response.ok) return
+        const remote = await response.json()
+        const remoteVersion = normalize(remote?.version)
+        if (!active || !remoteVersion) return
+        setAvailableUpdate(remoteVersion !== APP_VERSION ? { ...remote, version:remoteVersion } : null)
+      } catch (error) {
+        console.debug('Version check skipped', error)
+      }
+    }
+    const onVisibility = () => { if (document.visibilityState === 'visible') checkForUpdate() }
+    checkForUpdate()
+    const timer = window.setInterval(checkForUpdate, VERSION_CHECK_INTERVAL_MS)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
+
+  const refreshApplication = async () => {
+    try {
+      const registrations = await navigator.serviceWorker?.getRegistrations?.()
+      await Promise.all((registrations || []).map(registration => registration.update().catch(() => null)))
+    } catch {}
+    const url = new URL(window.location.href)
+    url.searchParams.set('v', availableUpdate?.version || Date.now())
+    window.location.replace(url.toString())
+  }
 
   useEffect(() => { localStorage.setItem(MAPPING_STORAGE_KEY, JSON.stringify(manualMappings)) }, [manualMappings])
   useEffect(() => { localStorage.setItem(MAPPING_TIMELINE_KEY, JSON.stringify(mappingTimeline.slice(0,500))) }, [mappingTimeline])
@@ -1684,7 +1722,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     // Residues are reported to 1542 as ZSEM and explicitly carry a 200L/1000L
     // packaging description. They are output from the bulk and must therefore
     // be deducted from the balance, but must NOT be counted as line packaging.
-    const residuePattern = /(^|\D)(200|1000)\s*(L|LT|LTR|LITER|LITRE)(\D|$)/i
+    const residuePattern = /(^|\\D)(200|1000)\\s*(L|LT|LTR|LITER|LITRE)(\\D|$)/i
     const residueRows = inRange.filter(r =>
       normalize(r.facility) === '1542' &&
       normalize(r.orderType).toUpperCase() === 'ZSEM' &&
@@ -2203,25 +2241,79 @@ console.log("QUALITY =", qualityForBatchMaterial)
     return String(b.facility || '').localeCompare(String(a.facility || ''), 'he')
   }
   const xmlEscape = value => String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;')
-  const exportStyledExcel = (sheets, filename) => {
+  const buildDailyFormulationsWorksheet = productionRows => {
+    const rows = [...productionRows].sort((a,b) => facilitySortDesc(a,b) || String(a.routingGroup||'').localeCompare(String(b.routingGroup||''), 'he', {numeric:true}) || String(a.material||'').localeCompare(String(b.material||''), 'he', {numeric:true}))
+    const grouped = new Map()
+    rows.forEach(row => {
+      const facility = String(row.facility || '—')
+      const list = grouped.get(facility) || []
+      list.push(row)
+      grouped.set(facility, list)
+    })
+    const displayDate = from && to && from === to
+      ? new Date(`${from}T12:00:00`).toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'})
+      : (from || to || new Date().toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'}))
+    const eventText = openDeviations.length
+      ? `אירוע איכות - ${openDeviations.length} מנות חריגות בטווח.  סביבה - אין דיווח באפליקציה.`
+      : 'אירוע איכות - אין.  סביבה - אין דיווח באפליקציה.'
+    const cell = (value='', style='formBody', extra='') => {
+      const numeric = typeof value === 'number' && Number.isFinite(value)
+      return `<Cell ss:StyleID="${style}"${extra}><Data ss:Type="${numeric ? 'Number' : 'String'}">${xmlEscape(value)}</Data></Cell>`
+    }
+    const outputRows = []
+    let excelRow = 8
+    grouped.forEach((groupRows, facility) => {
+      const total = groupRows.reduce((sum,row) => sum + num(row.qty), 0)
+      const span = Math.max(0, groupRows.length - 1)
+      groupRows.forEach((row,index) => {
+        const cells = []
+        cells.push(cell(row.material || '', 'formPlain', ' ss:Index="2"'))
+        if (index === 0) {
+          cells.push(cell(facility, 'formGroup', span ? ` ss:MergeDown="${span}"` : ''))
+          cells.push(cell(row.routingGroup || '', 'formBody'))
+          cells.push(cell(row.desc || '', 'formBody'))
+          cells.push(cell('', 'formStatus'))
+          cells.push(cell(num(row.qty), 'formBody'))
+          cells.push(cell(total, 'formTotal', span ? ` ss:MergeDown="${span}"` : ''))
+          cells.push(cell('', 'formNotes'))
+          cells.push(cell('', 'formExtra'))
+        } else {
+          cells.push(cell(row.routingGroup || '', 'formBody', ' ss:Index="4"'))
+          cells.push(cell(row.desc || '', 'formBody'))
+          cells.push(cell('', 'formStatus'))
+          cells.push(cell(num(row.qty), 'formBody'))
+          cells.push(cell('', 'formNotes', ' ss:Index="9"'))
+          cells.push(cell('', 'formExtra'))
+        }
+        outputRows.push(`<Row ss:AutoFitHeight="1">${cells.join('')}</Row>`)
+        excelRow += 1
+      })
+    })
+    if (!rows.length) outputRows.push(`<Row>${cell('', 'formPlain', ' ss:Index="2"')}${cell('אין נתוני תפוקה בטווח שנבחר','formBody',' ss:MergeAcross="6"')}</Row>`)
+    return `<Worksheet ss:Name="דיווח יומי פורמולציות"><Table ss:ExpandedColumnCount="10" ss:ExpandedRowCount="${Math.max(15, 7 + Math.max(1, rows.length))}" x:FullColumns="1" x:FullRows="1"><Column ss:Index="2" ss:Width="92"/><Column ss:Width="135"/><Column ss:Width="55"/><Column ss:Width="155"/><Column ss:Width="270"/><Column ss:Width="72"/><Column ss:Width="82"/><Column ss:Width="390"/><Column ss:Width="275"/><Row ss:Index="5" ss:Height="23"><Cell ss:Index="3" ss:MergeAcross="6" ss:StyleID="formEvent"><Data ss:Type="String">${xmlEscape(eventText)}</Data></Cell></Row><Row ss:Index="7" ss:Height="22">${cell('מקט','formHeader',' ss:Index="2"')}${cell(displayDate,'formDateHeader')}${cell('קו יצור','formHeader')}${cell('חומר','formHeader')}${cell('סטטוס מכונה','formHeader')}${cell('תפוקה','formHeader')}${cell('סה"כ תפוקה','formHeader')}${cell('הערות','formHeader')}</Row>${outputRows.join('')}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/><Selected/><FreezePanes/><FrozenNoSplit/><SplitHorizontal>7</SplitHorizontal><TopRowBottomPane>7</TopRowBottomPane><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions></Worksheet>`
+  }
+
+  const exportStyledExcel = (sheets, filename, productionRowsForTemplate = []) => {
     const styleIds = new Map()
     const facilities = [...new Set(sheets.flatMap(sh => sh.rows.map(r => r.__facility).filter(Boolean)))]
     facilities.forEach((f,i) => styleIds.set(f, `fac${i}`))
     const styles = facilities.map(f => `<Style ss:ID="${styleIds.get(f)}"><Interior ss:Color="${facilityColor(f)}" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D8E0E5"/></Borders></Style>`).join('')
     const worksheetXml = sheets.map(sh => {
       const widths = sh.columns.map(c => {
-        const longest = Math.max(String(c.label || '').length, ...sh.rows.map(r => String(r[c.key] ?? '').length))
-        return Math.min(420, Math.max(70, longest * 7.2 + 18))
+        const longest = Math.max(String(c.label || '').length, ...sh.rows.map(r => String(r[c.key] ?? '').split(/\r?\n/).reduce((m,line)=>Math.max(m,line.length),0)))
+        return Math.min(520, Math.max(70, longest * 7.2 + 22))
       })
       const columns = widths.map(width => `<Column ss:AutoFitWidth="0" ss:Width="${width.toFixed(0)}"/>`).join('')
       const header = `<Row>${sh.columns.map(c => `<Cell ss:StyleID="hdr"><Data ss:Type="String">${xmlEscape(c.label)}</Data></Cell>`).join('')}</Row>`
       const rows = sh.rows.map(r => `<Row>${sh.columns.map(c => { const v=r[c.key]; const numeric=typeof v==='number' && Number.isFinite(v); const sid=r.__facility ? ` ss:StyleID="${styleIds.get(r.__facility)}"` : ''; return `<Cell${sid}><Data ss:Type="${numeric?'Number':'String'}">${xmlEscape(v)}</Data></Cell>` }).join('')}</Row>`).join('')
-      return `<Worksheet ss:Name="${xmlEscape(sh.name)}"><Table>${columns}${header}${rows}</Table></Worksheet>`
+      return `<Worksheet ss:Name="${xmlEscape(sh.name)}"><Table>${columns}${header}${rows}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/></WorksheetOptions></Worksheet>`
     }).join('')
-    const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/></Style><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#DCE6F1" ss:Pattern="Solid"/></Style>${styles}</Styles>${worksheetXml}</Workbook>`
+    const templateSheet = buildDailyFormulationsWorksheet(productionRowsForTemplate)
+    const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="Arial" ss:Size="11"/></Style><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#DCE6F1" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formEvent"><Font ss:FontName="Arial" ss:Size="11"/><Interior ss:Color="#FFFF00" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formHeader"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1"/><Interior ss:Color="#EAF2F8" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style><Style ss:ID="formDateHeader"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1"/><Interior ss:Color="#EAF2F8" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><NumberFormat ss:Format="Short Date"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style><Style ss:ID="formPlain"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formBody"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formGroup"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formTotal"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formStatus"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formNotes"><Alignment ss:Horizontal="Right" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formExtra"><Alignment ss:Horizontal="Right" ss:Vertical="Center" ss:WrapText="1"/></Style>${styles}</Styles>${templateSheet}${worksheetXml}</Workbook>`
     const blob=new Blob([xml],{type:'application/vnd.ms-excel;charset=utf-8'})
     const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500)
   }
+
 
   const exportWorkbook = () => {
     const productionRows = [...filtered].sort(facilitySortDesc)
@@ -2233,7 +2325,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       { name:'Planning', columns:[{key:'Month',label:'Month'},{key:'Facility',label:'Facility'},{key:'Station',label:'Station'},{key:'MonthlyTarget',label:'Monthly Target'},{key:'Actual',label:'Actual'},{key:'Remaining',label:'Remaining'},{key:'Forecast',label:'Forecast'},{key:'Status',label:'Status'}], rows:planningRows.map(r=>({__facility:String(r.facility||'—'),Month:planningMonth,Facility:r.facility,Station:r.station,MonthlyTarget:r.target,Actual:r.actual,Remaining:r.remaining,Forecast:r.forecast,Status:r.label})) },
       { name:'Quality', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'InspectionLot',label:'Inspection Lot'},{key:'Order',label:'Order'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'}], rows:qualityBad.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,InspectionLot:r.inspectionLot,Order:r.order,Batch:r.batch,Material:r.material,Status:r.status})) },
       { name:'Deviations', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'},{key:'Remarks',label:'Remarks'}], rows:openDeviations.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,Batch:r.batch,Material:r.material,Status:r.status,Remarks:r.remarks})) }
-    ], `IML_Facility_Report_${new Date().toISOString().slice(0,10)}.xls`)
+    ], `IML_Facility_Report_${new Date().toISOString().slice(0,10)}.xls`, productionRows)
   }
 
   const downloadTargetWorkbook = async () => {
@@ -2427,11 +2519,17 @@ console.log("QUALITY =", qualityForBatchMaterial)
     }, 80)
   }
 
+  const updateBanner = availableUpdate ? <div role="alert" style={{margin:'10px 18px',padding:'12px 16px',borderRadius:12,background:'#fff3cd',border:'1px solid #f0c36d',display:'flex',alignItems:'center',justifyContent:'space-between',gap:14,boxShadow:'0 4px 14px rgba(15,35,55,.08)',direction:'rtl'}}>
+    <div style={{display:'flex',alignItems:'center',gap:10}}><RefreshCw size={19}/><div><strong style={{display:'block'}}>קיים עדכון חדש ל-IML CONTROL</strong><small>גרסה נוכחית {APP_VERSION} · גרסה חדשה {availableUpdate.version} · נדרש רענון אפליקציה</small></div></div>
+    <button type="button" onClick={refreshApplication} style={{border:0,borderRadius:9,padding:'9px 15px',fontWeight:800,cursor:'pointer',background:'#0f8f7d',color:'#fff',whiteSpace:'nowrap'}}>רענן עכשיו</button>
+  </div> : null
+
   if (showHome) return <div className="command-home" dir="rtl">
     <header className="command-home-header">
       <div className="command-home-brand"><img src="/icons/mark-128.png" alt="IML"/><div><strong>חדר בקרה — מתקני אריזה</strong><span>COMMAND CENTER</span></div></div>
       <div className="command-home-user"><Home size={19}/><b>דף ראשי</b><span></span><div><strong>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</strong><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></div></div>
     </header>
+    {updateBanner}
     <main className="command-home-main">
       <section className="command-home-status">
         <article><div className={`home-status-icon cloud ${cloudState.mode}`}><Cloud/></div><span>מצב מערכת</span><b>{cloudState.mode === 'cloud' ? 'מחובר לענן' : cloudState.mode === 'connecting' ? 'מתחבר...' : 'מצב מקומי'}</b><small>{cloudState.lastSync ? `עדכון אחרון ${new Date(cloudState.lastSync).toLocaleString('he-IL')}` : 'ממתין לסנכרון'}</small></article>
@@ -2490,6 +2588,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
           {canManageData ? <button className="action secondary" onClick={onSignOut}><LogOut size={18}/> יציאת מנהל</button> : <button className="action secondary" onClick={onRequestAdminLogin}><ShieldCheck size={18}/> כניסת מנהל</button>}
         </div>
       </header>
+      {updateBanner}
 
       <section className="top-status-bar" aria-label="סטטוס מערכת">
         <div className={`top-status-item cloud ${cloudState.mode}`}><span className="status-dot"></span><small>ענן</small><b>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר' : 'מקומי'}</b></div>
