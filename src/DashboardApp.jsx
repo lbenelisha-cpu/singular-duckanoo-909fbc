@@ -42,7 +42,7 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.16 — Daily Management Facility Picker'
+const BUILD_LABEL = 'Sprint 11.9.20C — Excel AutoFit Build Fix'
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
 // Stable, collision-free colors for the facilities used by IML CONTROL.
@@ -1684,7 +1684,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     // Residues are reported to 1542 as ZSEM and explicitly carry a 200L/1000L
     // packaging description. They are output from the bulk and must therefore
     // be deducted from the balance, but must NOT be counted as line packaging.
-    const residuePattern = /(^|\\D)(200|1000)\\s*(L|LT|LTR|LITER|LITRE)(\\D|$)/i
+    const residuePattern = /(^|\D)(200|1000)\s*(L|LT|LTR|LITER|LITRE)(\D|$)/i
     const residueRows = inRange.filter(r =>
       normalize(r.facility) === '1542' &&
       normalize(r.orderType).toUpperCase() === 'ZSEM' &&
