@@ -768,7 +768,7 @@ const useUniversalTableTools = () => {
   }, [])
 }
 
-export default 
+
 const autoFitExcelSheet = worksheet => {
   if (!worksheet?.['!ref']) return worksheet
   const range = XLSX.utils.decode_range(worksheet['!ref'])
@@ -794,7 +794,7 @@ const appendAutoFitJsonSheet = (workbook, rows, name) => {
   return worksheet
 }
 
-function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
+export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
   useUniversalTableTools()
 
   const canManageData = ['admin', 'manager'].includes(userRole)
