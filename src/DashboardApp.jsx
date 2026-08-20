@@ -768,7 +768,33 @@ const useUniversalTableTools = () => {
   }, [])
 }
 
-export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
+export default 
+const autoFitExcelSheet = worksheet => {
+  if (!worksheet?.['!ref']) return worksheet
+  const range = XLSX.utils.decode_range(worksheet['!ref'])
+  const cols = []
+  for (let c = range.s.c; c <= range.e.c; c += 1) {
+    let maxLen = 0
+    for (let r = range.s.r; r <= range.e.r; r += 1) {
+      const cell = worksheet[XLSX.utils.encode_cell({ r, c })]
+      const value = cell?.w ?? cell?.v ?? ''
+      const len = String(value ?? '').split(/\r?\n/).reduce((m, line) => Math.max(m, line.length), 0)
+      maxLen = Math.max(maxLen, len)
+    }
+    cols.push({ wch: Math.min(100, Math.max(10, maxLen + 3)) })
+  }
+  worksheet['!cols'] = cols
+  return worksheet
+}
+
+const appendAutoFitJsonSheet = (workbook, rows, name) => {
+  const worksheet = XLSX.utils.json_to_sheet(rows)
+  autoFitExcelSheet(worksheet)
+  XLSX.utils.book_append_sheet(workbook, worksheet, name)
+  return worksheet
+}
+
+function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
   useUniversalTableTools()
 
   const canManageData = ['admin', 'manager'].includes(userRole)
@@ -1998,7 +2024,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       Explanation: item.explanation,
     }))
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Mapping Simulator')
+    appendAutoFitJsonSheet(wb, rows, 'Mapping Simulator')
     XLSX.writeFile(wb, `IML_Production_Mapping_Simulator_${new Date().toISOString().slice(0,10)}.xlsx`)
   }
 
@@ -2747,13 +2773,13 @@ function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
 
   const exportRows = () => {
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(materials.map(item => ({
+    appendAutoFitJsonSheet(wb, materials.map(item => ({
       Material:item.material, Description:item.description, Quantity:item.qty, Batches:item.batches.size, Orders:item.orders.size, Rows:item.rows,
-    }))), 'Materials')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map(row => ({
+    })), 'Materials')
+    appendAutoFitJsonSheet(wb, rows.map(row => ({
       Date:row.productionDay || iso(row.date), Facility:row.facility, RoutingGroup:row.routingGroup, OrderType:row.orderType,
       Order:row.order, Batch:row.batch, Material:row.material, Description:row.desc, Quantity:row.qty,
-    }))), 'Calculation Rows')
+    })), 'Calculation Rows')
     XLSX.writeFile(wb, `IML_${String(resource.resource || 'resource').replace(/[^a-zA-Z0-9_-]+/g,'_')}_${planningSafeMonth(resource)}.xlsx`)
   }
   return <div className="resource-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
@@ -2848,9 +2874,9 @@ function BatchControlCard({ data, onClose }) {
   ]
   const exportBatch = () => {
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(productionRows.map(r=>({Date:iso(r.date),Facility:r.facility,RoutingGroup:r.routingGroup,Order:r.order,Batch:r.batch,Material:r.material,Description:r.desc,Quantity:r.qty}))), 'Production')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(allQuality.map(r=>({Date:iso(r.date),InspectionLot:r.inspectionLot,Material:r.material||materials.join(', '),Characteristic:r.characteristic,Result:r.value||r.qualitative,Lower:r.lower,Upper:r.upper,Unit:r.unit,Status:r.rejected?'חריג':'תקין',Remarks:r.remarks}))), 'Quality')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(deviationRows.map(r=>({Date:iso(r.date),Facility:r.facility,Material:r.material||materials.join(', '),Status:r.status,UDCode:r.udCode,Remarks:r.remarks}))), 'Deviations')
+    appendAutoFitJsonSheet(wb, productionRows.map(r=>({Date:iso(r.date),Facility:r.facility,RoutingGroup:r.routingGroup,Order:r.order,Batch:r.batch,Material:r.material,Description:r.desc,Quantity:r.qty})), 'Production')
+    appendAutoFitJsonSheet(wb, allQuality.map(r=>({Date:iso(r.date),InspectionLot:r.inspectionLot,Material:r.material||materials.join(', '),Characteristic:r.characteristic,Result:r.value||r.qualitative,Lower:r.lower,Upper:r.upper,Unit:r.unit,Status:r.rejected?'חריג':'תקין',Remarks:r.remarks})), 'Quality')
+    appendAutoFitJsonSheet(wb, deviationRows.map(r=>({Date:iso(r.date),Facility:r.facility,Material:r.material||materials.join(', '),Status:r.status,UDCode:r.udCode,Remarks:r.remarks})), 'Deviations')
     XLSX.writeFile(wb, `Batch_${data.batch}.xlsx`)
   }
   return <div className="batch-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget) onClose()}}>
