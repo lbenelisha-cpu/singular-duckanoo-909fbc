@@ -42,7 +42,7 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.13 — Focused Facility View & Excel Totals'
+const BUILD_LABEL = 'Sprint 11.9.16 — Daily Management Facility Picker'
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
 // Stable, collision-free colors for the facilities used by IML CONTROL.
@@ -802,6 +802,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [planningMonth, setPlanningMonth] = useState('')
   const [additionalFacilities, setAdditionalFacilities] = useState([])
   const [facilityToAdd, setFacilityToAdd] = useState('')
+  const [dailyAdditionalFacilities, setDailyAdditionalFacilities] = useState(() => readLocalJson('iml-daily-additional-facilities', []))
+  const [dailyFacilityToAdd, setDailyFacilityToAdd] = useState('')
   const [periodYear, setPeriodYear] = useState('')
   const [periodQuarter, setPeriodQuarter] = useState('')
   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
@@ -820,6 +822,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   useEffect(() => { localStorage.setItem('iml-ui-sidebar-collapsed', sidebarCollapsed ? '1' : '0') }, [sidebarCollapsed])
   useEffect(() => { localStorage.setItem('iml-ui-management-mode', managementMode ? '1' : '0') }, [managementMode])
+  useEffect(() => { localStorage.setItem('iml-daily-additional-facilities', JSON.stringify(dailyAdditionalFacilities)) }, [dailyAdditionalFacilities])
   useEffect(() => {
     if (!canManageData || sessionStorage.getItem('iml-open-data-center-after-login') !== '1') return
     sessionStorage.removeItem('iml-open-data-center-after-login')
@@ -1750,6 +1753,8 @@ console.log("QUALITY =", qualityForBatchMaterial)
   const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
   const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
   const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
+  const dailyFacilities = useMemo(() => [...new Set([...PRIMARY_FACILITIES, ...dailyAdditionalFacilities])], [dailyAdditionalFacilities])
+  const dailyOptionalFacilities = useMemo(() => discoveredFacilities.filter(id => !dailyFacilities.includes(id)), [discoveredFacilities, dailyFacilities])
   const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
 
   const targetsWithAdminMappings = useMemo(() => targets.map(target => {
@@ -2113,6 +2118,13 @@ console.log("QUALITY =", qualityForBatchMaterial)
   }
   const visibleControlTowerFacilities = useMemo(() => controlTowerFacilities.filter(facilityViewMatches), [controlTowerFacilities, facilityViewMode])
   const visiblePlanningRows = useMemo(() => planningRows.filter(facilityViewMatches), [planningRows, facilityViewMode])
+  const dailyPlanningRows = useMemo(() => planningRows.filter(row => (row.facilities || [row.facility]).some(id => dailyFacilities.includes(String(id)))), [planningRows, dailyFacilities])
+  const addDailyFacility = () => {
+    if (!dailyFacilityToAdd || dailyAdditionalFacilities.includes(dailyFacilityToAdd)) return
+    setDailyAdditionalFacilities(current => [...current, dailyFacilityToAdd])
+    setDailyFacilityToAdd('')
+  }
+  const removeDailyFacility = id => setDailyAdditionalFacilities(current => current.filter(item => item !== id))
   const selectedControlTowerFacilities = useMemo(() => selectedFacilities.length ? visibleControlTowerFacilities.filter(row => (row.facilityIds || [row.facility]).some(id => selectedFacilities.includes(String(id)))) : [], [visibleControlTowerFacilities, selectedFacilities])
   const selectedForecastRows = useMemo(() => selectedFacilities.length ? visiblePlanningRows.filter(row => (row.facilities || [row.facility]).some(id => selectedFacilities.includes(String(id)))) : [], [visiblePlanningRows, selectedFacilities])
   const selectedFacilityStats = useMemo(() => selectedFacilities.length ? facilityStats.filter(row => selectedFacilities.includes(String(row.id))) : [], [facilityStats, selectedFacilities])
@@ -2261,7 +2273,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       {key:'remaining',label:'נותר'},{key:'days',label:'ימים נותרו'},{key:'required',label:'נדרש ליום'},
       {key:'avg7',label:'ממוצע 7 ימים'},{key:'forecast',label:'תחזית'},{key:'status',label:'סטטוס'}
     ],
-    planningRows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:planningDisplayStation(r),line:r.lineName||r.routingGroup||'—',target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),days:r.remainingWorkdays,required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),forecast:fmt(r.forecast),status:r.label}))
+    dailyPlanningRows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:planningDisplayStation(r),line:r.lineName||r.routingGroup||'—',target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),days:r.remainingWorkdays,required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),forecast:fmt(r.forecast),status:r.label}))
   )
 
 
@@ -2577,10 +2589,15 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>
 
       <section className="daily-management" id="daily-management-section">
-        <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!planningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
+        <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!dailyPlanningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
+        <div className="extra-facilities">
+          <div><Factory size={18}/><strong>מתקנים ב-Daily Management</strong><span>מתקני הליבה מוצגים תמיד. ניתן להוסיף כל מתקן נוסף שמופיע בנתונים.</span></div>
+          <div className="extra-facility-actions"><select value={dailyFacilityToAdd} onChange={e => setDailyFacilityToAdd(e.target.value)}><option value="">בחר מתקן נוסף</option>{dailyOptionalFacilities.map(id => <option key={id} value={id}>{id}</option>)}</select><button onClick={addDailyFacility} disabled={!dailyFacilityToAdd}>+ הוסף מתקן</button></div>
+          {!!dailyAdditionalFacilities.length && <div className="extra-facility-chips">{dailyAdditionalFacilities.map(id => <button key={id} onClick={() => removeDailyFacility(id)}>{id}<X size={14}/></button>)}</div>}
+        </div>
         <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימים נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
-          {visiblePlanningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{planningDisplayStation(r)}</td><td>{[planningDisplayStation(r), r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
-          {!visiblePlanningRows.length && <tr><td colSpan="14" className="empty">אין מתקנים התואמים למסנן התצוגה</td></tr>}
+          {dailyPlanningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{planningDisplayStation(r)}</td><td>{[planningDisplayStation(r), r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+          {!dailyPlanningRows.length && <tr><td colSpan="14" className="empty">אין נתוני Daily Management למתקנים שנבחרו</td></tr>}
         </tbody></table></div>
       </section>
 
