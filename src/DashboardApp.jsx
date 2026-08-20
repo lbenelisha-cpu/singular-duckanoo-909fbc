@@ -1753,7 +1753,10 @@ console.log("QUALITY =", qualityForBatchMaterial)
   const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
   const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
   const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
-  const dailyFacilities = useMemo(() => [...new Set([...PRIMARY_FACILITIES, ...dailyAdditionalFacilities])], [dailyAdditionalFacilities])
+  // Daily Management: 11xx stations are not part of the default/core view,
+  // but remain available in "+ add facility" for products reported there.
+  const dailyCoreFacilities = useMemo(() => PRIMARY_FACILITIES.filter(id => !String(id).startsWith('11')), [])
+  const dailyFacilities = useMemo(() => [...new Set([...dailyCoreFacilities, ...dailyAdditionalFacilities])], [dailyCoreFacilities, dailyAdditionalFacilities])
   const dailyOptionalFacilities = useMemo(() => discoveredFacilities.filter(id => !dailyFacilities.includes(id)), [discoveredFacilities, dailyFacilities])
   const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
 
@@ -2591,7 +2594,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       <section className="daily-management" id="daily-management-section">
         <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!dailyPlanningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
         <div className="extra-facilities">
-          <div><Factory size={18}/><strong>מתקנים ב-Daily Management</strong><span>מתקני הליבה מוצגים תמיד. ניתן להוסיף כל מתקן נוסף שמופיע בנתונים.</span></div>
+          <div><Factory size={18}/><strong>מתקנים ב-Daily Management</strong><span>מתקני הליבה מוצגים תמיד. תחנות 11 אינן מוצגות כברירת מחדל, אך זמינות להוספה ידנית יחד עם כל מתקן נוסף שמופיע בנתונים.</span></div>
           <div className="extra-facility-actions"><select value={dailyFacilityToAdd} onChange={e => setDailyFacilityToAdd(e.target.value)}><option value="">בחר מתקן נוסף</option>{dailyOptionalFacilities.map(id => <option key={id} value={id}>{id}</option>)}</select><button onClick={addDailyFacility} disabled={!dailyFacilityToAdd}>+ הוסף מתקן</button></div>
           {!!dailyAdditionalFacilities.length && <div className="extra-facility-chips">{dailyAdditionalFacilities.map(id => <button key={id} onClick={() => removeDailyFacility(id)}>{id}<X size={14}/></button>)}</div>}
         </div>
