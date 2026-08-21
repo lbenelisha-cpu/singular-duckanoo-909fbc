@@ -1,6 +1,5 @@
 {
-  "version": "11.9.27",
-  "label": "Sprint 11.9.27 — Build Asset Update Detection",
-  "releasedAt": "2026-08-20T17:55:00+03:00",
-  "note": "Update detection compares the loaded production bundle with the latest deployed index asset."
+  "version": "11.9.28",
+  "label": "Sprint 11.9.28 — UI Sounds",
+  "releasedAt": "2026-08-21T14:00:00+03:00"
 }

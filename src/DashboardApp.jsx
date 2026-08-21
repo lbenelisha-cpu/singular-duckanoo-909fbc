@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
 import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
@@ -42,8 +42,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.27'
-const BUILD_LABEL = 'Sprint 11.9.27 — Build Asset Update Detection'
+const APP_VERSION = '11.9.28'
+const BUILD_LABEL = 'Sprint 11.9.28 — UI Sounds'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -796,11 +796,100 @@ const appendAutoFitJsonSheet = (workbook, rows, name) => {
   return worksheet
 }
 
+
+const UI_SOUNDS_STORAGE_KEY = 'iml-ui-sounds-enabled'
+
+const playUiTone = (type = 'click') => {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    const now = ctx.currentTime
+    const gain = ctx.createGain()
+    gain.connect(ctx.destination)
+    const presets = {
+      click:{ f1:520, f2:660, duration:.07, volume:.035, wave:'sine' },
+      nav:{ f1:440, f2:620, duration:.09, volume:.04, wave:'sine' },
+      select:{ f1:620, f2:760, duration:.08, volume:.035, wave:'triangle' },
+      success:{ f1:660, f2:880, duration:.16, volume:.045, wave:'sine' },
+      export:{ f1:560, f2:820, duration:.18, volume:.045, wave:'triangle' },
+      print:{ f1:480, f2:700, duration:.12, volume:.04, wave:'square' },
+      refresh:{ f1:420, f2:640, duration:.15, volume:.04, wave:'sine' },
+      warning:{ f1:330, f2:260, duration:.18, volume:.045, wave:'sawtooth' },
+      close:{ f1:520, f2:360, duration:.12, volume:.04, wave:'sine' },
+    }
+    const p = presets[type] || presets.click
+    const osc = ctx.createOscillator()
+    osc.type = p.wave
+    osc.frequency.setValueAtTime(p.f1, now)
+    osc.frequency.exponentialRampToValueAtTime(Math.max(40, p.f2), now + p.duration)
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(p.volume, now + .015)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + p.duration)
+    osc.connect(gain)
+    osc.start(now)
+    osc.stop(now + p.duration + .02)
+    osc.onended = () => ctx.close().catch(() => {})
+  } catch {}
+}
+
+const speakBye = () => {
+  try {
+    if (!('speechSynthesis' in window)) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance('Bye')
+    utterance.lang = 'en-US'
+    utterance.rate = 1
+    utterance.pitch = 1
+    utterance.volume = .75
+    window.speechSynthesis.speak(utterance)
+  } catch {}
+}
+
+const classifyButtonSound = button => {
+  const text = String(button?.innerText || button?.textContent || '').trim().toLowerCase()
+  const aria = String(button?.getAttribute?.('aria-label') || '').trim().toLowerCase()
+  const title = String(button?.getAttribute?.('title') || '').trim().toLowerCase()
+  const combined = `${text} ${aria} ${title}`
+  if (/יציאה|התנתק|sign out|logout|exit/.test(combined)) return 'exit'
+  if (/ייצוא|יצוא|excel|download/.test(combined)) return 'export'
+  if (/הדפס|print/.test(combined)) return 'print'
+  if (/רענן|refresh|עדכון/.test(combined)) return 'refresh'
+  if (/מחק|מחיקה|delete|אזהרה|warning/.test(combined)) return 'warning'
+  if (/שמור|אישור|אשר|save|approve|העלה|טעינת/.test(combined)) return 'success'
+  if (/מתקן|בחר|סינון|filter|select/.test(combined)) return 'select'
+  if (/דף|סקירה|ניהול|איכות|תחזית|מגמה|פרטים|כניסה|בית|home/.test(combined)) return 'nav'
+  if (/סגור|נקה|×|✕/.test(combined)) return 'close'
+  return 'click'
+}
+
+const useUiSounds = enabled => {
+  useEffect(() => {
+    const onClick = event => {
+      if (!enabled) return
+      const button = event.target?.closest?.('button,[role="button"],a')
+      if (!button || button.dataset?.noUiSound === '1') return
+      const type = classifyButtonSound(button)
+      if (type === 'exit') {
+        playUiTone('close')
+        speakBye()
+      } else {
+        playUiTone(type)
+      }
+    }
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
+  }, [enabled])
+}
+
 export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
   useUniversalTableTools()
 
   const canManageData = ['admin', 'manager'].includes(userRole)
   const canDeleteData = userRole === 'admin'
+  const [uiSoundsEnabled, setUiSoundsEnabled] = useState(() => localStorage.getItem(UI_SOUNDS_STORAGE_KEY) !== '0')
+  useUiSounds(uiSoundsEnabled)
+  useEffect(() => { localStorage.setItem(UI_SOUNDS_STORAGE_KEY, uiSoundsEnabled ? '1' : '0') }, [uiSoundsEnabled])
 
   const [production, setProduction] = useState([])
   const [quality, setQuality] = useState([])
@@ -2578,7 +2667,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
   if (showHome) return <div className="command-home" dir="rtl">
     <header className="command-home-header">
       <div className="command-home-brand"><img src="/icons/adama-mark-128.png" alt="IML"/><div><strong>חדר בקרה — מתקני אריזה</strong><span>COMMAND CENTER</span></div></div>
-      <div className="command-home-user"><Home size={19}/><b>דף ראשי</b><span></span><div><strong>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</strong><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></div></div>
+      <button type="button" className="command-home-sound-toggle" data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילים' : 'הפעלת צלילים'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}</button><div className="command-home-user"><Home size={19}/><b>דף ראשי</b><span></span><div><strong>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</strong><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></div></div>
     </header>
     {updateBanner}
     <main className="command-home-main">
@@ -2630,7 +2719,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
             <button type="button" className="action ui-control" onClick={() => setSidebarCollapsed(v => !v)}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}<span>{sidebarCollapsed ? 'פתח מסננים' : 'כווץ מסננים'}</span></button>
             <button type="button" className={`action ui-control ${managementMode ? 'active' : ''}`} onClick={() => setManagementMode(v => !v)}>{managementMode ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}<span>{managementMode ? 'יציאה ממצב ניהולי' : 'מצב ניהולי'}</span></button>
           </div>
-          <div className="user-session"><img className="user-brand-avatar" src="/icons/adama-mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
+          <button type="button" className={`action ui-control ${uiSoundsEnabled ? 'active' : ''}`} data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילי ממשק' : 'הפעלת צלילי ממשק'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}<span>{uiSoundsEnabled ? 'צלילים פעילים' : 'צלילים כבויים'}</span></button><div className="user-session"><img className="user-brand-avatar" src="/icons/adama-mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
           <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת תבנית יעדים</button>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
