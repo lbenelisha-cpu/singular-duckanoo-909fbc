@@ -42,8 +42,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.28'
-const BUILD_LABEL = 'Sprint 11.9.28 — UI Sounds'
+const APP_VERSION = '11.9.29'
+const BUILD_LABEL = 'Sprint 11.9.29 — Excel RTL Layout'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -792,6 +792,8 @@ const autoFitExcelSheet = worksheet => {
 const appendAutoFitJsonSheet = (workbook, rows, name) => {
   const worksheet = XLSX.utils.json_to_sheet(rows)
   autoFitExcelSheet(worksheet)
+  // Excel sheet view: right-to-left for Hebrew/IML exports.
+  worksheet['!views'] = [{ rightToLeft:true }]
   XLSX.utils.book_append_sheet(workbook, worksheet, name)
   return worksheet
 }
