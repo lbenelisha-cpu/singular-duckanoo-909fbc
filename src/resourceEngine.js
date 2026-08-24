@@ -51,6 +51,17 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   if (/^SHAKED\s+ISO\s+23$/.test(targetName)) return station === '1123'
   if (/^PILOT\s*\(1521\)$/.test(targetName)) return station === '1521'
 
+  // Facility 24 has two separate monthly target cards. Prefer the DATA-sheet
+  // material lists when available so the same production is not counted in
+  // both cards; keep the description marker as a legacy fallback.
+  if (/^24F(?:128)?$/.test(targetName)) {
+    if (station !== '1524') return false
+    const targetMaterials = new Set((target.materials || []).map(upper).filter(Boolean))
+    if (targetMaterials.size) return targetMaterials.has(upper(row.material))
+    const productionText = upper(`${row.desc || ''} ${row.routingDescription || ''} ${row.routingGroup || ''}`)
+    return targetName === '24F128' ? productionText.includes('24F128') : !productionText.includes('24F128')
+  }
+
   // Facility 42: identify packaging line by the actual SAP Routing group.
   // Keep the previous 42-P-* aliases and Description text as fallbacks for older files.
   const isFacility42Zfin = station === '1542' && upper(row.orderType).includes('ZFIN')

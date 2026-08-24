@@ -330,6 +330,9 @@ const targetFacilityIds = (resource) => {
   if (/^SC\s*\(28\)/i.test(text)) return ['1528']
   if (/WG\s*SMALL\s+PACKS?\s*\(19\)/i.test(text) || /^WG\s*\(19\)/i.test(text)) return ['1519']
   if (/LQ\s*(1|5|10\s*\/\s*20)\s*(LT|L)/i.test(text)) return ['1542']
+  // Facility 24 target names do not contain a parenthesized station number,
+  // so they need an explicit mapping to storage location 1524.
+  if (/^24F(?:128)?$/i.test(text)) return ['1524']
 
   const raw = (text.match(/\(([^)]+)\)/)?.[1] || (text.match(/\b(19|23|24|25|28|40|41|42|43)\b/g) || []).join(','))
   const plantIds = [...new Set(String(raw).match(/19|23|24|25|28|40|41|42|43/g) || [])]
