@@ -42,8 +42,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.30'
-const BUILD_LABEL = 'Sprint 11.9.30 — True Excel RTL'
+const APP_VERSION = '11.9.31'
+const BUILD_LABEL = 'Sprint 11.9.31 — Daily Events + Roundtrip + Batch'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -938,11 +938,17 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [showHome, setShowHome] = useState(true)
   const [facilityPickerOpen, setFacilityPickerOpen] = useState(false)
   const [showDataCenter, setShowDataCenter] = useState(false)
+  const [dailyEventEnabled, setDailyEventEnabled] = useState(false)
+  const [dailyEventType, setDailyEventType] = useState('')
+  const [dailyEventFacility, setDailyEventFacility] = useState('')
+  const [dailyEventText, setDailyEventText] = useState('')
+  const [dailyReportHistory, setDailyReportHistory] = useState(() => readLocalJson('iml-daily-report-history', []))
   const [availableUpdate, setAvailableUpdate] = useState(null)
 
   useEffect(() => { localStorage.setItem('iml-ui-sidebar-collapsed', sidebarCollapsed ? '1' : '0') }, [sidebarCollapsed])
   useEffect(() => { localStorage.setItem('iml-ui-management-mode', managementMode ? '1' : '0') }, [managementMode])
   useEffect(() => { localStorage.setItem('iml-daily-additional-facilities', JSON.stringify(dailyAdditionalFacilities)) }, [dailyAdditionalFacilities])
+  useEffect(() => { localStorage.setItem('iml-daily-report-history', JSON.stringify(dailyReportHistory.slice(-5000))) }, [dailyReportHistory])
   useEffect(() => {
     if (!canManageData || sessionStorage.getItem('iml-open-data-center-after-login') !== '1') return
     sessionStorage.removeItem('iml-open-data-center-after-login')
@@ -2356,6 +2362,30 @@ console.log("QUALITY =", qualityForBatchMaterial)
   const selectedControlTowerFacilities = useMemo(() => selectedFacilities.length ? visibleControlTowerFacilities.filter(row => (row.facilityIds || [row.facility]).some(id => selectedFacilities.includes(String(id)))) : [], [visibleControlTowerFacilities, selectedFacilities])
   const selectedForecastRows = useMemo(() => selectedFacilities.length ? visiblePlanningRows.filter(row => (row.facilities || [row.facility]).some(id => selectedFacilities.includes(String(id)))) : [], [visiblePlanningRows, selectedFacilities])
   const selectedFacilityStats = useMemo(() => selectedFacilities.length ? facilityStats.filter(row => selectedFacilities.includes(String(row.id))) : [], [facilityStats, selectedFacilities])
+  const monthlyDailyReportHistory = useMemo(() => {
+    const parseMonthKey = value => {
+      const text = String(value || '').trim()
+      const m = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/)
+      if (!m) return ''
+      let year = Number(m[3]); if (year < 100) year += 2000
+      return `${year}-${String(Number(m[2])).padStart(2,'0')}`
+    }
+    const map = new Map()
+    dailyReportHistory.forEach(row => {
+      const month = parseMonthKey(row.reportDate) || String(row.importedAt || '').slice(0,7)
+      const facility = String(row.facility || 'ללא מתקן')
+      const key = `${month}|${facility}`
+      const current = map.get(key) || { month, facility, files:new Set(), rows:0, quantity:0, notes:0, machineStatuses:0 }
+      current.files.add(row.fileName || row.reportDate || key)
+      current.rows += 1
+      current.quantity += num(row.quantity)
+      if (String(row.notes || '').trim()) current.notes += 1
+      if (String(row.machineStatus || '').trim()) current.machineStatuses += 1
+      map.set(key, current)
+    })
+    return [...map.values()].map(item => ({ ...item, reports:item.files.size }))
+      .sort((a,b) => b.month.localeCompare(a.month) || String(b.facility).localeCompare(String(a.facility),'he',{numeric:true}))
+  }, [dailyReportHistory])
   const facilityViewFilters = <div className="facility-view-filters">
     {[['relevant','יעד + פעילות'],['target','עם יעד'],['active','פעילים'],['risk','בסיכון'],['all','הכול']].map(([value,label]) =>
       <button key={value} type="button" className={facilityViewMode === value ? 'active' : ''} onClick={() => setFacilityViewMode(value)}>{label}</button>
@@ -2395,9 +2425,9 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const displayDate = from && to && from === to
       ? new Date(`${from}T12:00:00`).toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'})
       : (from || to || new Date().toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'}))
-    const eventText = openDeviations.length
-      ? `אירוע איכות - ${openDeviations.length} מנות חריגות בטווח.  סביבה - אין דיווח באפליקציה.`
-      : 'אירוע איכות - אין.  סביבה - אין דיווח באפליקציה.'
+    const eventText = dailyEventEnabled
+      ? `אירוע ${dailyEventType || 'כללי'}${dailyEventFacility ? ` · מתקן ${dailyEventFacility}` : ''}${dailyEventText ? ` - ${dailyEventText}` : ''}`
+      : 'הוספת אירוע - לא נבחר אירוע לדוח זה.'
     const cell = (value='', style='formBody', extra='') => {
       const numeric = typeof value === 'number' && Number.isFinite(value)
       return `<Cell ss:StyleID="${style}"${extra}><Data ss:Type="${numeric ? 'Number' : 'String'}">${xmlEscape(value)}</Data></Cell>`
@@ -2414,6 +2444,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
           cells.push(cell(facility, 'formGroup', span ? ` ss:MergeDown="${span}"` : ''))
           cells.push(cell(row.routingGroup || '', 'formBody'))
           cells.push(cell(row.desc || '', 'formBody'))
+          cells.push(cell(row.batch || '', 'formBody'))
           cells.push(cell('', 'formStatus'))
           cells.push(cell(num(row.qty), 'formBody'))
           cells.push(cell(total, 'formTotal', span ? ` ss:MergeDown="${span}"` : ''))
@@ -2422,17 +2453,18 @@ console.log("QUALITY =", qualityForBatchMaterial)
         } else {
           cells.push(cell(row.routingGroup || '', 'formBody', ' ss:Index="4"'))
           cells.push(cell(row.desc || '', 'formBody'))
+          cells.push(cell(row.batch || '', 'formBody'))
           cells.push(cell('', 'formStatus'))
           cells.push(cell(num(row.qty), 'formBody'))
-          cells.push(cell('', 'formNotes', ' ss:Index="9"'))
+          cells.push(cell('', 'formNotes', ' ss:Index="10"'))
           cells.push(cell('', 'formExtra'))
         }
         outputRows.push(`<Row ss:AutoFitHeight="1">${cells.join('')}</Row>`)
         excelRow += 1
       })
     })
-    if (!rows.length) outputRows.push(`<Row>${cell('', 'formPlain', ' ss:Index="2"')}${cell('אין נתוני תפוקה בטווח שנבחר','formBody',' ss:MergeAcross="6"')}</Row>`)
-    return `<Worksheet ss:Name="דיווח יומי פורמולציות" ss:RightToLeft="1"><Table ss:ExpandedColumnCount="10" ss:ExpandedRowCount="${Math.max(15, 7 + Math.max(1, rows.length))}" x:FullColumns="1" x:FullRows="1"><Column ss:Index="2" ss:Width="92"/><Column ss:Width="135"/><Column ss:Width="55"/><Column ss:Width="155"/><Column ss:Width="270"/><Column ss:Width="72"/><Column ss:Width="82"/><Column ss:Width="390"/><Column ss:Width="275"/><Row ss:Index="5" ss:Height="23"><Cell ss:Index="3" ss:MergeAcross="6" ss:StyleID="formEvent"><Data ss:Type="String">${xmlEscape(eventText)}</Data></Cell></Row><Row ss:Index="7" ss:Height="22">${cell('מקט','formHeader',' ss:Index="2"')}${cell(displayDate,'formDateHeader')}${cell('קו יצור','formHeader')}${cell('חומר','formHeader')}${cell('סטטוס מכונה','formHeader')}${cell('תפוקה','formHeader')}${cell('סה"כ תפוקה','formHeader')}${cell('הערות','formHeader')}</Row>${outputRows.join('')}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/><Selected/><FreezePanes/><FrozenNoSplit/><SplitHorizontal>7</SplitHorizontal><TopRowBottomPane>7</TopRowBottomPane><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions></Worksheet>`
+    if (!rows.length) outputRows.push(`<Row>${cell('', 'formPlain', ' ss:Index="2"')}${cell('אין נתוני תפוקה בטווח שנבחר','formBody',' ss:MergeAcross="7"')}</Row>`)
+    return `<Worksheet ss:Name="דיווח יומי פורמולציות" ss:RightToLeft="1"><Table ss:ExpandedColumnCount="11" ss:ExpandedRowCount="${Math.max(15, 7 + Math.max(1, rows.length))}" x:FullColumns="1" x:FullRows="1"><Column ss:Index="2" ss:Width="92"/><Column ss:Width="135"/><Column ss:Width="75"/><Column ss:Width="250"/><Column ss:Width="105"/><Column ss:Width="155"/><Column ss:Width="88"/><Column ss:Width="95"/><Column ss:Width="110"/><Column ss:Width="275"/><Row ss:Index="5" ss:Height="23"><Cell ss:Index="3" ss:MergeAcross="7" ss:StyleID="formEvent"><Data ss:Type="String">${xmlEscape(eventText)}</Data></Cell></Row><Row ss:Index="7" ss:Height="22">${cell('מקט','formHeader',' ss:Index="2"')}${cell(displayDate,'formDateHeader')}${cell('קו יצור','formHeader')}${cell('חומר','formHeader')}${cell('מספר אצווה','formHeader')}${cell('סטטוס מכונה','formHeader')}${cell('תפוקה','formHeader')}${cell('סה"כ תפוקה','formHeader')}${cell('הערות','formHeader')}</Row>${outputRows.join('')}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/><Selected/><FreezePanes/><FrozenNoSplit/><SplitHorizontal>7</SplitHorizontal><TopRowBottomPane>7</TopRowBottomPane><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions></Worksheet>`
   }
 
   const exportStyledExcel = (sheets, filename, productionRowsForTemplate = []) => {
@@ -2456,6 +2488,64 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500)
   }
 
+
+
+  const handleDailyReportRoundtripFile = async file => {
+    try {
+      setBusy(true)
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf, { type:'array', cellDates:true })
+      const sheetName = wb.SheetNames.find(name => /דיווח יומי פורמולציות/i.test(name)) || wb.SheetNames[0]
+      const ws = wb.Sheets[sheetName]
+      const matrix = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false })
+      const headerRowIndex = matrix.findIndex(row => row.some(cell => String(cell).trim() === 'מקט') && row.some(cell => /תפוקה/.test(String(cell))))
+      if (headerRowIndex < 0) throw new Error('לא נמצאה שורת כותרות של דיווח יומי פורמולציות')
+
+      const header = matrix[headerRowIndex].map(v => String(v || '').trim())
+      const idx = label => header.findIndex(h => h === label)
+      const materialIdx = idx('מקט')
+      const lineIdx = idx('קו יצור')
+      const descIdx = idx('חומר')
+      const batchIdx = header.findIndex(h => /אצווה|Batch/i.test(h))
+      const machineIdx = idx('סטטוס מכונה')
+      const qtyIdx = idx('תפוקה')
+      const totalIdx = idx('סה"כ תפוקה')
+      const notesIdx = idx('הערות')
+      const reportDate = header.find(h => /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test(h)) || ''
+      const facilityIdx = header.indexOf(reportDate)
+
+      let lastFacility = ''
+      const imported = []
+      matrix.slice(headerRowIndex + 1).forEach(row => {
+        const material = String(row[materialIdx] || '').trim()
+        if (!material) return
+        const facilityCell = facilityIdx >= 0 ? String(row[facilityIdx] || '').trim() : ''
+        if (facilityCell) lastFacility = facilityCell
+        imported.push({
+          importedAt:new Date().toISOString(),
+          fileName:file.name,
+          reportDate,
+          material,
+          facility:lastFacility,
+          line:lineIdx >= 0 ? String(row[lineIdx] || '').trim() : '',
+          description:descIdx >= 0 ? String(row[descIdx] || '').trim() : '',
+          batch:batchIdx >= 0 ? String(row[batchIdx] || '').trim() : '',
+          machineStatus:machineIdx >= 0 ? String(row[machineIdx] || '').trim() : '',
+          quantity:qtyIdx >= 0 ? num(row[qtyIdx]) : 0,
+          facilityTotal:totalIdx >= 0 ? num(row[totalIdx]) : 0,
+          notes:notesIdx >= 0 ? String(row[notesIdx] || '').trim() : '',
+        })
+      })
+      if (!imported.length) throw new Error('לא נמצאו רשומות להחזרה לאפליקציה')
+      setDailyReportHistory(current => [...current, ...imported])
+      setStatus(`הדוח הערוך נטען חזרה: ${fmt(imported.length)} רשומות נשמרו בהיסטוריה המקומית`)
+    } catch (error) {
+      console.error(error)
+      setStatus(`טעינת הדוח הערוך נכשלה: ${error?.message || 'שגיאה לא ידועה'}`)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const exportWorkbook = () => {
     const productionRows = [...filtered].sort(facilitySortDesc)
@@ -2724,7 +2814,16 @@ console.log("QUALITY =", qualityForBatchMaterial)
           <button type="button" className={`action ui-control ${uiSoundsEnabled ? 'active' : ''}`} data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילי ממשק' : 'הפעלת צלילי ממשק'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}<span>{uiSoundsEnabled ? 'צלילים פעילים' : 'צלילים כבויים'}</span></button><div className="user-session"><img className="user-brand-avatar" src="/icons/adama-mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
           <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת תבנית יעדים</button>
+          <div className="daily-event-export-controls" style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
+            <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,fontWeight:700}}><input type="checkbox" checked={dailyEventEnabled} onChange={e=>setDailyEventEnabled(e.target.checked)}/> הוספת אירוע</label>
+            {dailyEventEnabled && <>
+              <select value={dailyEventType} onChange={e=>setDailyEventType(e.target.value)} style={{height:36,borderRadius:9}}><option value="">סוג אירוע</option><option>בטיחות</option><option>איכות</option><option>סביבה</option></select>
+              <select value={dailyEventFacility} onChange={e=>setDailyEventFacility(e.target.value)} style={{height:36,borderRadius:9}}><option value="">בחר מתקן</option>{(selectedFacilities.length ? selectedFacilities : facilities).map(id=><option key={id} value={id}>{id}</option>)}</select>
+              <input value={dailyEventText} onChange={e=>setDailyEventText(e.target.value)} placeholder="תיאור האירוע..." style={{height:36,borderRadius:9,border:'1px solid #cbd5e1',padding:'0 9px',minWidth:190}}/>
+            </>}
+          </div>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
+          <label className={`action secondary ${busy ? 'disabled' : ''}`} style={{cursor:'pointer'}}><Upload size={18}/> טעינת דוח ערוך<input type="file" accept=".xls,.xlsx" hidden disabled={busy} onChange={e=>{const file=e.target.files?.[0]; if(file) handleDailyReportRoundtripFile(file); e.target.value=''}}/></label>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
           {canManageData ? <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label> : <button className="action upload" type="button" onClick={onRequestAdminLogin}><Upload size={19}/> טעינת Excel</button>}
           {canManageData ? <button className="action secondary" onClick={onSignOut}><LogOut size={18}/> יציאת מנהל</button> : <button className="action secondary" onClick={onRequestAdminLogin}><ShieldCheck size={18}/> כניסת מנהל</button>}
@@ -2811,6 +2910,11 @@ console.log("QUALITY =", qualityForBatchMaterial)
           <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
           <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')} canManage={canManageData}/>
         </div>
+      </section>}
+
+      {!!dailyReportHistory.length && <section className="details" id="daily-report-history-section">
+        <div className="details-title-row"><div><h2>היסטוריית דוחות יומיים שהוחזרו לאפליקציה</h2><p className="details-note">סיכום חודשי לפי מתקן מתוך דוחות Excel שנערכו ידנית ונטענו חזרה.</p></div><span className="production-record-count">{dailyReportHistory.length} רשומות</span></div>
+        <div className="table-wrap"><table><thead><tr><th>חודש</th><th>מתקן</th><th>דוחות</th><th>רשומות</th><th>סה״כ תפוקה</th><th>סטטוס מכונה</th><th>הערות</th></tr></thead><tbody>{monthlyDailyReportHistory.map(row=><tr key={`${row.month}-${row.facility}`}><td>{row.month}</td><td>{row.facility}</td><td>{row.reports}</td><td>{row.rows}</td><td>{fmt(row.quantity)}</td><td>{row.machineStatuses}</td><td>{row.notes}</td></tr>)}</tbody></table></div>
       </section>}
 
       <section className="planning-toolbar">
