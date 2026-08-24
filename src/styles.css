@@ -409,3 +409,154 @@ body{background:linear-gradient(180deg,#f5f8fa 0,#eef3f6 100%);}
 .facility19-balance-lines{grid-template-columns:repeat(2,minmax(0,1fr))!important}
 .facility19-balance .balance-kpi-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}
 @media(max-width:900px){.facility19-balance .balance-kpi-grid{grid-template-columns:repeat(2,minmax(140px,1fr))}}
+
+/* Sprint 11.9.32 — Bright Liquid Glass visual system */
+:root{
+  --liquid-bg:#edf5fa;
+  --liquid-bg-2:#f9fcfe;
+  --liquid-navy:#071f35;
+  --liquid-navy-2:#0b3150;
+  --liquid-teal:#08a992;
+  --liquid-teal-bright:#20ddc2;
+  --liquid-line:rgba(151,184,204,.72);
+  --liquid-shadow:0 10px 24px rgba(23,61,84,.13),inset 0 1px 1px rgba(255,255,255,.95);
+}
+body{
+  background:
+    radial-gradient(circle at 18% 4%,rgba(255,255,255,.98),transparent 35%),
+    linear-gradient(145deg,var(--liquid-bg-2),var(--liquid-bg) 62%,#e7f1f7);
+  font-family:"Segoe UI Variable","Segoe UI","Heebo",Arial,sans-serif;
+}
+.main{background:transparent}
+.header{
+  background:rgba(246,251,254,.78);
+  border-bottom:1px solid rgba(151,184,204,.45);
+  box-shadow:0 12px 28px rgba(30,68,91,.06);
+  backdrop-filter:blur(18px) saturate(145%);
+  -webkit-backdrop-filter:blur(18px) saturate(145%);
+}
+
+/* Reusable water-lens controls */
+.action,.upload,.diagnostics-toggle,.section-print-btn,.section-toggle,
+.facility-view-filters button,.tabs button,.select-all-facilities,
+.extra-facility-actions button,.source-upload,.source-breakdown-btn,
+.month-audit-head button,.side-clear,.side-quick-ranges button,
+.facility-multi-trigger,.side-collapse-button{
+  position:relative;
+  overflow:hidden;
+  border:1px solid rgba(132,169,191,.72)!important;
+  border-radius:14px!important;
+  background:linear-gradient(145deg,rgba(255,255,255,.92),rgba(226,239,247,.68))!important;
+  color:#123b58!important;
+  box-shadow:var(--liquid-shadow),inset 0 -2px 4px rgba(68,112,140,.10)!important;
+  backdrop-filter:blur(13px) saturate(150%);
+  -webkit-backdrop-filter:blur(13px) saturate(150%);
+  transition:transform .16s ease,box-shadow .18s ease,border-color .18s ease,filter .18s ease!important;
+}
+.action:before,.upload:before,.diagnostics-toggle:before,.section-print-btn:before,
+.section-toggle:before,.facility-view-filters button:before,.tabs button:before,
+.select-all-facilities:before,.extra-facility-actions button:before,.source-upload:before,
+.source-breakdown-btn:before,.month-audit-head button:before,.side-clear:before,
+.side-quick-ranges button:before,.facility-multi-trigger:before,.side-collapse-button:before{
+  content:"";position:absolute;inset:1px 7px auto;height:42%;border-radius:999px;
+  background:linear-gradient(180deg,rgba(255,255,255,.86),rgba(255,255,255,0));
+  opacity:.78;pointer-events:none;
+}
+.action:hover,.upload:hover,.diagnostics-toggle:hover,.section-print-btn:hover,
+.section-toggle:hover,.facility-view-filters button:hover,.tabs button:hover,
+.select-all-facilities:hover,.extra-facility-actions button:hover,.source-upload:hover,
+.source-breakdown-btn:hover,.month-audit-head button:hover,.side-clear:hover,
+.side-quick-ranges button:hover,.facility-multi-trigger:hover{
+  transform:translateY(-2px);border-color:rgba(17,166,146,.76)!important;
+  box-shadow:0 14px 28px rgba(20,65,88,.18),inset 0 1px 1px #fff,inset 0 -3px 6px rgba(26,117,128,.10)!important;
+}
+.action:active,.upload:active,.diagnostics-toggle:active,.section-print-btn:active,
+.section-toggle:active,.facility-view-filters button:active,.tabs button:active,
+.select-all-facilities:active,.extra-facility-actions button:active,.source-upload:active,
+.source-breakdown-btn:active,.month-audit-head button:active,.side-clear:active,
+.side-quick-ranges button:active,.facility-multi-trigger:active{
+  transform:translateY(1px) scale(.985);
+  box-shadow:inset 0 3px 8px rgba(38,79,103,.22),0 4px 10px rgba(20,55,75,.10)!important;
+}
+.action.active,.action.primary,.upload,.diagnostics-toggle.active,
+.facility-view-filters button.active,.tabs button.active,.target-upload,
+.source-upload:not(.disabled){
+  color:#fff!important;border-color:rgba(27,213,188,.85)!important;
+  background:linear-gradient(145deg,rgba(22,191,166,.94),rgba(4,126,118,.92))!important;
+  box-shadow:0 10px 22px rgba(7,142,126,.26),inset 0 1px 2px rgba(255,255,255,.76),inset 0 -4px 8px rgba(1,67,73,.22)!important;
+}
+
+/* Glass form fields and status rail */
+.top-status-bar,.planning-toolbar,.filters,.extra-facilities{
+  background:rgba(255,255,255,.62)!important;border:1px solid rgba(155,187,205,.58)!important;
+  box-shadow:0 10px 26px rgba(28,67,91,.09),inset 0 1px 1px rgba(255,255,255,.96)!important;
+  backdrop-filter:blur(15px) saturate(135%);-webkit-backdrop-filter:blur(15px) saturate(135%);
+}
+.top-status-item,.side-field>div,.side-field>input,.side-field>select,
+.facility-multi-trigger,.filters label,.filters input,.extra-facility-actions select{
+  background:linear-gradient(145deg,rgba(255,255,255,.96),rgba(232,242,248,.82))!important;
+  border:1px solid rgba(154,184,202,.62)!important;border-radius:12px!important;
+  box-shadow:inset 0 1px 1px #fff,0 5px 12px rgba(21,61,84,.08)!important;
+}
+
+/* Solid management panel with liquid-glass card rims */
+.control-tower-hero{
+  background:linear-gradient(145deg,var(--liquid-navy),var(--liquid-navy-2) 72%,#0b4155)!important;
+  border:1px solid rgba(174,214,231,.48)!important;border-radius:24px!important;
+  box-shadow:0 22px 48px rgba(7,31,53,.22),inset 0 1px 1px rgba(255,255,255,.24),inset 0 -8px 24px rgba(0,12,25,.25)!important;
+}
+.tower-kpis button{
+  position:relative;overflow:hidden;border:1px solid rgba(177,211,228,.65)!important;
+  border-radius:18px!important;
+  background:linear-gradient(150deg,rgba(17,57,86,.98),rgba(5,32,57,.99))!important;
+  box-shadow:0 12px 24px rgba(0,14,27,.26),inset 0 1px 1px rgba(255,255,255,.22),inset 0 0 0 1px rgba(93,157,188,.12)!important;
+  padding:18px!important;
+}
+.tower-kpis button:before{
+  content:"";position:absolute;inset:0 12% auto;height:2px;border-radius:999px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.84),transparent);opacity:.58;
+}
+.tower-kpis button:hover{
+  transform:translateY(-3px)!important;border-color:rgba(41,224,201,.72)!important;
+  box-shadow:0 18px 32px rgba(0,18,34,.34),inset 0 1px 2px rgba(255,255,255,.28),0 0 0 1px rgba(23,211,187,.15)!important;
+}
+.tower-kpis button svg{
+  width:42px;height:42px;padding:9px;border-radius:50%;color:#20e1c6!important;
+  background:radial-gradient(circle at 34% 25%,rgba(255,255,255,.36),rgba(17,65,93,.58) 40%,rgba(3,24,45,.92) 74%);
+  border:1px solid rgba(179,218,235,.72);
+  box-shadow:0 8px 16px rgba(0,12,25,.32),inset 0 1px 2px rgba(255,255,255,.50);
+}
+.tower-kpis button b{
+  font-family:"Bahnschrift","Segoe UI Variable","Segoe UI",sans-serif;
+  font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1,"lnum" 1;
+  font-size:clamp(26px,1.65vw,34px)!important;letter-spacing:.3px;line-height:1.08;
+  text-shadow:0 3px 14px rgba(0,0,0,.34);
+}
+.tower-kpis button.good b{color:#34e5b1!important}.tower-kpis button.bad b{color:#ff7f7b!important}
+.tower-online{
+  border:1px solid rgba(194,225,238,.72)!important;
+  background:linear-gradient(145deg,rgba(255,255,255,.18),rgba(1,22,41,.42))!important;
+  box-shadow:0 9px 18px rgba(0,10,22,.28),inset 0 1px 2px rgba(255,255,255,.42)!important;
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+}
+.tower-online span{box-shadow:0 0 0 5px rgba(32,221,194,.13),0 0 14px rgba(32,221,194,.68)!important}
+
+/* Modern numerals throughout cards and data views */
+.top-status-item b,.executive b,.summary b,.forecast-card b,.facility b,
+.tower-facility-card b,.balance-kpi-grid b,.batch-kpi b,.data-source-count b,
+td,.quantity-variance-grid b{
+  font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1,"lnum" 1;
+}
+
+/* Light glass surfaces below the hero */
+.tower-facility-section,.tower-alerts-card,.tower-chart-card,.details,.daily-management,
+.alert-panel,.trend-card,.data-center,.manager-brief,.forecast-card,.facility{
+  background:rgba(255,255,255,.74)!important;border:1px solid rgba(157,189,207,.56)!important;
+  box-shadow:0 12px 28px rgba(24,63,87,.09),inset 0 1px 1px rgba(255,255,255,.96)!important;
+  backdrop-filter:blur(14px) saturate(130%);-webkit-backdrop-filter:blur(14px) saturate(130%);
+}
+
+@media (prefers-reduced-motion:reduce){
+  .action,.upload,.diagnostics-toggle,.section-print-btn,.section-toggle,
+  .facility-view-filters button,.tabs button,.tower-kpis button{transition:none!important}
+}
