@@ -668,3 +668,79 @@ td,.quantity-variance-grid b{
   border-top:1px solid rgba(182,220,232,.38);
 }
 @media(max-width:1200px){.home-nav-card{min-height:340px!important}.command-home-welcome h1{font-size:38px!important}}
+
+/* Sprint 11.9.34 — Modern typography + next-generation facility cards */
+html,body,button,input,select,textarea{
+  font-family:"Segoe UI Variable Text","Segoe UI Variable","Segoe UI","Noto Sans Hebrew",Arial,sans-serif!important;
+  font-optical-sizing:auto;text-rendering:optimizeLegibility;
+}
+h1,h2,h3,h4,strong,b{
+  font-family:"Segoe UI Variable Display","Segoe UI Variable","Segoe UI","Noto Sans Hebrew",Arial,sans-serif;
+  letter-spacing:-.018em;
+}
+button,input,select,textarea{font:inherit}
+
+.tower-facility-card,.forecast-card,.facility{
+  --facility-accent:#8fa5b4;
+  position:relative;overflow:hidden;border:1px solid rgba(145,181,202,.66)!important;
+  border-radius:22px!important;
+  background:linear-gradient(145deg,rgba(255,255,255,.91),rgba(230,241,248,.67))!important;
+  box-shadow:0 16px 32px rgba(18,57,81,.12),inset 0 1px 2px #fff,inset 0 -5px 12px rgba(59,106,135,.07)!important;
+  backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);
+  transition:transform .2s ease,box-shadow .22s ease,border-color .2s ease!important;
+}
+.tower-facility-card:before,.forecast-card:before,.facility:before{
+  content:"";position:absolute;inset:1px 14px auto;height:35%;border-radius:999px;
+  background:linear-gradient(180deg,rgba(255,255,255,.88),rgba(255,255,255,0));opacity:.68;pointer-events:none;
+}
+.tower-facility-card:after,.forecast-card:after,.facility:after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--facility-accent) 15%,transparent);
+}
+.tower-facility-card.good,.forecast-card.good,.forecast-card.achieved,.facility.good{--facility-accent:#0baa82}
+.tower-facility-card.warning,.forecast-card.warning,.facility.warning{--facility-accent:#f0a11a}
+.tower-facility-card.risk,.forecast-card.risk,.facility.risk{--facility-accent:#ee5656}
+.tower-facility-card:hover,.forecast-card:hover,.facility:hover{
+  transform:translateY(-6px) scale(1.008)!important;border-color:color-mix(in srgb,var(--facility-accent) 65%,#a5c0d0)!important;
+  box-shadow:0 25px 44px rgba(16,54,79,.19),inset 0 1px 2px #fff,0 0 0 3px color-mix(in srgb,var(--facility-accent) 10%,transparent)!important;
+}
+.tower-facility-card:active,.forecast-card:active,.facility:active{transform:translateY(1px) scale(.992)!important}
+
+.tower-facility-head i{
+  width:14px!important;height:14px!important;border:2px solid rgba(255,255,255,.92);
+  box-shadow:0 0 0 5px color-mix(in srgb,var(--facility-accent) 13%,transparent),0 0 14px color-mix(in srgb,var(--facility-accent) 46%,transparent)!important;
+}
+.tower-facility-head strong,.forecast-head h3,.facility-top h3{
+  font-size:clamp(22px,1.35vw,29px)!important;font-weight:750;letter-spacing:-.035em;
+}
+.tower-health>div svg,.forecast-head svg{
+  border-radius:50%;padding:6px;width:38px;height:38px;
+  background:radial-gradient(circle at 34% 23%,#fff,rgba(226,239,247,.88) 46%,rgba(177,207,223,.68));
+  border:1px solid rgba(144,180,201,.66);box-shadow:0 7px 15px rgba(19,59,83,.13),inset 0 1px 2px #fff;
+}
+.tower-health b,.forecast-main b,.forecast-values strong,.forecast-metrics b,
+.facility-top>b,.facility-numbers strong,.tower-facility-card dd{
+  font-family:"Bahnschrift","Segoe UI Variable Display","Segoe UI",sans-serif!important;
+  font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1,"lnum" 1;
+  letter-spacing:.01em;
+}
+.tower-health b{font-size:30px!important}.tower-facility-card dd{font-size:16px;font-weight:650}
+.tower-progress,.bar{
+  height:10px!important;border-radius:999px!important;
+  background:rgba(174,197,211,.28)!important;border:1px solid rgba(160,188,204,.28);
+  box-shadow:inset 0 2px 4px rgba(27,67,91,.13)!important;
+}
+.tower-progress i,.bar i{
+  background:linear-gradient(90deg,color-mix(in srgb,var(--facility-accent) 70%,#073d52),var(--facility-accent),color-mix(in srgb,var(--facility-accent) 72%,#fff))!important;
+  box-shadow:0 0 12px color-mix(in srgb,var(--facility-accent) 45%,transparent),inset 0 1px 1px rgba(255,255,255,.62)!important;
+}
+.tower-facility-card dl div{border-bottom-color:rgba(150,181,199,.26)!important;padding:7px 0!important}
+.tower-enter{
+  width:max-content;margin:15px auto 0!important;padding:8px 13px;border-radius:999px;
+  background:linear-gradient(145deg,rgba(255,255,255,.86),rgba(222,238,246,.68));
+  border:1px solid rgba(133,174,195,.60);box-shadow:0 7px 14px rgba(20,60,84,.10),inset 0 1px 1px #fff;
+}
+.forecast-card.selected,.facility.selected{
+  outline:0!important;border-color:rgba(9,167,145,.78)!important;
+  box-shadow:0 20px 38px rgba(10,126,113,.18),inset 0 1px 2px #fff,0 0 0 4px rgba(9,167,145,.12)!important;
+}
