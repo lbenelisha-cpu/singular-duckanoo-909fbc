@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
 import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
@@ -42,7 +42,35 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const BUILD_LABEL = 'Sprint 11.9.8 — Viewer Auto Login & Facility Colors'
+const APP_VERSION = '11.9.31'
+const BUILD_LABEL = 'Sprint 11.9.31 — Daily Events + Roundtrip + Batch'
+const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
+
+const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
+// Stable, collision-free colors for the facilities used by IML CONTROL.
+// This keeps the same facility color in the table, summary chips, print and Excel export.
+const FACILITY_FIXED_COLORS = {
+  '1123':'#FDEBFF',
+  '1142':'#E8F8FF',
+  '1519':'#E9F8EF',
+  '1521':'#FFF3D9',
+  '1523':'#F4EAFF',
+  '1524':'#F1F1F1',
+  '1525':'#FFE9EC',
+  '1528':'#DFF4FF',
+  '1540':'#FFF0E5',
+  '1541':'#EAF0FF',
+  '1542':'#E6F8ED',
+  '1543':'#FFF0C9',
+}
+const facilityColorFor = facility => {
+  const text = String(facility || '—').trim()
+  if (FACILITY_FIXED_COLORS[text]) return FACILITY_FIXED_COLORS[text]
+  // Fallback for a future facility not yet in the fixed map.
+  let hash = 0
+  for (let i=0;i<text.length;i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0
+  return FACILITY_COLOR_PALETTE[Math.abs(hash) % FACILITY_COLOR_PALETTE.length]
+}
 const isoDate = value => {
   if (!value) return ''
 
@@ -59,8 +87,9 @@ const readLocalJson = (key, fallback = []) => {
   try { return JSON.parse(localStorage.getItem(key) || '') || fallback } catch { return fallback }
 }
 
-const initialToDate = () => isoDate(new Date())
-const initialFromDate = () => { const date = new Date(); date.setDate(date.getDate() - 6); return isoDate(date) }
+const initialYesterdayDate = () => { const date = new Date(); date.setDate(date.getDate() - 1); return isoDate(date) }
+const initialToDate = () => initialYesterdayDate()
+const initialFromDate = () => initialYesterdayDate()
 
 const openDashboardDb = () => new Promise((resolve, reject) => {
   const request = indexedDB.open(DB_NAME, 1)
@@ -617,14 +646,26 @@ const useUniversalTableTools = () => {
           const groups = new Map()
           rows.forEach(row => {
             if (row.style.display === 'none' || row.classList.contains('smart-empty-row')) return
-            const label = String(row.cells[groupColumn]?.innerText || '').trim() || 'ללא שיוך'
+            const routingLabel = String(row.cells[groupColumn]?.innerText || '').trim() || 'ללא שיוך'
             const raw = String(row.cells[sumColumn]?.innerText || '').replace(/,/g,'').replace(/[^0-9.\-]/g,'')
             const value = Number(raw)
-            groups.set(label, (groups.get(label) || 0) + (Number.isFinite(value) ? value : 0))
+            const facility = String(row.dataset.facility || '').trim()
+            const isFacility42 = ['1542','1142'].includes(facility)
+            const useFacilitySummary = table.dataset.smartFacilitySummary === '1' && facility && !isFacility42
+            const label = useFacilitySummary ? `מתקן ${facility}` : routingLabel
+            const current = groups.get(label) || { total:0, facilities:new Set() }
+            current.total += Number.isFinite(value) ? value : 0
+            if (facility) current.facilities.add(facility)
+            groups.set(label, current)
           })
           groupWrap.innerHTML = [...groups.entries()]
             .sort((a,b) => String(a[0]).localeCompare(String(b[0]), 'he', {numeric:true, sensitivity:'base'}))
-            .map(([label,value]) => `<span class="smart-group-chip"><span>${label}</span><b>${formatter.format(value)}</b></span>`)
+            .map(([label,info]) => {
+              const facility = [...info.facilities][0] || ''
+              const bg = facility ? facilityColorFor(facility) : ''
+              const style = bg ? ` style="background:${bg};border-color:${bg}"` : ''
+              return `<span class="smart-group-chip"${style}><span>${label}</span><b>${formatter.format(info.total)}</b></span>`
+            })
             .join('')
           groupWrap.style.display = groups.size ? '' : 'none'
         }
@@ -729,11 +770,128 @@ const useUniversalTableTools = () => {
   }, [])
 }
 
+
+const autoFitExcelSheet = worksheet => {
+  if (!worksheet?.['!ref']) return worksheet
+  const range = XLSX.utils.decode_range(worksheet['!ref'])
+  const cols = []
+  for (let c = range.s.c; c <= range.e.c; c += 1) {
+    let maxLen = 0
+    for (let r = range.s.r; r <= range.e.r; r += 1) {
+      const cell = worksheet[XLSX.utils.encode_cell({ r, c })]
+      const value = cell?.w ?? cell?.v ?? ''
+      const len = String(value ?? '').split(/\r?\n/).reduce((m, line) => Math.max(m, line.length), 0)
+      maxLen = Math.max(maxLen, len)
+    }
+    cols.push({ wch: Math.min(100, Math.max(10, maxLen + 3)) })
+  }
+  worksheet['!cols'] = cols
+  return worksheet
+}
+
+const appendAutoFitJsonSheet = (workbook, rows, name) => {
+  const worksheet = XLSX.utils.json_to_sheet(rows)
+  autoFitExcelSheet(worksheet)
+  // Excel sheet view: right-to-left for Hebrew/IML exports.
+  worksheet['!views'] = [{ rightToLeft:true }]
+  XLSX.utils.book_append_sheet(workbook, worksheet, name)
+  return worksheet
+}
+
+
+const UI_SOUNDS_STORAGE_KEY = 'iml-ui-sounds-enabled'
+
+const playUiTone = (type = 'click') => {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    const now = ctx.currentTime
+    const gain = ctx.createGain()
+    gain.connect(ctx.destination)
+    const presets = {
+      click:{ f1:520, f2:660, duration:.07, volume:.035, wave:'sine' },
+      nav:{ f1:440, f2:620, duration:.09, volume:.04, wave:'sine' },
+      select:{ f1:620, f2:760, duration:.08, volume:.035, wave:'triangle' },
+      success:{ f1:660, f2:880, duration:.16, volume:.045, wave:'sine' },
+      export:{ f1:560, f2:820, duration:.18, volume:.045, wave:'triangle' },
+      print:{ f1:480, f2:700, duration:.12, volume:.04, wave:'square' },
+      refresh:{ f1:420, f2:640, duration:.15, volume:.04, wave:'sine' },
+      warning:{ f1:330, f2:260, duration:.18, volume:.045, wave:'sawtooth' },
+      close:{ f1:520, f2:360, duration:.12, volume:.04, wave:'sine' },
+    }
+    const p = presets[type] || presets.click
+    const osc = ctx.createOscillator()
+    osc.type = p.wave
+    osc.frequency.setValueAtTime(p.f1, now)
+    osc.frequency.exponentialRampToValueAtTime(Math.max(40, p.f2), now + p.duration)
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(p.volume, now + .015)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + p.duration)
+    osc.connect(gain)
+    osc.start(now)
+    osc.stop(now + p.duration + .02)
+    osc.onended = () => ctx.close().catch(() => {})
+  } catch {}
+}
+
+const speakBye = () => {
+  try {
+    if (!('speechSynthesis' in window)) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance('Bye')
+    utterance.lang = 'en-US'
+    utterance.rate = 1
+    utterance.pitch = 1
+    utterance.volume = .75
+    window.speechSynthesis.speak(utterance)
+  } catch {}
+}
+
+const classifyButtonSound = button => {
+  const text = String(button?.innerText || button?.textContent || '').trim().toLowerCase()
+  const aria = String(button?.getAttribute?.('aria-label') || '').trim().toLowerCase()
+  const title = String(button?.getAttribute?.('title') || '').trim().toLowerCase()
+  const combined = `${text} ${aria} ${title}`
+  if (/יציאה|התנתק|sign out|logout|exit/.test(combined)) return 'exit'
+  if (/ייצוא|יצוא|excel|download/.test(combined)) return 'export'
+  if (/הדפס|print/.test(combined)) return 'print'
+  if (/רענן|refresh|עדכון/.test(combined)) return 'refresh'
+  if (/מחק|מחיקה|delete|אזהרה|warning/.test(combined)) return 'warning'
+  if (/שמור|אישור|אשר|save|approve|העלה|טעינת/.test(combined)) return 'success'
+  if (/מתקן|בחר|סינון|filter|select/.test(combined)) return 'select'
+  if (/דף|סקירה|ניהול|איכות|תחזית|מגמה|פרטים|כניסה|בית|home/.test(combined)) return 'nav'
+  if (/סגור|נקה|×|✕/.test(combined)) return 'close'
+  return 'click'
+}
+
+const useUiSounds = enabled => {
+  useEffect(() => {
+    const onClick = event => {
+      if (!enabled) return
+      const button = event.target?.closest?.('button,[role="button"],a')
+      if (!button || button.dataset?.noUiSound === '1') return
+      const type = classifyButtonSound(button)
+      if (type === 'exit') {
+        playUiTone('close')
+        speakBye()
+      } else {
+        playUiTone(type)
+      }
+    }
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
+  }, [enabled])
+}
+
 export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
   useUniversalTableTools()
 
   const canManageData = ['admin', 'manager'].includes(userRole)
   const canDeleteData = userRole === 'admin'
+  const [uiSoundsEnabled, setUiSoundsEnabled] = useState(() => localStorage.getItem(UI_SOUNDS_STORAGE_KEY) !== '0')
+  useUiSounds(uiSoundsEnabled)
+  useEffect(() => { localStorage.setItem(UI_SOUNDS_STORAGE_KEY, uiSoundsEnabled ? '1' : '0') }, [uiSoundsEnabled])
 
   const [production, setProduction] = useState([])
   const [quality, setQuality] = useState([])
@@ -763,6 +921,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [planningMonth, setPlanningMonth] = useState('')
   const [additionalFacilities, setAdditionalFacilities] = useState([])
   const [facilityToAdd, setFacilityToAdd] = useState('')
+  const [dailyAdditionalFacilities, setDailyAdditionalFacilities] = useState(() => readLocalJson('iml-daily-additional-facilities', []))
+  const [dailyFacilityToAdd, setDailyFacilityToAdd] = useState('')
   const [periodYear, setPeriodYear] = useState('')
   const [periodQuarter, setPeriodQuarter] = useState('')
   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
@@ -777,9 +937,110 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [showHome, setShowHome] = useState(true)
   const [facilityPickerOpen, setFacilityPickerOpen] = useState(false)
+  const [showDataCenter, setShowDataCenter] = useState(false)
+  const [dailyEventEnabled, setDailyEventEnabled] = useState(false)
+  const [dailyEventType, setDailyEventType] = useState('')
+  const [dailyEventFacility, setDailyEventFacility] = useState('')
+  const [dailyEventText, setDailyEventText] = useState('')
+  const [dailyReportHistory, setDailyReportHistory] = useState(() => readLocalJson('iml-daily-report-history', []))
+  const [availableUpdate, setAvailableUpdate] = useState(null)
 
   useEffect(() => { localStorage.setItem('iml-ui-sidebar-collapsed', sidebarCollapsed ? '1' : '0') }, [sidebarCollapsed])
   useEffect(() => { localStorage.setItem('iml-ui-management-mode', managementMode ? '1' : '0') }, [managementMode])
+  useEffect(() => { localStorage.setItem('iml-daily-additional-facilities', JSON.stringify(dailyAdditionalFacilities)) }, [dailyAdditionalFacilities])
+  useEffect(() => { localStorage.setItem('iml-daily-report-history', JSON.stringify(dailyReportHistory.slice(-5000))) }, [dailyReportHistory])
+  useEffect(() => {
+    if (!canManageData || sessionStorage.getItem('iml-open-data-center-after-login') !== '1') return
+    sessionStorage.removeItem('iml-open-data-center-after-login')
+    setShowDataCenter(true)
+    window.setTimeout(() => document.getElementById('data-center-section')?.scrollIntoView({behavior:'smooth', block:'start'}), 120)
+  }, [canManageData])
+
+  useEffect(() => {
+    let active = true
+
+    const currentBundlePath = () => {
+      const scripts = [...document.querySelectorAll('script[type="module"][src]')]
+      const script = scripts.find(node => /\/assets\/[^/]+\.js(?:\?|$)/.test(node.src)) || scripts[0]
+      if (!script?.src) return ''
+      try { return new URL(script.src, window.location.origin).pathname } catch { return script.src }
+    }
+
+    const latestBundlePath = async () => {
+      const response = await fetch(`/index.html?update-check=${Date.now()}`, {
+        cache:'no-store',
+        headers:{ 'Cache-Control':'no-cache, no-store, must-revalidate' },
+      })
+      if (!response.ok) return ''
+      const html = await response.text()
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const scripts = [...doc.querySelectorAll('script[type="module"][src]')]
+      const script = scripts.find(node => /\/assets\/[^/]+\.js(?:\?|$)/.test(node.getAttribute('src') || '')) || scripts[0]
+      const src = script?.getAttribute('src') || ''
+      if (!src) return ''
+      try { return new URL(src, window.location.origin).pathname } catch { return src }
+    }
+
+    const readReleaseInfo = async () => {
+      try {
+        const response = await fetch(`/version.json?ts=${Date.now()}`, { cache:'no-store' })
+        return response.ok ? await response.json() : null
+      } catch { return null }
+    }
+
+    const checkForUpdate = async () => {
+      try {
+        const currentAsset = currentBundlePath()
+        const latestAsset = await latestBundlePath()
+        if (!active || !currentAsset || !latestAsset) return
+
+        if (currentAsset !== latestAsset) {
+          const release = await readReleaseInfo()
+          if (!active) return
+          setAvailableUpdate({
+            ...(release || {}),
+            version:normalize(release?.version) || 'חדשה',
+            currentAsset,
+            latestAsset,
+          })
+        } else {
+          setAvailableUpdate(null)
+        }
+      } catch (error) {
+        console.debug('Build update check skipped', error)
+      }
+    }
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') checkForUpdate()
+    }
+
+    checkForUpdate()
+    const timer = window.setInterval(checkForUpdate, VERSION_CHECK_INTERVAL_MS)
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', checkForUpdate)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', checkForUpdate)
+    }
+  }, [])
+
+  const refreshApplication = async () => {
+    try {
+      const registrations = await navigator.serviceWorker?.getRegistrations?.()
+      await Promise.all((registrations || []).map(async registration => {
+        try { await registration.update() } catch {}
+        try { await registration.unregister() } catch {}
+      }))
+    } catch {}
+
+    const url = new URL(window.location.href)
+    url.searchParams.set('refresh', String(Date.now()))
+    window.location.replace(url.toString())
+  }
 
   useEffect(() => { localStorage.setItem(MAPPING_STORAGE_KEY, JSON.stringify(manualMappings)) }, [manualMappings])
   useEffect(() => { localStorage.setItem(MAPPING_TIMELINE_KEY, JSON.stringify(mappingTimeline.slice(0,500))) }, [mappingTimeline])
@@ -1606,13 +1867,23 @@ console.log("QUALITY =", qualityForBatchMaterial)
       if (/(^|\s)LQ-P-5(\s|$)/.test(route) || route.includes('42-P-03') || route.includes('LIQUID 5 LITER')) return '5L'
       return '10/20L'
     }
+    // Residues are reported to 1542 as ZSEM and explicitly carry a 200L/1000L
+    // packaging description. They are output from the bulk and must therefore
+    // be deducted from the balance, but must NOT be counted as line packaging.
+    const residuePattern = /(^|\\D)(200|1000)\\s*(L|LT|LTR|LITER|LITRE)(\\D|$)/i
+    const residueRows = inRange.filter(r =>
+      normalize(r.facility) === '1542' &&
+      normalize(r.orderType).toUpperCase() === 'ZSEM' &&
+      residuePattern.test(normalize(`${r.desc || ''} ${r.routingDescription || ''}`))
+    )
     const bulk = bulkRows.reduce((sum,r)=>sum+num(r.qty),0)
     const byLine = {'1L':0,'5L':0,'10/20L':0}
     packedRows.forEach(r => { byLine[routeBucket(r)] += num(r.qty) })
     const packed = Object.values(byLine).reduce((a,b)=>a+b,0)
-    const balance = bulk - packed
-    const utilization = bulk > 0 ? packed / bulk * 100 : 0
-    return { bulkRows, packedRows, bulk, byLine, packed, balance, utilization }
+    const residues = residueRows.reduce((sum,r)=>sum+num(r.qty),0)
+    const balance = bulk - packed - residues
+    const utilization = bulk > 0 ? (packed + residues) / bulk * 100 : 0
+    return { bulkRows, packedRows, residueRows, bulk, byLine, packed, residues, balance, utilization }
   }, [prod, from, to])
 
   // Dedicated Facility 19 material balance. Bulk is identified by the approved
@@ -1704,6 +1975,20 @@ console.log("QUALITY =", qualityForBatchMaterial)
   const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
   const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
   const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
+  // Daily Management default: never show 11xx stations automatically.
+  // They remain available in the manual "+ add facility" list.
+  const dailyCoreFacilities = useMemo(
+    () => PRIMARY_FACILITIES.filter(id => !String(id).startsWith('11')),
+    []
+  )
+  const dailyFacilities = useMemo(
+    () => [...new Set([...dailyCoreFacilities, ...dailyAdditionalFacilities])],
+    [dailyCoreFacilities, dailyAdditionalFacilities]
+  )
+  const dailyOptionalFacilities = useMemo(
+    () => discoveredFacilities.filter(id => !dailyFacilities.includes(id)),
+    [discoveredFacilities, dailyFacilities]
+  )
   const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
 
   const targetsWithAdminMappings = useMemo(() => targets.map(target => {
@@ -1925,7 +2210,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       Explanation: item.explanation,
     }))
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Mapping Simulator')
+    appendAutoFitJsonSheet(wb, rows, 'Mapping Simulator')
     XLSX.writeFile(wb, `IML_Production_Mapping_Simulator_${new Date().toISOString().slice(0,10)}.xlsx`)
   }
 
@@ -2017,13 +2302,13 @@ console.log("QUALITY =", qualityForBatchMaterial)
     return !st || !['approved', 'closed', 'מאושר', 'סגור'].some(x => st.includes(x))
   }).sort((a,b) => new Date(b.sampleDate || b.date || 0) - new Date(a.sampleDate || a.date || 0)), [filteredDeviationRows])
 
-  const alerts = useMemo(() => planningRows.filter(r => ['risk', 'warning'].includes(r.state)).sort((a,b) => ({ risk:0, warning:1 }[a.state] - { risk:0, warning:1 }[b.state])), [planningRows])
+  const alerts = useMemo(() => {
+    if (!selectedFacilities.length) return []
+    return planningRows.filter(r => ['risk', 'warning'].includes(r.state) && (r.facilities || [r.facility]).some(id => selectedFacilities.includes(String(id)))).sort((a,b) => ({ risk:0, warning:1 }[a.state] - { risk:0, warning:1 }[b.state]))
+  }, [planningRows, selectedFacilities])
   const achievedCount = planningRows.filter(r => ['achieved', 'good'].includes(r.state)).length
   const riskCount = planningRows.filter(r => r.state === 'risk').length
   const warningCount = planningRows.filter(r => r.state === 'warning').length
-  // Keep the executive KPIs in the same facility scope as the side filter.
-  // A planning row can represent more than one storage location, so a row is
-  // included when at least one of its mapped facilities is selected.
   const scopedPlanningRows = useMemo(() => {
     if (!selectedFacilities.length) return planningRows
     return planningRows.filter(row => {
@@ -2075,6 +2360,40 @@ console.log("QUALITY =", qualityForBatchMaterial)
   }
   const visibleControlTowerFacilities = useMemo(() => controlTowerFacilities.filter(facilityViewMatches), [controlTowerFacilities, facilityViewMode])
   const visiblePlanningRows = useMemo(() => planningRows.filter(facilityViewMatches), [planningRows, facilityViewMode])
+  const dailyPlanningRows = useMemo(() => planningRows.filter(row => (row.facilities || [row.facility]).some(id => dailyFacilities.includes(String(id)))), [planningRows, dailyFacilities])
+  const addDailyFacility = () => {
+    if (!dailyFacilityToAdd || dailyAdditionalFacilities.includes(dailyFacilityToAdd)) return
+    setDailyAdditionalFacilities(current => [...current, dailyFacilityToAdd])
+    setDailyFacilityToAdd('')
+  }
+  const removeDailyFacility = id => setDailyAdditionalFacilities(current => current.filter(item => item !== id))
+  const selectedControlTowerFacilities = useMemo(() => selectedFacilities.length ? visibleControlTowerFacilities.filter(row => (row.facilityIds || [row.facility]).some(id => selectedFacilities.includes(String(id)))) : [], [visibleControlTowerFacilities, selectedFacilities])
+  const selectedForecastRows = useMemo(() => selectedFacilities.length ? visiblePlanningRows.filter(row => (row.facilities || [row.facility]).some(id => selectedFacilities.includes(String(id)))) : [], [visiblePlanningRows, selectedFacilities])
+  const selectedFacilityStats = useMemo(() => selectedFacilities.length ? facilityStats.filter(row => selectedFacilities.includes(String(row.id))) : [], [facilityStats, selectedFacilities])
+  const monthlyDailyReportHistory = useMemo(() => {
+    const parseMonthKey = value => {
+      const text = String(value || '').trim()
+      const m = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/)
+      if (!m) return ''
+      let year = Number(m[3]); if (year < 100) year += 2000
+      return `${year}-${String(Number(m[2])).padStart(2,'0')}`
+    }
+    const map = new Map()
+    dailyReportHistory.forEach(row => {
+      const month = parseMonthKey(row.reportDate) || String(row.importedAt || '').slice(0,7)
+      const facility = String(row.facility || 'ללא מתקן')
+      const key = `${month}|${facility}`
+      const current = map.get(key) || { month, facility, files:new Set(), rows:0, quantity:0, notes:0, machineStatuses:0 }
+      current.files.add(row.fileName || row.reportDate || key)
+      current.rows += 1
+      current.quantity += num(row.quantity)
+      if (String(row.notes || '').trim()) current.notes += 1
+      if (String(row.machineStatus || '').trim()) current.machineStatuses += 1
+      map.set(key, current)
+    })
+    return [...map.values()].map(item => ({ ...item, reports:item.files.size }))
+      .sort((a,b) => b.month.localeCompare(a.month) || String(b.facility).localeCompare(String(a.facility),'he',{numeric:true}))
+  }, [dailyReportHistory])
   const facilityViewFilters = <div className="facility-view-filters">
     {[['relevant','יעד + פעילות'],['target','עם יעד'],['active','פעילים'],['risk','בסיכון'],['all','הכול']].map(([value,label]) =>
       <button key={value} type="button" className={facilityViewMode === value ? 'active' : ''} onClick={() => setFacilityViewMode(value)}>{label}</button>
@@ -2095,32 +2414,145 @@ console.log("QUALITY =", qualityForBatchMaterial)
     window.setTimeout(() => document.getElementById('details-section')?.scrollIntoView({ behavior:'smooth', block:'start' }), 50)
   }
 
-  const facilityPalette = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
-  const facilityColor = facility => {
-    const text = String(facility || '—')
-    let hash = 0
-    for (let i=0;i<text.length;i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0
-    return facilityPalette[Math.abs(hash) % facilityPalette.length]
-  }
+  const facilityColor = facilityColorFor
   const facilitySortDesc = (a,b) => {
     const an = Number(String(a.facility || '').replace(/\D/g,'')), bn = Number(String(b.facility || '').replace(/\D/g,''))
     if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return bn-an
     return String(b.facility || '').localeCompare(String(a.facility || ''), 'he')
   }
   const xmlEscape = value => String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;')
-  const exportStyledExcel = (sheets, filename) => {
+  const buildDailyFormulationsWorksheet = productionRows => {
+    const rows = [...productionRows].sort((a,b) => facilitySortDesc(a,b) || String(a.routingGroup||'').localeCompare(String(b.routingGroup||''), 'he', {numeric:true}) || String(a.material||'').localeCompare(String(b.material||''), 'he', {numeric:true}))
+    const grouped = new Map()
+    rows.forEach(row => {
+      const facility = String(row.facility || '—')
+      const list = grouped.get(facility) || []
+      list.push(row)
+      grouped.set(facility, list)
+    })
+    const displayDate = from && to && from === to
+      ? new Date(`${from}T12:00:00`).toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'})
+      : (from || to || new Date().toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'}))
+    const eventText = dailyEventEnabled
+      ? `אירוע ${dailyEventType || 'כללי'}${dailyEventFacility ? ` · מתקן ${dailyEventFacility}` : ''}${dailyEventText ? ` - ${dailyEventText}` : ''}`
+      : 'הוספת אירוע - לא נבחר אירוע לדוח זה.'
+    const cell = (value='', style='formBody', extra='') => {
+      const numeric = typeof value === 'number' && Number.isFinite(value)
+      return `<Cell ss:StyleID="${style}"${extra}><Data ss:Type="${numeric ? 'Number' : 'String'}">${xmlEscape(value)}</Data></Cell>`
+    }
+    const outputRows = []
+    let excelRow = 8
+    grouped.forEach((groupRows, facility) => {
+      const total = groupRows.reduce((sum,row) => sum + num(row.qty), 0)
+      const span = Math.max(0, groupRows.length - 1)
+      groupRows.forEach((row,index) => {
+        const cells = []
+        cells.push(cell(row.material || '', 'formPlain', ' ss:Index="2"'))
+        if (index === 0) {
+          cells.push(cell(facility, 'formGroup', span ? ` ss:MergeDown="${span}"` : ''))
+          cells.push(cell(row.routingGroup || '', 'formBody'))
+          cells.push(cell(row.desc || '', 'formBody'))
+          cells.push(cell(row.batch || '', 'formBody'))
+          cells.push(cell('', 'formStatus'))
+          cells.push(cell(num(row.qty), 'formBody'))
+          cells.push(cell(total, 'formTotal', span ? ` ss:MergeDown="${span}"` : ''))
+          cells.push(cell('', 'formNotes'))
+          cells.push(cell('', 'formExtra'))
+        } else {
+          cells.push(cell(row.routingGroup || '', 'formBody', ' ss:Index="4"'))
+          cells.push(cell(row.desc || '', 'formBody'))
+          cells.push(cell(row.batch || '', 'formBody'))
+          cells.push(cell('', 'formStatus'))
+          cells.push(cell(num(row.qty), 'formBody'))
+          cells.push(cell('', 'formNotes', ' ss:Index="10"'))
+          cells.push(cell('', 'formExtra'))
+        }
+        outputRows.push(`<Row ss:AutoFitHeight="1">${cells.join('')}</Row>`)
+        excelRow += 1
+      })
+    })
+    if (!rows.length) outputRows.push(`<Row>${cell('', 'formPlain', ' ss:Index="2"')}${cell('אין נתוני תפוקה בטווח שנבחר','formBody',' ss:MergeAcross="7"')}</Row>`)
+    return `<Worksheet ss:Name="דיווח יומי פורמולציות" ss:RightToLeft="1"><Table ss:ExpandedColumnCount="11" ss:ExpandedRowCount="${Math.max(15, 7 + Math.max(1, rows.length))}" x:FullColumns="1" x:FullRows="1"><Column ss:Index="2" ss:Width="92"/><Column ss:Width="135"/><Column ss:Width="75"/><Column ss:Width="250"/><Column ss:Width="105"/><Column ss:Width="155"/><Column ss:Width="88"/><Column ss:Width="95"/><Column ss:Width="110"/><Column ss:Width="275"/><Row ss:Index="5" ss:Height="23"><Cell ss:Index="3" ss:MergeAcross="7" ss:StyleID="formEvent"><Data ss:Type="String">${xmlEscape(eventText)}</Data></Cell></Row><Row ss:Index="7" ss:Height="22">${cell('מקט','formHeader',' ss:Index="2"')}${cell(displayDate,'formDateHeader')}${cell('קו יצור','formHeader')}${cell('חומר','formHeader')}${cell('מספר אצווה','formHeader')}${cell('סטטוס מכונה','formHeader')}${cell('תפוקה','formHeader')}${cell('סה"כ תפוקה','formHeader')}${cell('הערות','formHeader')}</Row>${outputRows.join('')}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/><Selected/><FreezePanes/><FrozenNoSplit/><SplitHorizontal>7</SplitHorizontal><TopRowBottomPane>7</TopRowBottomPane><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions></Worksheet>`
+  }
+
+  const exportStyledExcel = (sheets, filename, productionRowsForTemplate = []) => {
     const styleIds = new Map()
     const facilities = [...new Set(sheets.flatMap(sh => sh.rows.map(r => r.__facility).filter(Boolean)))]
     facilities.forEach((f,i) => styleIds.set(f, `fac${i}`))
     const styles = facilities.map(f => `<Style ss:ID="${styleIds.get(f)}"><Interior ss:Color="${facilityColor(f)}" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D8E0E5"/></Borders></Style>`).join('')
     const worksheetXml = sheets.map(sh => {
+      const widths = sh.columns.map(c => {
+        const longest = Math.max(String(c.label || '').length, ...sh.rows.map(r => String(r[c.key] ?? '').split(/\r?\n/).reduce((m,line)=>Math.max(m,line.length),0)))
+        return Math.min(520, Math.max(70, longest * 7.2 + 22))
+      })
+      const columns = widths.map(width => `<Column ss:AutoFitWidth="0" ss:Width="${width.toFixed(0)}"/>`).join('')
       const header = `<Row>${sh.columns.map(c => `<Cell ss:StyleID="hdr"><Data ss:Type="String">${xmlEscape(c.label)}</Data></Cell>`).join('')}</Row>`
       const rows = sh.rows.map(r => `<Row>${sh.columns.map(c => { const v=r[c.key]; const numeric=typeof v==='number' && Number.isFinite(v); const sid=r.__facility ? ` ss:StyleID="${styleIds.get(r.__facility)}"` : ''; return `<Cell${sid}><Data ss:Type="${numeric?'Number':'String'}">${xmlEscape(v)}</Data></Cell>` }).join('')}</Row>`).join('')
-      return `<Worksheet ss:Name="${xmlEscape(sh.name)}"><Table>${header}${rows}</Table></Worksheet>`
+      return `<Worksheet ss:Name="${xmlEscape(sh.name)}" ss:RightToLeft="1"><Table>${columns}${header}${rows}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/></WorksheetOptions></Worksheet>`
     }).join('')
-    const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/></Style><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#DCE6F1" ss:Pattern="Solid"/></Style>${styles}</Styles>${worksheetXml}</Workbook>`
+    const templateSheet = buildDailyFormulationsWorksheet(productionRowsForTemplate)
+    const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="Arial" ss:Size="11"/></Style><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#DCE6F1" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formEvent"><Font ss:FontName="Arial" ss:Size="11"/><Interior ss:Color="#FFFF00" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formHeader"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1"/><Interior ss:Color="#EAF2F8" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style><Style ss:ID="formDateHeader"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1"/><Interior ss:Color="#EAF2F8" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><NumberFormat ss:Format="Short Date"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style><Style ss:ID="formPlain"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formBody"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formGroup"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formTotal"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formStatus"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formNotes"><Alignment ss:Horizontal="Right" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formExtra"><Alignment ss:Horizontal="Right" ss:Vertical="Center" ss:WrapText="1"/></Style>${styles}</Styles>${templateSheet}${worksheetXml}</Workbook>`
     const blob=new Blob([xml],{type:'application/vnd.ms-excel;charset=utf-8'})
     const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500)
+  }
+
+
+
+  const handleDailyReportRoundtripFile = async file => {
+    try {
+      setBusy(true)
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf, { type:'array', cellDates:true })
+      const sheetName = wb.SheetNames.find(name => /דיווח יומי פורמולציות/i.test(name)) || wb.SheetNames[0]
+      const ws = wb.Sheets[sheetName]
+      const matrix = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false })
+      const headerRowIndex = matrix.findIndex(row => row.some(cell => String(cell).trim() === 'מקט') && row.some(cell => /תפוקה/.test(String(cell))))
+      if (headerRowIndex < 0) throw new Error('לא נמצאה שורת כותרות של דיווח יומי פורמולציות')
+
+      const header = matrix[headerRowIndex].map(v => String(v || '').trim())
+      const idx = label => header.findIndex(h => h === label)
+      const materialIdx = idx('מקט')
+      const lineIdx = idx('קו יצור')
+      const descIdx = idx('חומר')
+      const batchIdx = header.findIndex(h => /אצווה|Batch/i.test(h))
+      const machineIdx = idx('סטטוס מכונה')
+      const qtyIdx = idx('תפוקה')
+      const totalIdx = idx('סה"כ תפוקה')
+      const notesIdx = idx('הערות')
+      const reportDate = header.find(h => /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test(h)) || ''
+      const facilityIdx = header.indexOf(reportDate)
+
+      let lastFacility = ''
+      const imported = []
+      matrix.slice(headerRowIndex + 1).forEach(row => {
+        const material = String(row[materialIdx] || '').trim()
+        if (!material) return
+        const facilityCell = facilityIdx >= 0 ? String(row[facilityIdx] || '').trim() : ''
+        if (facilityCell) lastFacility = facilityCell
+        imported.push({
+          importedAt:new Date().toISOString(),
+          fileName:file.name,
+          reportDate,
+          material,
+          facility:lastFacility,
+          line:lineIdx >= 0 ? String(row[lineIdx] || '').trim() : '',
+          description:descIdx >= 0 ? String(row[descIdx] || '').trim() : '',
+          batch:batchIdx >= 0 ? String(row[batchIdx] || '').trim() : '',
+          machineStatus:machineIdx >= 0 ? String(row[machineIdx] || '').trim() : '',
+          quantity:qtyIdx >= 0 ? num(row[qtyIdx]) : 0,
+          facilityTotal:totalIdx >= 0 ? num(row[totalIdx]) : 0,
+          notes:notesIdx >= 0 ? String(row[notesIdx] || '').trim() : '',
+        })
+      })
+      if (!imported.length) throw new Error('לא נמצאו רשומות להחזרה לאפליקציה')
+      setDailyReportHistory(current => [...current, ...imported])
+      setStatus(`הדוח הערוך נטען חזרה: ${fmt(imported.length)} רשומות נשמרו בהיסטוריה המקומית`)
+    } catch (error) {
+      console.error(error)
+      setStatus(`טעינת הדוח הערוך נכשלה: ${error?.message || 'שגיאה לא ידועה'}`)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const exportWorkbook = () => {
@@ -2128,12 +2560,12 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const totals = productionRows.reduce((m,r) => { const f=String(r.facility||'—'); m.set(f,(m.get(f)||0)+num(r.qty)); return m }, new Map())
     const summaryRows = [...totals.entries()].sort((a,b)=>facilitySortDesc({facility:a[0]},{facility:b[0]})).map(([facility,total]) => ({ __facility:facility, Facility:facility, Records:productionRows.filter(r=>String(r.facility||'—')===facility).length, TotalQuantity:total }))
     exportStyledExcel([
-      { name:'Production', columns:[['Date','תאריך'],['Time','שעה'],['Facility','מתקן'],['FacilityTotal','סה״כ מתקן'],['Order','הזמנה'],['Batch','Batch'],['Material','מק״ט חומר'],['Description','תיאור חומר'],['RoutingGroup','מתקן / תחנה'],['Quantity','כמות']].map(([key,label])=>({key,label})), rows:productionRows.map(r=>({ __facility:String(r.facility||'—'), Date:iso(r.date), Time:r.date?r.date.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'', Facility:r.facility, FacilityTotal:totals.get(String(r.facility||'—'))||0, Order:r.order, Batch:r.batch, Material:r.material, Description:r.desc, RoutingGroup:r.routingGroup, Quantity:r.qty })) },
+      { name:'Production', columns:[['Date','תאריך'],['Time','שעה'],['Facility','מתקן'],['FacilityTotal','סה״כ מתקן'],['Order','הזמנה'],['Batch','Batch'],['Material','מק״ט חומר'],['Description','תיאור חומר'],['RoutingGroup','מתקן / תחנה'],['Quantity','כמות'],['GroupTotal','סה״כ']].map(([key,label])=>({key,label})), rows:productionRows.map((r,index,rows)=>{ const facility=String(r.facility||'—'); const firstInFacility=index===0 || String(rows[index-1]?.facility||'—')!==facility; return { __facility:facility, Date:iso(r.date), Time:r.date?r.date.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'', Facility:r.facility, FacilityTotal:totals.get(facility)||0, Order:r.order, Batch:r.batch, Material:r.material, Description:r.desc, RoutingGroup:r.routingGroup, Quantity:r.qty, GroupTotal:firstInFacility ? (totals.get(facility)||0) : '' } }) },
       { name:'סיכום מתקנים', columns:[{key:'Facility',label:'מתקן'},{key:'Records',label:'מספר רשומות'},{key:'TotalQuantity',label:'סה״כ כמות'}], rows:summaryRows },
       { name:'Planning', columns:[{key:'Month',label:'Month'},{key:'Facility',label:'Facility'},{key:'Station',label:'Station'},{key:'MonthlyTarget',label:'Monthly Target'},{key:'Actual',label:'Actual'},{key:'Remaining',label:'Remaining'},{key:'Forecast',label:'Forecast'},{key:'Status',label:'Status'}], rows:planningRows.map(r=>({__facility:String(r.facility||'—'),Month:planningMonth,Facility:r.facility,Station:r.station,MonthlyTarget:r.target,Actual:r.actual,Remaining:r.remaining,Forecast:r.forecast,Status:r.label})) },
       { name:'Quality', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'InspectionLot',label:'Inspection Lot'},{key:'Order',label:'Order'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'}], rows:qualityBad.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,InspectionLot:r.inspectionLot,Order:r.order,Batch:r.batch,Material:r.material,Status:r.status})) },
       { name:'Deviations', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'},{key:'Remarks',label:'Remarks'}], rows:openDeviations.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,Batch:r.batch,Material:r.material,Status:r.status,Remarks:r.remarks})) }
-    ], `IML_Facility_Report_${new Date().toISOString().slice(0,10)}.xls`)
+    ], `IML_Facility_Report_${new Date().toISOString().slice(0,10)}.xls`, productionRows)
   }
 
   const downloadTargetWorkbook = async () => {
@@ -2188,10 +2620,25 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const popup = window.open('', '_blank', 'width=1400,height=900')
     if (!popup) { setStatus('הדפדפן חסם חלון הדפסה. יש לאפשר חלונות קופצים לאתר.'); return }
     const esc = value => String(value ?? '').replace(/[&<>\"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]))
-    const bodyRows = rows.map((row, index) => `<tr class="${esc(row._state || '')}"><td class="index">${index+1}</td>${headers.map(h => `<td>${esc(row[h.key])}</td>`).join('')}</tr>`).join('')
+    const facilityRows = rows.filter(row => row._facility)
+    const facilityIds = [...new Set(facilityRows.map(row => String(row._facility)))]
+    const showFacilityColors = facilityIds.length > 1
+    const facilitySummary = facilityIds.map(facility => {
+      const group = facilityRows.filter(row => String(row._facility) === facility)
+      const hasQty = group.some(row => Number.isFinite(Number(row._qtyRaw)))
+      const qty = group.reduce((sum, row) => sum + (Number.isFinite(Number(row._qtyRaw)) ? Number(row._qtyRaw) : 0), 0)
+      return { facility, count: group.length, qty, hasQty, color: facilityColorFor(facility) }
+    }).sort((a,b) => String(b.facility).localeCompare(String(a.facility), 'he', {numeric:true}))
+    const facilitySummaryHtml = showFacilityColors ? `<div class="facility-summary">${facilitySummary.map(item => `<div class="facility-chip" style="background:${item.color};border-color:${item.color}"><b>מתקן ${esc(item.facility)}</b><span>${item.hasQty ? `סה״כ ${esc(fmt(item.qty))}` : `${item.count} רשומות`}</span></div>`).join('')}</div>` : ''
+    const bodyRows = rows.map((row, index) => {
+      const facility = row._facility ? String(row._facility) : ''
+      const colorStyle = showFacilityColors && facility ? ` style="--facility-bg:${facilityColorFor(facility)}"` : ''
+      const facilityClass = showFacilityColors && facility ? ' facility-row' : ''
+      return `<tr class="${esc(row._state || '')}${facilityClass}"${colorStyle}><td class="index">${index+1}</td>${headers.map(h => `<td>${esc(row[h.key])}</td>`).join('')}</tr>`
+    }).join('')
     popup.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
-      @page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,"Segoe UI",sans-serif;color:#16324a;margin:0;background:#f4f8fb}.sheet{background:white;padding:22px}.head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #159b83;padding-bottom:14px;margin-bottom:18px}.head h1{margin:0;font-size:28px}.head p{margin:5px 0 0;color:#64748b}.brand{font-weight:800;color:#159b83;font-size:19px}.summary{display:flex;gap:10px;margin:0 0 16px;flex-wrap:wrap}.chip{background:#eaf7f3;border:1px solid #c7eadf;padding:8px 12px;border-radius:12px;font-weight:700}table{width:100%;border-collapse:separate;border-spacing:0;font-size:11px;overflow:hidden;border:1px solid #dbe5ec;border-radius:12px}th{background:#173b57;color:white;padding:9px 6px}td{padding:8px 6px;border-bottom:1px solid #e6edf2;text-align:center}tr:nth-child(even) td{background:#f8fbfd}tr.good td,tr.achieved td{background:#effaf5}tr.warning td{background:#fff8e6}tr.risk td{background:#fff0f0}.index{font-weight:700;color:#64748b}.footer{margin-top:12px;color:#64748b;font-size:10px}@media print{body{background:white}.sheet{padding:0}.no-print{display:none}}
-    </style></head><body><div class="sheet"><div class="head"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="brand">IML CONTROL</div></div><div class="summary"><div class="chip">חודש: ${esc(planningMonth || '—')}</div><div class="chip">תאריך הדפסה: ${esc(new Date().toLocaleString('he-IL'))}</div><div class="chip">רשומות: ${rows.length}</div></div><table><thead><tr><th>#</th>${headers.map(h=>`<th>${esc(h.label)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table><div class="footer">דוח ניהולי — IML CONTROL</div></div><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`)
+      @page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,"Segoe UI",sans-serif;color:#16324a;margin:0;background:#f4f8fb}.sheet{background:white;padding:22px}.head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #159b83;padding-bottom:14px;margin-bottom:18px}.head h1{margin:0;font-size:28px}.head p{margin:5px 0 0;color:#64748b}.brand{font-weight:800;color:#159b83;font-size:19px}.summary{display:flex;gap:10px;margin:0 0 12px;flex-wrap:wrap}.chip{background:#eaf7f3;border:1px solid #c7eadf;padding:8px 12px;border-radius:12px;font-weight:700}.facility-summary{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}.facility-chip{display:flex;gap:8px;align-items:center;border:1px solid;padding:8px 12px;border-radius:12px}.facility-chip b{font-size:12px}.facility-chip span{font-size:11px;font-weight:700}.facility-row td{background:var(--facility-bg)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}table{width:100%;border-collapse:separate;border-spacing:0;font-size:11px;overflow:hidden;border:1px solid #dbe5ec;border-radius:12px}th{background:#173b57;color:white;padding:9px 6px}td{padding:8px 6px;border-bottom:1px solid #e6edf2;text-align:center}tr:nth-child(even) td{background:#f8fbfd}tr.good td,tr.achieved td{background:#effaf5}tr.warning td{background:#fff8e6}tr.risk td{background:#fff0f0}.index{font-weight:700;color:#64748b}.footer{margin-top:12px;color:#64748b;font-size:10px}@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}body{background:white}.sheet{padding:0}.no-print{display:none}}
+    </style></head><body><div class="sheet"><div class="head"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="brand">IML CONTROL</div></div><div class="summary"><div class="chip">חודש: ${esc(planningMonth || '—')}</div><div class="chip">תאריך הדפסה: ${esc(new Date().toLocaleString('he-IL'))}</div><div class="chip">רשומות: ${rows.length}</div></div>${facilitySummaryHtml}<table><thead><tr><th>#</th>${headers.map(h=>`<th>${esc(h.label)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table><div class="footer">דוח ניהולי — IML CONTROL</div></div><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`)
     popup.document.close()
   }
 
@@ -2206,7 +2653,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       {key:'remaining',label:'נותר'},{key:'days',label:'ימים נותרו'},{key:'required',label:'נדרש ליום'},
       {key:'avg7',label:'ממוצע 7 ימים'},{key:'forecast',label:'תחזית'},{key:'status',label:'סטטוס'}
     ],
-    planningRows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:planningDisplayStation(r),line:r.lineName||r.routingGroup||'—',target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),days:r.remainingWorkdays,required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),forecast:fmt(r.forecast),status:r.label}))
+    dailyPlanningRows.map(r => ({_state:r.state,resource:r.resource||r.facility,station:planningDisplayStation(r),line:r.lineName||r.routingGroup||'—',target:fmt(r.target),actual:fmt(r.actual),pct:pctFmt(r.pct),remaining:fmt(r.remaining),days:r.remainingWorkdays,required:fmt(r.requiredDaily),avg7:fmt(r.recentAverage),forecast:fmt(r.forecast),status:r.label}))
   )
 
 
@@ -2234,7 +2681,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const rows = facilityStats.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.id))
     openPrintReport('ביצועים לפי מתקן בטווח המסונן', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'}`, [
       {key:'facility',label:'מתקן'},{key:'qty',label:'כמות'},{key:'orders',label:'Orders'},{key:'batches',label:'מנות'}
-    ], rows.map(r => ({facility:r.id,qty:fmt(r.actual),orders:r.orders||0,batches:new Set(baseFiltered.filter(x => x.facility === r.id).map(x => x.batch).filter(Boolean)).size})))
+    ], rows.map(r => ({_facility:r.id,_qtyRaw:num(r.actual),facility:r.id,qty:fmt(r.actual),orders:r.orders||0,batches:new Set(baseFiltered.filter(x => x.facility === r.id).map(x => x.batch).filter(Boolean)).size})))
   }
   const printRecentProduction = () => {
     const rows = sortedRecentProduction.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility))
@@ -2248,7 +2695,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     openPrintReport('רשומות תפוקה אחרונות', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'} · ${weighingSummary}`, [
       {key:'date',label:'תאריך'},{key:'ud',label:'החלטת שימוש (UD)'},{key:'facility',label:'משאב יעד'},{key:'routing',label:'מתקן / תחנה'},
       {key:'order',label:'הזמנה'},{key:'batch',label:'Batch'},{key:'material',label:'מק״ט חומר'},{key:'desc',label:'תיאור חומר'},{key:'planned',label:'כמות מתוכננת'},{key:'qty',label:'כמות בפועל'},{key:'gap',label:'פער'}
-    ], rows.map(r => ({date:iso(r.date),ud:productionUsageDecision(r),facility:r.facility,routing:r.routingGroup||'—',order:r.order||'—',batch:r.batch||'—',material:r.material||'—',desc:r.desc||'—',planned:r.plannedQty?fmt(r.plannedQty):'—',qty:fmt(r.qty),gap:r.plannedQty?fmt(num(r.qty)-num(r.plannedQty)):'—'})))
+    ], rows.map(r => ({_facility:r.facility,_qtyRaw:num(r.qty),date:iso(r.date),ud:productionUsageDecision(r),facility:r.facility,routing:r.routingGroup||'—',order:r.order||'—',batch:r.batch||'—',material:r.material||'—',desc:r.desc||'—',planned:r.plannedQty?fmt(r.plannedQty):'—',qty:fmt(r.qty),gap:r.plannedQty?fmt(num(r.qty)-num(r.plannedQty)):'—'})))
   }
 
   const printMonthlyTargets = () => {
@@ -2312,11 +2759,17 @@ console.log("QUALITY =", qualityForBatchMaterial)
     }, 80)
   }
 
+  const updateBanner = availableUpdate ? <div role="alert" style={{margin:'10px 18px',padding:'12px 16px',borderRadius:12,background:'#fff3cd',border:'1px solid #f0c36d',display:'flex',alignItems:'center',justifyContent:'space-between',gap:14,boxShadow:'0 4px 14px rgba(15,35,55,.08)',direction:'rtl'}}>
+    <div style={{display:'flex',alignItems:'center',gap:10}}><RefreshCw size={19}/><div><strong style={{display:'block'}}>קיים עדכון חדש ל-IML CONTROL</strong><small>{availableUpdate.version && availableUpdate.version !== 'חדשה' ? `גרסה חדשה ${availableUpdate.version} · ` : ''}נמצא Build חדש בשרת · נדרש רענון אפליקציה</small></div></div>
+    <button type="button" onClick={refreshApplication} style={{border:0,borderRadius:9,padding:'9px 15px',fontWeight:800,cursor:'pointer',background:'#0f8f7d',color:'#fff',whiteSpace:'nowrap'}}>רענן עכשיו</button>
+  </div> : null
+
   if (showHome) return <div className="command-home" dir="rtl">
     <header className="command-home-header">
-      <div className="command-home-brand"><img src="/icons/mark-128.png" alt="IML"/><div><strong>חדר בקרה — מתקני אריזה</strong><span>COMMAND CENTER</span></div></div>
-      <div className="command-home-user"><Home size={19}/><b>דף ראשי</b><span></span><div><strong>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</strong><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></div></div>
+      <div className="command-home-brand"><img src="/icons/adama-mark-128.png" alt="IML"/><div><strong>חדר בקרה — מתקני אריזה</strong><span>COMMAND CENTER</span></div></div>
+      <button type="button" className="command-home-sound-toggle" data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילים' : 'הפעלת צלילים'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}</button><div className="command-home-user"><Home size={19}/><b>דף ראשי</b><span></span><div><strong>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</strong><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></div></div>
     </header>
+    {updateBanner}
     <main className="command-home-main">
       <section className="command-home-status">
         <article><div className={`home-status-icon cloud ${cloudState.mode}`}><Cloud/></div><span>מצב מערכת</span><b>{cloudState.mode === 'cloud' ? 'מחובר לענן' : cloudState.mode === 'connecting' ? 'מתחבר...' : 'מצב מקומי'}</b><small>{cloudState.lastSync ? `עדכון אחרון ${new Date(cloudState.lastSync).toLocaleString('he-IL')}` : 'ממתין לסנכרון'}</small></article>
@@ -2344,14 +2797,15 @@ console.log("QUALITY =", qualityForBatchMaterial)
   return <div className={`dashboard ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${managementMode ? 'management-mode' : ''}`} dir="rtl">
     <aside className="side filter-side">
       <button type="button" className="side-collapse-button" onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'פתיחת מסננים' : 'כיווץ מסננים'}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}</button>
-      <div className="brand branded"><img src="/icons/mark-128.png" alt="IML"/><div>IML<span>CONTROL</span></div></div>
+      <div className="brand branded"><img src="/icons/adama-mark-128.png" alt="IML"/><div>IML<span>CONTROL</span></div></div>
       <div className="side-filter-title"><Search size={18}/><strong>חיפוש וסינון</strong></div>
       <label className="side-field"><span>Quick Search</span><div><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Order, Batch, חומר..."/></div></label>
       <label className="side-field"><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
       <label className="side-field"><span>מתאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => { setFrom(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
       <label className="side-field"><span>עד תאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => { setTo(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
-      <div className="side-field facility-multi-field"><span>מתקנים</span><button type="button" className={`facility-multi-trigger ${selectedFacilities.length ? 'active' : ''}`} onClick={() => setFacilityPickerOpen(v => !v)}><Factory size={16}/><b>{selectedFacilities.length ? `${selectedFacilities.length} מתקנים נבחרו` : 'כל המתקנים'}</b><span>⌄</span></button>{facilityPickerOpen && <div className="facility-multi-menu"><div className="facility-multi-menu-head"><strong>בחירת מתקנים</strong><button type="button" onClick={() => setSelectedFacilities([])}>נקה הכול</button></div>{facilities.map(id => <label key={id}><input type="checkbox" checked={selectedFacilities.includes(id)} onChange={() => toggleFacility(id)}/><span>{id}</span></label>)}</div>}</div>
+      <div className="side-field facility-multi-field"><span>מתקנים</span><button type="button" className={`facility-multi-trigger ${selectedFacilities.length ? 'active' : ''}`} onClick={() => setFacilityPickerOpen(v => !v)}><Factory size={16}/><b>{selectedFacilities.length ? `${selectedFacilities.length} מתקנים נבחרו` : 'לא נבחר מתקן'}</b><span>⌄</span></button>{facilityPickerOpen && <div className="facility-multi-menu"><div className="facility-multi-menu-head"><strong>בחירת מתקנים</strong><button type="button" onClick={() => setSelectedFacilities([])}>נקה הכול</button></div>{facilities.map(id => <label key={id}><input type="checkbox" checked={selectedFacilities.includes(id)} onChange={() => toggleFacility(id)}/><span>{id}</span></label>)}</div>}</div>
       <div className="side-quick-ranges"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(30)}>30 יום</button></div>
+      <button className={`side-clear ${showDataCenter ? 'active' : ''}`} type="button" onClick={() => { if (!canManageData) { sessionStorage.setItem('iml-open-data-center-after-login','1'); onRequestAdminLogin?.(); return } setShowDataCenter(v => !v); window.setTimeout(() => document.getElementById('data-center-section')?.scrollIntoView({behavior:'smooth', block:'start'}), 60) }}><Database size={16}/> מרכז נתונים</button>
       <button className="side-clear" onClick={() => { setFrom(''); setTo(''); setQuery(''); setSelectedFacilities([]); setPeriodYear(''); setPeriodQuarter('') }}><X size={16}/> ניקוי מסננים</button>
       <div className="side-live-stats"><div><Database/><span><b>{fmt(production.length)}</b><small>תפוקה</small></span></div><div><FlaskConical/><span><b>{fmt(quality.length + deviations.length)}</b><small>איכות</small></span></div></div>
       <div className="side-note">{BUILD_LABEL} · {userRole === 'admin' ? 'Admin' : userRole === 'manager' ? 'Manager' : 'Viewer'}</div>
@@ -2365,15 +2819,25 @@ console.log("QUALITY =", qualityForBatchMaterial)
             <button type="button" className="action ui-control" onClick={() => setSidebarCollapsed(v => !v)}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}<span>{sidebarCollapsed ? 'פתח מסננים' : 'כווץ מסננים'}</span></button>
             <button type="button" className={`action ui-control ${managementMode ? 'active' : ''}`} onClick={() => setManagementMode(v => !v)}>{managementMode ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}<span>{managementMode ? 'יציאה ממצב ניהולי' : 'מצב ניהולי'}</span></button>
           </div>
-          <div className="user-session"><img className="user-brand-avatar" src="/icons/mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
+          <button type="button" className={`action ui-control ${uiSoundsEnabled ? 'active' : ''}`} data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילי ממשק' : 'הפעלת צלילי ממשק'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}<span>{uiSoundsEnabled ? 'צלילים פעילים' : 'צלילים כבויים'}</span></button><div className="user-session"><img className="user-brand-avatar" src="/icons/adama-mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
           <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת תבנית יעדים</button>
+          <div className="daily-event-export-controls" style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
+            <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,fontWeight:700}}><input type="checkbox" checked={dailyEventEnabled} onChange={e=>setDailyEventEnabled(e.target.checked)}/> הוספת אירוע</label>
+            {dailyEventEnabled && <>
+              <select value={dailyEventType} onChange={e=>setDailyEventType(e.target.value)} style={{height:36,borderRadius:9}}><option value="">סוג אירוע</option><option>בטיחות</option><option>איכות</option><option>סביבה</option></select>
+              <select value={dailyEventFacility} onChange={e=>setDailyEventFacility(e.target.value)} style={{height:36,borderRadius:9}}><option value="">בחר מתקן</option>{(selectedFacilities.length ? selectedFacilities : facilities).map(id=><option key={id} value={id}>{id}</option>)}</select>
+              <input value={dailyEventText} onChange={e=>setDailyEventText(e.target.value)} placeholder="תיאור האירוע..." style={{height:36,borderRadius:9,border:'1px solid #cbd5e1',padding:'0 9px',minWidth:190}}/>
+            </>}
+          </div>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
+          <label className={`action secondary ${busy ? 'disabled' : ''}`} style={{cursor:'pointer'}}><Upload size={18}/> טעינת דוח ערוך<input type="file" accept=".xls,.xlsx" hidden disabled={busy} onChange={e=>{const file=e.target.files?.[0]; if(file) handleDailyReportRoundtripFile(file); e.target.value=''}}/></label>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
           {canManageData ? <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label> : <button className="action upload" type="button" onClick={onRequestAdminLogin}><Upload size={19}/> טעינת Excel</button>}
           {canManageData ? <button className="action secondary" onClick={onSignOut}><LogOut size={18}/> יציאת מנהל</button> : <button className="action secondary" onClick={onRequestAdminLogin}><ShieldCheck size={18}/> כניסת מנהל</button>}
         </div>
       </header>
+      {updateBanner}
 
       <section className="top-status-bar" aria-label="סטטוס מערכת">
         <div className={`top-status-item cloud ${cloudState.mode}`}><span className="status-dot"></span><small>ענן</small><b>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר' : 'מקומי'}</b></div>
@@ -2424,19 +2888,20 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>
 
       <section className="tower-facility-section">
-        <div className="panel-head facility-panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><div className="facility-head-actions">{facilityViewFilters}<span>{visibleControlTowerFacilities.length} מתקנים במעקב</span><button type="button" className="section-print-btn" onClick={printFacilityOverview}><Printer size={16}/> הדפסה</button><button type="button" className="section-toggle" onClick={() => setShowFacilityOverview(v => !v)}>{showFacilityOverview ? 'הסתר' : 'הצג'}</button></div></div>
-        {showFacilityOverview && <div className="tower-facility-grid">
-          <Facility42BalanceOverviewCard balance={facility42Balance} onClick={() => jumpToDetails('bulk-balance')}/>
-          <Facility19BalanceOverviewCard balance={facility19Balance} onClick={() => jumpToDetails('bulk-balance-19')}/>
-          {visibleControlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => setSelectedResource(row)}>
+        <div className="panel-head facility-panel-head"><div><Factory/><h2>סקירת מתקנים</h2></div><div className="facility-head-actions">{facilityViewFilters}<span>{selectedControlTowerFacilities.length} מתקנים נבחרים</span><button type="button" className="section-print-btn" onClick={printFacilityOverview}><Printer size={16}/> הדפסה</button><button type="button" className="section-toggle" onClick={() => setShowFacilityOverview(v => !v)}>{showFacilityOverview ? 'הסתר' : 'הצג'}</button></div></div>
+        {showFacilityOverview && selectedFacilities.length > 0 && <div className="tower-facility-grid">
+          {selectedFacilities.includes('1542') && <Facility42BalanceOverviewCard balance={facility42Balance} onClick={() => jumpToDetails('bulk-balance')}/>}
+          {selectedFacilities.includes('1519') && <Facility19BalanceOverviewCard balance={facility19Balance} onClick={() => jumpToDetails('bulk-balance-19')}/>}
+          {selectedControlTowerFacilities.map(row => <button key={row.facility} className={`tower-facility-card ${row.state}`} onClick={() => setSelectedResource(row)}>
             <div className="tower-facility-head"><div><i></i><strong>{row.facility}</strong></div><span>{row.state === 'good' ? 'תקין' : row.state === 'warning' ? 'דורש תשומת לב' : row.state === 'risk' ? 'בסיכון' : 'ללא יעד'}</span></div>
             <div className="tower-health"><div><HeartPulse/><span>Health Score</span></div><b>{row.healthScore}<small>/100</small></b></div>
             <div className="tower-progress"><i style={{width:`${Math.min(100,row.actualPct)}%`}}/></div>
             <dl><div><dt>יעד חודשי</dt><dd>{fmt(row.target)}</dd></div><div><dt>בוצע</dt><dd>{fmt(row.actual)}</dd></div><div><dt>תחזית</dt><dd>{fmt(row.forecast)}</dd></div><div><dt>פער צפוי</dt><dd className={row.gap >= 0 ? 'positive' : 'negative'}>{row.gap >= 0 ? '+' : ''}{fmt(row.gap)}</dd></div><div><dt>קצב נדרש</dt><dd>{fmt(row.requiredDaily)}</dd></div><div><dt>חריגות פתוחות</dt><dd>{row.deviationsCount}</dd></div></dl>
             <span className="tower-enter">לפרטים מלאים <ArrowLeft size={16}/></span>
           </button>)}
-          {!visibleControlTowerFacilities.length && <div className="empty wide-empty">אין מתקנים התואמים למסנן התצוגה.</div>}
+          {!selectedControlTowerFacilities.length && !selectedFacilities.includes('1542') && !selectedFacilities.includes('1519') && <div className="empty wide-empty">אין נתונים למתקנים שנבחרו.</div>}
         </div>}
+        {showFacilityOverview && !selectedFacilities.length && <div className="empty wide-empty">בחר מתקן בתפריט חיפוש וסינון להצגת סקירת מתקנים.</div>}
       </section>
 
       <section className="tower-lower-grid">
@@ -2444,7 +2909,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <article className="tower-chart-card"><div className="panel-head"><div><BarChart3/><h2>ביצוע יומי — 7 ימים אחרונים</h2></div><span>{planningMonth}</span></div><div className="tower-mini-chart">{controlTowerTrend.map(([day,value])=>{const max=Math.max(1,...controlTowerTrend.map(x=>x[1])); return <div key={day}><b>{fmt(value)}</b><span><i style={{height:`${Math.max(8,value/max*100)}%`}}/></span><small>{day.slice(5)}</small></div>})}{!controlTowerTrend.length&&<div className="empty">אין נתונים להצגת מגמה</div>}</div></article>
       </section>
 
-      <section className="data-center">
+      {showDataCenter && <section className="data-center" id="data-center-section">
         <div className="panel-head"><div><ShieldCheck/><h2>מרכז נתונים</h2></div><span>4 מקורות מידע</span></div>
         <p className="data-center-help">כל קובץ נבדק בדפדפן ולאחר מכן נשמר ב־Supabase. מרגע שהטעינה מסתיימת, אותו מידע זמין לכל המשתמשים המחוברים.</p>
         <div className="data-source-grid">
@@ -2453,7 +2918,12 @@ console.log("QUALITY =", qualityForBatchMaterial)
           <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
           <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')} canManage={canManageData}/>
         </div>
-      </section>
+      </section>}
+
+      {!!dailyReportHistory.length && <section className="details" id="daily-report-history-section">
+        <div className="details-title-row"><div><h2>היסטוריית דוחות יומיים שהוחזרו לאפליקציה</h2><p className="details-note">סיכום חודשי לפי מתקן מתוך דוחות Excel שנערכו ידנית ונטענו חזרה.</p></div><span className="production-record-count">{dailyReportHistory.length} רשומות</span></div>
+        <div className="table-wrap"><table><thead><tr><th>חודש</th><th>מתקן</th><th>דוחות</th><th>רשומות</th><th>סה״כ תפוקה</th><th>סטטוס מכונה</th><th>הערות</th></tr></thead><tbody>{monthlyDailyReportHistory.map(row=><tr key={`${row.month}-${row.facility}`}><td>{row.month}</td><td>{row.facility}</td><td>{row.reports}</td><td>{row.rows}</td><td>{fmt(row.quantity)}</td><td>{row.machineStatuses}</td><td>{row.notes}</td></tr>)}</tbody></table></div>
+      </section>}
 
       <section className="planning-toolbar">
         <div><Target/><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></div>
@@ -2503,26 +2973,32 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>
 
       <div className="section-title facility-title"><div className="section-title-text"><Gauge/><div><h2>תחזית חודשית לפי מתקן</h2><p>יעד חודשי, קצב נדרש, קצב אחרון, שיא מוכח ותחזית</p></div></div><div className="facility-head-actions">{facilityViewFilters}<button type="button" className="section-print-btn" onClick={printMonthlyForecast}><Printer size={16}/> הדפסה</button><button type="button" className="section-toggle" onClick={() => setShowMonthlyForecast(v => !v)}>{showMonthlyForecast ? 'הסתר' : 'הצג'}</button><button className="select-all-facilities" onClick={toggleAllFacilities}><CheckCircle2 size={17}/>{allFacilitiesSelected ? 'ביטול בחירת הכול' : 'בחירת כל המתקנים'}</button></div></div>
-      {showMonthlyForecast && <section className="forecast-grid" id="planning-section">
-        <Facility42BalanceCard balance={facility42Balance}/>
-        <Facility19BalanceCard balance={facility19Balance}/>
-        {visiblePlanningRows.map(row => <ForecastCard key={row.id} {...row} selected={(row.facilities || [row.facility]).some(id => selectedFacilities.includes(id))} onClick={() => setSelectedFacilities(row.facilities || [row.facility])}/>) }
-        {!visiblePlanningRows.length && <div className="empty wide-empty">אין מתקנים התואמים למסנן התצוגה.</div>}
+      {showMonthlyForecast && selectedFacilities.length > 0 && <section className="forecast-grid" id="planning-section">
+        {selectedFacilities.includes('1542') && <Facility42BalanceCard balance={facility42Balance}/>}
+        {selectedFacilities.includes('1519') && <Facility19BalanceCard balance={facility19Balance}/>}
+        {selectedForecastRows.map(row => <ForecastCard key={row.id} {...row} selected={(row.facilities || [row.facility]).some(id => selectedFacilities.includes(id))} onClick={() => setSelectedFacilities(row.facilities || [row.facility])}/>) }
+        {!selectedForecastRows.length && !selectedFacilities.includes('1542') && !selectedFacilities.includes('1519') && <div className="empty wide-empty">אין נתוני תחזית למתקנים שנבחרו.</div>}
       </section>}
+      {showMonthlyForecast && !selectedFacilities.length && <div className="empty wide-empty">בחר מתקן להצגת תחזית חודשית.</div>}
 
       <section className="alert-panel" id="alerts-section">
         <div className="panel-head"><div><BellRing/><h2>מה דורש תשומת לב היום?</h2></div><span>{alerts.length} התראות</span></div>
         <div className="alert-list">
           {alerts.map(r => <div className={`alert-item ${r.state}`} key={r.id}><div className="alert-symbol">{r.state === 'risk' ? '!' : '⚠'}</div><div><strong>{planningName(r)} — {r.label}</strong><p>{r.state === 'risk' ? `נדרש ${fmt(r.requiredDaily)} ליום, אך השיא המוכח הוא ${fmt(r.provenMax)}.` : `התחזית היא ${fmt(r.forecast)} מול יעד ${fmt(r.target)}. נדרש קצב של ${fmt(r.requiredDaily)} ליום.`}</p></div></div>)}
-          {!alerts.length && <div className="empty">אין התראות תכנון לחודש הנבחר.</div>}
+          {!alerts.length && <div className="empty">{selectedFacilities.length ? 'אין התראות למתקנים שנבחרו.' : 'בחר מתקן להצגת הערות והתראות.'}</div>}
         </div>
       </section>
 
       <section className="daily-management" id="daily-management-section">
-        <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!planningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
+        <div className="panel-head"><div><CalendarCheck/><h2>Daily Management</h2></div><div className="daily-print-actions"><span>{planningMonth}</span><button type="button" className="action secondary daily-print-btn" onClick={printDailyManagement} disabled={!dailyPlanningRows.length}><Printer size={17}/> הדפסה צבעונית</button></div></div>
+        <div className="extra-facilities">
+          <div><Factory size={18}/><strong>מתקנים ב-Daily Management</strong><span>מתקני הליבה מוצגים תמיד. תחנות 11 אינן מוצגות כברירת מחדל, אך זמינות להוספה ידנית יחד עם כל מתקן נוסף שמופיע בנתונים.</span></div>
+          <div className="extra-facility-actions"><select value={dailyFacilityToAdd} onChange={e => setDailyFacilityToAdd(e.target.value)}><option value="">בחר מתקן נוסף</option>{dailyOptionalFacilities.map(id => <option key={id} value={id}>{id}</option>)}</select><button onClick={addDailyFacility} disabled={!dailyFacilityToAdd}>+ הוסף מתקן</button></div>
+          {!!dailyAdditionalFacilities.length && <div className="extra-facility-chips">{dailyAdditionalFacilities.map(id => <button key={id} onClick={() => removeDailyFacility(id)}>{id}<X size={14}/></button>)}</div>}
+        </div>
         <div className="table-wrap"><table><thead><tr><th>משאב יעד</th><th>מתקן / תחנה</th><th>תחנה / קו</th><th>פעילות</th><th>יעד חודשי</th><th>בפועל</th><th>% ביצוע</th><th>נותר</th><th>ימים נותרו</th><th>נדרש ליום</th><th>ממוצע 7 ימים</th><th>שיא מוכח</th><th>תחזית</th><th>סטטוס</th></tr></thead><tbody>
-          {visiblePlanningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{planningDisplayStation(r)}</td><td>{[planningDisplayStation(r), r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
-          {!visiblePlanningRows.length && <tr><td colSpan="14" className="empty">אין מתקנים התואמים למסנן התצוגה</td></tr>}
+          {dailyPlanningRows.map(r => <tr key={r.id}><td><b>{r.resource || r.facility}</b></td><td>{planningDisplayStation(r)}</td><td>{[planningDisplayStation(r), r.lineName].filter(Boolean).join(' · ') || '—'}</td><td>{r.activity}</td><td>{fmt(r.target)}</td><td>{fmt(r.actual)}</td><td>{pctFmt(r.pct)}</td><td>{fmt(r.remaining)}</td><td>{r.remainingWorkdays}</td><td>{fmt(r.requiredDaily)}</td><td>{fmt(r.recentAverage)}</td><td>{fmt(r.provenMax)}</td><td>{fmt(r.forecast)}</td><td><StatusBadge state={r.state} label={r.label}/></td></tr>)}
+          {!dailyPlanningRows.length && <tr><td colSpan="14" className="empty">אין נתוני Daily Management למתקנים שנבחרו</td></tr>}
         </tbody></table></div>
       </section>
 
@@ -2532,7 +3008,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>
 
       <div className="section-title facility-title"><div className="section-title-text"><Factory/><div><h2>ביצועים לפי מתקן בטווח המסונן</h2><p>לחיצה על כרטיס מסננת תפוקה, איכות וחריגות</p></div></div><button type="button" className="section-print-btn" onClick={printFacilityPerformance}><Printer size={16}/> הדפסה</button></div>
-      <section className="facility-grid">{facilityStats.map(x => <Facility key={x.id} {...x} selected={selectedFacilities.includes(x.id)} onClick={() => toggleFacility(x.id)}/>)}</section>
+      <section className="facility-grid">{selectedFacilityStats.map(x => <Facility key={x.id} {...x} selected={selectedFacilities.includes(x.id)} onClick={() => toggleFacility(x.id)}/>) }{!selectedFacilities.length && <div className="empty wide-empty">בחר מתקן להצגת ביצועים בטווח המסונן.</div>}</section>
 
       <section className="tabs" id="details-section">
         <button className={activeTab === 'production' ? 'active' : ''} onClick={() => setActiveTab('production')}><BarChart3 size={16}/> תפוקה</button>
@@ -2545,15 +3021,16 @@ console.log("QUALITY =", qualityForBatchMaterial)
         {canManageData && <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => setActiveTab('mapping-center')}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>}
       </section>
       {activeTab === 'bulk-balance' && <section className="details facility42-balance">
-        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 42</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: תחנה 1142 ותיאור המכיל 999. תפוקה: כל האריזות 1, 5, 10/20 ליטר במתקן 42.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
+        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 42</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: תחנה 1142 ותיאור המכיל 999. תפוקה: כל האריזות 1, 5, 10/20 ליטר במתקן 42. שאריות: דיווחי 200/1000 ליטר בתחנה 1542.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
         <div className="balance-kpi-grid">
           <article><span>באלק שיוצר</span><b>{fmt(facility42Balance.bulk)}</b><small>ליטר · {facility42Balance.bulkRows.length} רשומות</small></article>
           <article><span>אריזה 1 ליטר</span><b>{fmt(facility42Balance.byLine['1L'])}</b><small>ליטר</small></article>
           <article><span>אריזה 5 ליטר</span><b>{fmt(facility42Balance.byLine['5L'])}</b><small>ליטר</small></article>
           <article><span>אריזה 10/20 ליטר</span><b>{fmt(facility42Balance.byLine['10/20L'])}</b><small>ליטר</small></article>
           <article className="balance-total"><span>סה״כ נארז</span><b>{fmt(facility42Balance.packed)}</b><small>ליטר</small></article>
-          <article className={facility42Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>יתרת באלק מול אריזה</span><b>{fmt(facility42Balance.balance)}</b><small>ליטר</small></article>
-          <article><span>% ניצול באלק</span><b>{facility42Balance.bulk ? pctFmt(facility42Balance.utilization) : '—'}</b><small>נארז ÷ באלק</small></article>
+          <article><span>שאריות 200/1000 ליטר</span><b>{fmt(facility42Balance.residues)}</b><small>ליטר · {facility42Balance.residueRows.length} רשומות</small></article>
+          <article className={facility42Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>יתרה: באלק − אריזה − שאריות</span><b>{fmt(facility42Balance.balance)}</b><small>ליטר</small></article>
+          <article><span>% ניצול באלק</span><b>{facility42Balance.bulk ? pctFmt(facility42Balance.utilization) : '—'}</b><small>(אריזה + שאריות) ÷ באלק</small></article>
         </div>
         <div className="balance-note"><AlertTriangle size={18}/><span>בהשוואה יומית ייתכן פער תזמון: באלק שיוצר ביום מסוים יכול להיארז ביום אחר. לכן המאזן החודשי מייצג טוב יותר את התהליך.</span></div>
         <h3 className="shift-subtitle">פירוט לפי סוג דיווח</h3>
@@ -2579,7 +3056,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
           {['WG','SMALL PACKS'].map(type => { const rows=facility19Balance.packedRows.filter(r => (facility19Balance.isSmallPack(r) ? 'SMALL PACKS' : 'WG') === type); return <tr key={type}><td><b>{type === 'WG' ? 'מנות ייצור WG' : 'אריזות קטנות'}</b></td><td>1519 + {type === 'WG' ? 'WG רגיל' : '19PWG-01/05/15'}</td><td><b>{fmt(facility19Balance.byType[type])}</b></td><td>{rows.length}</td><td>{new Set(rows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(rows.map(r=>r.order).filter(Boolean)).size}</td></tr> })}
         </tbody></table></div>
       </section>}
-      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8" data-smart-group-column="3"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`} style={{backgroundColor: selectedFacilities.length > 1 ? facilityColor(r.facility) : undefined}}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td><button type="button" className={`qty-variance-btn ${num(r.plannedQty)>0 && Math.abs(num(r.qty)-num(r.plannedQty))>0.0001 ? 'has-variance' : ''}`} onClick={()=>setQuantityVarianceRow(r)} title={num(r.plannedQty)>0 ? 'לחץ להצגת כמות מתוכננת, בפועל והפער' : 'לא נמצאה כמות מתוכננת לרשומה'}>{fmt(r.qty)}</button></td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8" data-smart-group-column="3" data-smart-facility-summary="1"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`} data-facility={r.facility || ''} style={{backgroundColor: new Set(sortedRecentProduction.map(x => x.facility).filter(Boolean)).size > 1 ? facilityColor(r.facility) : undefined}}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td><button type="button" className={`qty-variance-btn ${num(r.plannedQty)>0 && Math.abs(num(r.qty)-num(r.plannedQty))>0.0001 ? 'has-variance' : ''}`} onClick={()=>setQuantityVarianceRow(r)} title={num(r.plannedQty)>0 ? 'לחץ להצגת כמות מתוכננת, בפועל והפער' : 'לא נמצאה כמות מתוכננת לרשומה'}>{fmt(r.qty)}</button></td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
         <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מתמקד בחריגים שרלוונטיים ליעדים הפעילים. באלק 1142+999 ובאלק 1119+777 מוחרגים אוטומטית ומטופלים רק במאזני 42 ו-19.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
         {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
@@ -2649,13 +3126,13 @@ function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
 
   const exportRows = () => {
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(materials.map(item => ({
+    appendAutoFitJsonSheet(wb, materials.map(item => ({
       Material:item.material, Description:item.description, Quantity:item.qty, Batches:item.batches.size, Orders:item.orders.size, Rows:item.rows,
-    }))), 'Materials')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map(row => ({
+    })), 'Materials')
+    appendAutoFitJsonSheet(wb, rows.map(row => ({
       Date:row.productionDay || iso(row.date), Facility:row.facility, RoutingGroup:row.routingGroup, OrderType:row.orderType,
       Order:row.order, Batch:row.batch, Material:row.material, Description:row.desc, Quantity:row.qty,
-    }))), 'Calculation Rows')
+    })), 'Calculation Rows')
     XLSX.writeFile(wb, `IML_${String(resource.resource || 'resource').replace(/[^a-zA-Z0-9_-]+/g,'_')}_${planningSafeMonth(resource)}.xlsx`)
   }
   return <div className="resource-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
@@ -2750,9 +3227,9 @@ function BatchControlCard({ data, onClose }) {
   ]
   const exportBatch = () => {
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(productionRows.map(r=>({Date:iso(r.date),Facility:r.facility,RoutingGroup:r.routingGroup,Order:r.order,Batch:r.batch,Material:r.material,Description:r.desc,Quantity:r.qty}))), 'Production')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(allQuality.map(r=>({Date:iso(r.date),InspectionLot:r.inspectionLot,Material:r.material||materials.join(', '),Characteristic:r.characteristic,Result:r.value||r.qualitative,Lower:r.lower,Upper:r.upper,Unit:r.unit,Status:r.rejected?'חריג':'תקין',Remarks:r.remarks}))), 'Quality')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(deviationRows.map(r=>({Date:iso(r.date),Facility:r.facility,Material:r.material||materials.join(', '),Status:r.status,UDCode:r.udCode,Remarks:r.remarks}))), 'Deviations')
+    appendAutoFitJsonSheet(wb, productionRows.map(r=>({Date:iso(r.date),Facility:r.facility,RoutingGroup:r.routingGroup,Order:r.order,Batch:r.batch,Material:r.material,Description:r.desc,Quantity:r.qty})), 'Production')
+    appendAutoFitJsonSheet(wb, allQuality.map(r=>({Date:iso(r.date),InspectionLot:r.inspectionLot,Material:r.material||materials.join(', '),Characteristic:r.characteristic,Result:r.value||r.qualitative,Lower:r.lower,Upper:r.upper,Unit:r.unit,Status:r.rejected?'חריג':'תקין',Remarks:r.remarks})), 'Quality')
+    appendAutoFitJsonSheet(wb, deviationRows.map(r=>({Date:iso(r.date),Facility:r.facility,Material:r.material||materials.join(', '),Status:r.status,UDCode:r.udCode,Remarks:r.remarks})), 'Deviations')
     XLSX.writeFile(wb, `Batch_${data.batch}.xlsx`)
   }
   return <div className="batch-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget) onClose()}}>
