@@ -2378,6 +2378,18 @@ console.log("QUALITY =", qualityForBatchMaterial)
   const selectedControlTowerFacilities = useMemo(() => selectedFacilities.length ? visibleControlTowerFacilities.filter(row => (row.facilityIds || [row.facility]).some(id => selectedFacilities.includes(String(id)))) : [], [visibleControlTowerFacilities, selectedFacilities])
   const selectedForecastRows = useMemo(() => selectedFacilities.length ? visiblePlanningRows.filter(row => (row.facilities || [row.facility]).some(id => selectedFacilities.includes(String(id)))) : [], [visiblePlanningRows, selectedFacilities])
   const selectedFacilityStats = useMemo(() => selectedFacilities.length ? facilityStats.filter(row => selectedFacilities.includes(String(row.id))) : [], [facilityStats, selectedFacilities])
+  const reportDateToIso = value => {
+    const text = String(value || '').trim()
+    const match = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/)
+    if (!match) return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : ''
+    let year = Number(match[3]); if (year < 100) year += 2000
+    return `${year}-${String(Number(match[2])).padStart(2,'0')}-${String(Number(match[1])).padStart(2,'0')}`
+  }
+  const selectedSingleReportDate = from && to && from === to ? from : ''
+  const savedDailyReportRowsForSelection = useMemo(() => dailyReportHistory.filter(row => {
+    if (!selectedSingleReportDate || reportDateToIso(row.reportDate) !== selectedSingleReportDate) return false
+    return !selectedFacilities.length || selectedFacilities.includes(String(row.facility || ''))
+  }), [dailyReportHistory, selectedSingleReportDate, selectedFacilities])
   const monthlyDailyReportHistory = useMemo(() => {
     const parseMonthKey = value => {
       const text = String(value || '').trim()
@@ -2575,6 +2587,35 @@ console.log("QUALITY =", qualityForBatchMaterial)
     }
   }
 
+  const downloadSavedDailyReport = () => {
+    if (!selectedSingleReportDate) {
+      setStatus('כדי להוריד דוח שמור יש לבחור יום יחיד וזהה בשדות מתאריך ועד תאריך')
+      return
+    }
+    if (!savedDailyReportRowsForSelection.length) {
+      setStatus(`לא נמצא דוח ערוך שמור לתאריך ${selectedSingleReportDate}${selectedFacilities.length ? ` ולמתקנים ${selectedFacilities.join(', ')}` : ''}`)
+      return
+    }
+    const restoredRows = savedDailyReportRowsForSelection.map(row => ({
+      date:new Date(`${selectedSingleReportDate}T12:00:00`), productionDay:selectedSingleReportDate,
+      facility:String(row.facility || ''), material:String(row.material || ''),
+      routingGroup:String(row.line || ''), desc:String(row.description || ''), batch:String(row.batch || ''),
+      machineStatus:String(row.machineStatus || ''), qty:num(row.quantity), notes:String(row.notes || '')
+    }))
+    exportStyledExcel([
+      { name:'דוח שמור', columns:[
+        {key:'Date',label:'תאריך'},{key:'Facility',label:'מתקן'},{key:'Material',label:'מק״ט'},
+        {key:'Description',label:'חומר'},{key:'Batch',label:'מספר אצווה'},
+        {key:'MachineStatus',label:'סטטוס מכונה'},{key:'Quantity',label:'תפוקה'},{key:'Notes',label:'הערות'}
+      ], rows:savedDailyReportRowsForSelection.map(row => ({
+        Date:selectedSingleReportDate, Facility:row.facility, Material:row.material,
+        Description:row.description, Batch:row.batch, MachineStatus:row.machineStatus,
+        Quantity:num(row.quantity), Notes:row.notes
+      })) }
+    ], `IML_Daily_Report_Saved_${selectedSingleReportDate}.xls`, restoredRows)
+    setStatus(`הדוח הערוך השמור לתאריך ${selectedSingleReportDate} הורד בהצלחה`)
+  }
+
   const exportWorkbook = () => {
     const productionRows = [...filtered].sort(facilitySortDesc)
     const totals = productionRows.reduce((m,r) => { const f=String(r.facility||'—'); m.set(f,(m.get(f)||0)+num(r.qty)); return m }, new Map())
@@ -2585,7 +2626,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       { name:'Planning', columns:[{key:'Month',label:'Month'},{key:'Facility',label:'Facility'},{key:'Station',label:'Station'},{key:'MonthlyTarget',label:'Monthly Target'},{key:'Actual',label:'Actual'},{key:'Remaining',label:'Remaining'},{key:'Forecast',label:'Forecast'},{key:'Status',label:'Status'}], rows:planningRows.map(r=>({__facility:String(r.facility||'—'),Month:planningMonth,Facility:r.facility,Station:r.station,MonthlyTarget:r.target,Actual:r.actual,Remaining:r.remaining,Forecast:r.forecast,Status:r.label})) },
       { name:'Quality', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'InspectionLot',label:'Inspection Lot'},{key:'Order',label:'Order'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'}], rows:qualityBad.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,InspectionLot:r.inspectionLot,Order:r.order,Batch:r.batch,Material:r.material,Status:r.status})) },
       { name:'Deviations', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'},{key:'Remarks',label:'Remarks'}], rows:openDeviations.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,Batch:r.batch,Material:r.material,Status:r.status,Remarks:r.remarks})) }
-    ], `IML_Facility_Report_${new Date().toISOString().slice(0,10)}.xls`, productionRows)
+    ], `IML_Facility_Report_${from && to ? (from === to ? from : `${from}_to_${to}`) : (from || to || new Date().toISOString().slice(0,10))}.xls`, productionRows)
   }
 
   const downloadTargetWorkbook = async () => {
@@ -2852,6 +2893,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
           </div>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
           <label className={`action secondary ${busy ? 'disabled' : ''}`} style={{cursor:'pointer'}}><Upload size={18}/> טעינת דוח ערוך<input type="file" accept=".xls,.xlsx" hidden disabled={busy} onChange={e=>{const file=e.target.files?.[0]; if(file) handleDailyReportRoundtripFile(file); e.target.value=''}}/></label>
+          <button className="action secondary" type="button" onClick={downloadSavedDailyReport} disabled={!selectedSingleReportDate}><Download size={18}/> הורדת דוח שמור</button>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
           {canManageData ? <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label> : <button className="action upload" type="button" onClick={onRequestAdminLogin}><Upload size={19}/> טעינת Excel</button>}
           {canManageData ? <button className="action secondary" onClick={onSignOut}><LogOut size={18}/> יציאת מנהל</button> : <button className="action secondary" onClick={onRequestAdminLogin}><ShieldCheck size={18}/> כניסת מנהל</button>}
