@@ -2021,9 +2021,20 @@ console.log("QUALITY =", qualityForBatchMaterial)
   const achievedCount = planningRows.filter(r => ['achieved', 'good'].includes(r.state)).length
   const riskCount = planningRows.filter(r => r.state === 'risk').length
   const warningCount = planningRows.filter(r => r.state === 'warning').length
-  const targetTotal = planningRows.reduce((s,r) => s + r.target, 0)
-  const targetActual = planningRows.reduce((s,r) => s + r.actual, 0)
-  const targetForecast = planningRows.reduce((s,r) => s + r.forecast, 0)
+  // Keep the executive KPIs in the same facility scope as the side filter.
+  // A planning row can represent more than one storage location, so a row is
+  // included when at least one of its mapped facilities is selected.
+  const scopedPlanningRows = useMemo(() => {
+    if (!selectedFacilities.length) return planningRows
+    return planningRows.filter(row => {
+      const rowFacilities = (row.facilities || [row.facility]).map(String)
+      return rowFacilities.some(id => selectedFacilities.includes(id))
+    })
+  }, [planningRows, selectedFacilities])
+  const targetTotal = scopedPlanningRows.reduce((s,r) => s + r.target, 0)
+  const targetActual = scopedPlanningRows.reduce((s,r) => s + r.actual, 0)
+  const targetForecast = scopedPlanningRows.reduce((s,r) => s + r.forecast, 0)
+  const targetRequiredDaily = scopedPlanningRows.reduce((sum,row) => sum + row.requiredDaily, 0)
   const uniqueOrders = useMemo(() => new Set(filtered.map(r => r.order).filter(Boolean)).size, [filtered])
   const uniqueBatches = useMemo(() => new Set(filtered.map(r => r.batch).filter(Boolean)).size, [filtered])
   const managerInsights = useMemo(() => {
@@ -2407,7 +2418,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><Target/><span>יעד חודשי כולל</span><b>{fmt(targetTotal)}</b><small>{planningMonth || 'ללא חודש נבחר'}</small></button>
           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><Database/><span>בוצע החודש</span><b>{fmt(targetActual)}</b><small>{targetTotal ? pctFmt(targetActual / targetTotal * 100) : '—'} מהיעד</small></button>
           <button onClick={() => document.getElementById('planning-section')?.scrollIntoView({behavior:'smooth'})}><TrendingUp/><span>תחזית סוף חודש</span><b>{fmt(targetForecast)}</b><small>{targetTotal ? pctFmt(targetForecast / targetTotal * 100) : '—'} מהיעד</small></button>
-          <button onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><Gauge/><span>קצב יומי נדרש</span><b>{fmt(planningRows.reduce((sum,row)=>sum+row.requiredDaily,0))}</b><small>לכל המתקנים</small></button>
+          <button onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><Gauge/><span>קצב יומי נדרש</span><b>{fmt(targetRequiredDaily)}</b><small>{selectedFacilities.length ? `ל-${selectedFacilities.length} מתקנים שנבחרו` : 'לכל המתקנים'}</small></button>
           <button className={targetForecast >= targetTotal && targetTotal ? 'good' : 'bad'} onClick={() => document.getElementById('alerts-section')?.scrollIntoView({behavior:'smooth'})}><AlertTriangle/><span>פער צפוי</span><b>{targetTotal ? fmt(targetForecast-targetTotal) : '—'}</b><small>{targetForecast >= targetTotal ? 'מעל היעד' : 'נדרש להגביר קצב'}</small></button>
         </div>
       </section>
