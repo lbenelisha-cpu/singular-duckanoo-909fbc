@@ -56,8 +56,14 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   // both cards; keep the description marker as a legacy fallback.
   if (/^24F(?:128)?$/.test(targetName)) {
     if (station !== '1524') return false
+    const material = upper(row.material)
+    const isLrhPack24 = material === '10000007617'
+    // Approved reassignment: all LRH Pack (24) production belongs to 24F128.
+    // It must be excluded from 24F so the quantity is counted exactly once.
+    if (targetName === '24F128' && isLrhPack24) return true
+    if (targetName === '24F' && isLrhPack24) return false
     const targetMaterials = new Set((target.materials || []).map(upper).filter(Boolean))
-    if (targetMaterials.size) return targetMaterials.has(upper(row.material))
+    if (targetMaterials.size) return targetMaterials.has(material)
     const productionText = upper(`${row.desc || ''} ${row.routingDescription || ''} ${row.routingGroup || ''}`)
     return targetName === '24F128' ? productionText.includes('24F128') : !productionText.includes('24F128')
   }
@@ -128,6 +134,7 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
     '10000015938':'1540',
     '10000015930':'1540',
     '20000007617':'1524',
+    '10000007617':'1524',
     '10000014393':'1524',
     '20000000246':'1524',
     '20000001538':'1524',
