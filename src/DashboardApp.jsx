@@ -1996,9 +1996,14 @@ console.log("QUALITY =", qualityForBatchMaterial)
 
   const targetsWithAdminMappings = useMemo(() => targets.map(target => {
     const resourceKey = normalize(target.resource).toUpperCase()
+    // Repair Facility 24 targets that were uploaded before the explicit 1524
+    // mapping existed. This also fixes already-saved cloud target versions.
+    const normalizedTarget = /^24F(?:128)?$/.test(resourceKey)
+      ? { ...target, facility:'1524', facilities:['1524'], station:'1524', mappingStatus:'business-approved', mappingReason:'24F / 24F128 משויכים למתקן 1524' }
+      : target
     const saved = targetMappings.find(mapping => normalize(mapping.resource).toUpperCase() === resourceKey && (!mapping.month || mapping.month === target.month))
-    if (!saved?.family) return target
-    return { ...target, facility:saved.family, facilities:[saved.family], station:saved.family, mappingStatus:'manual-approved', mappingReason:`מיפוי מנהל מאושר למשפחת תחנה ${saved.family}` }
+    if (!saved?.family) return normalizedTarget
+    return { ...normalizedTarget, facility:saved.family, facilities:[saved.family], station:saved.family, mappingStatus:'manual-approved', mappingReason:`מיפוי מנהל מאושר למשפחת תחנה ${saved.family}` }
   }), [targets, targetMappings])
 
   const planningRows = useMemo(() => buildResourceRows({
