@@ -5,7 +5,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
-import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook } from './cloudData'
+import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
@@ -42,8 +42,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.32'
-const BUILD_LABEL = 'Sprint 11.9.32 — Event Form + History + Severity'
+const APP_VERSION = '11.9.34'
+const BUILD_LABEL = 'Sprint 11.9.34 — Monthly Target History'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -1247,17 +1247,28 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           await new Promise(resolve => setTimeout(resolve, 0))
         }
 
+        // Sprint 11.9.34: the monthly archive is the source of truth for targets.
+        // It contains August, September, October... together, so changing the
+        // planning month never makes an older month disappear.
+        try {
+          const monthlyArchive = await loadAllMonthlyTargetDatasets()
+          if (monthlyArchive?.rows?.length) {
+            setTargets(normalizeStoredTargets(monthlyArchive.rows))
+            setDataMeta(current => ({ ...current, targets:normalizeDatasetMeta('targets', monthlyArchive.meta, monthlyArchive.months?.at(-1)?.month || planningMonth) }))
+            loadedRows += monthlyArchive.rows.length
+          }
+        } catch (monthlyTargetError) {
+          console.warn('Monthly target archive unavailable; active target dataset remains as fallback', monthlyTargetError)
+        }
+
         // Keep the exact target workbook synchronized as well as the normalized rows.
         // This solves the case where computer B sees the new target cards but still
         // downloads an older local template.
         if (remoteMeta.targets) {
           try {
-            const localWorkbook = await idbGetKey(TARGET_FILE_KEY)
-            const remoteTargetVersion = String(remoteMeta.targets.active_version_id || '')
-            if (!localWorkbook?.bytes || (remoteTargetVersion && String(localWorkbook?.targetVersionId || '') !== remoteTargetVersion)) {
-              const cloudWorkbook = await loadActiveTargetWorkbook()
-              if (cloudWorkbook?.bytes) await idbSetKey(TARGET_FILE_KEY, cloudWorkbook)
-            }
+            const targetMonthForWorkbook = planningMonth || monthKey(new Date())
+            const cloudWorkbook = await loadMonthlyTargetWorkbook(targetMonthForWorkbook).catch(() => null) || await loadActiveTargetWorkbook()
+            if (cloudWorkbook?.bytes) await idbSetKey(TARGET_FILE_KEY, cloudWorkbook)
           } catch (workbookError) {
             console.warn('Target workbook background sync skipped', workbookError)
           }
@@ -1310,9 +1321,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             if (kind === 'quality') setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
             if (kind === 'deviations') setDeviations(dedupeRows(rows, deviationRawRowKey))
             if (kind === 'targets') {
-              setTargets(normalizeStoredTargets(rows))
               try {
-                const cloudWorkbook = await loadActiveTargetWorkbook()
+                const monthlyArchive = await loadAllMonthlyTargetDatasets()
+                setTargets(normalizeStoredTargets(monthlyArchive?.rows?.length ? monthlyArchive.rows : rows))
+              } catch (monthlyTargetError) {
+                console.warn('Monthly target live sync fallback', monthlyTargetError)
+                setTargets(normalizeStoredTargets(rows))
+              }
+              try {
+                const cloudWorkbook = await loadMonthlyTargetWorkbook(planningMonth || monthKey(new Date())).catch(() => null) || await loadActiveTargetWorkbook()
                 if (cloudWorkbook?.bytes) await idbSetKey(TARGET_FILE_KEY, cloudWorkbook)
               } catch (workbookError) {
                 console.warn('Live target workbook sync skipped', workbookError)
@@ -1327,6 +1344,19 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             setCloudState(current => ({ ...current, live:false, message:'מחובר לענן, אך העדכון החי נכשל' }))
           }
         }, 700)
+      })
+      .on('postgres_changes', { event:'*', schema:'public', table:'iml_monthly_targets' }, () => {
+        clearTimeout(refreshTimer)
+        refreshTimer = setTimeout(async () => {
+          try {
+            const monthlyArchive = await loadAllMonthlyTargetDatasets()
+            if (monthlyArchive?.rows?.length) {
+              setTargets(normalizeStoredTargets(monthlyArchive.rows))
+              setDataMeta(current => ({ ...current, targets:normalizeDatasetMeta('targets', monthlyArchive.meta, planningMonth) }))
+              setStatus('היסטוריית היעדים החודשית עודכנה מהענן')
+            }
+          } catch (error) { console.warn('Monthly target realtime refresh failed', error) }
+        }, 500)
       })
       .subscribe(status => {
         if (status === 'SUBSCRIBED') setCloudState(current => ({ ...current, live:true }))
@@ -1576,22 +1606,31 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         else if (kind === 'quality') setQuality(current => dedupeRows([...current, ...rowsForCloud], qualityRowKey))
         else if (kind === 'deviations') setDeviations(rowsForCloud)
         else if (kind === 'targets') {
-          setTargets(normalizeStoredTargets(rowsForCloud))
+          const targetMonth = rowsForCloud?.[0]?.month || planningMonth
+          try {
+            await saveMonthlyTargetDataset(targetMonth, rowsForCloud, { ...nextMeta, ...savedMeta, originalFileName:file.name }, currentUser)
+            const monthlyArchive = await loadAllMonthlyTargetDatasets()
+            setTargets(normalizeStoredTargets(monthlyArchive?.rows?.length ? monthlyArchive.rows : rowsForCloud))
+          } catch (monthlyTargetError) {
+            console.warn('Monthly target archive save failed', monthlyTargetError)
+            throw monthlyTargetError
+          }
           if (targetWorkbookOriginal) {
             try {
-              const workbookMeta = await saveActiveTargetWorkbook({
-                ...targetWorkbookOriginal,
-                versionId: savedMeta?.versionId || '',
-              }, currentUser)
+              const workbookPayload = { ...targetWorkbookOriginal, versionId:savedMeta?.versionId || '' }
+              const monthlyWorkbookMeta = await saveMonthlyTargetWorkbook(targetMonth, workbookPayload, currentUser)
+              // Keep the legacy singleton updated as a compatibility fallback.
+              await saveActiveTargetWorkbook(workbookPayload, currentUser).catch(() => null)
               await idbSetKey(TARGET_FILE_KEY, {
                 ...targetWorkbookOriginal,
-                targetVersionId: workbookMeta?.target_version_id || savedMeta?.versionId || '',
-                savedAt: workbookMeta?.updated_at || targetWorkbookOriginal.savedAt,
-                source: 'cloud',
+                month:targetMonth,
+                targetVersionId:monthlyWorkbookMeta?.target_version_id || savedMeta?.versionId || '',
+                savedAt:monthlyWorkbookMeta?.updated_at || targetWorkbookOriginal.savedAt,
+                source:'cloud-monthly',
               })
             } catch (workbookError) {
-              console.warn('Target workbook cloud sync failed', workbookError)
-              loaded.push(`אזהרה: קובץ היעדים נטען, אך סנכרון קובץ ה-Excel המלא נכשל (${workbookError?.message || 'שגיאה'})`)
+              console.warn('Target workbook monthly cloud sync failed', workbookError)
+              loaded.push(`אזהרה: יעדי ${targetMonth} נשמרו, אך סנכרון קובץ ה-Excel המלא נכשל (${workbookError?.message || 'שגיאה'})`)
             }
           }
         }
@@ -2792,10 +2831,12 @@ console.log("QUALITY =", qualityForBatchMaterial)
       // workbook that was last uploaded, including newly added target rows.
       let stored = null
       try {
-        stored = await loadActiveTargetWorkbook()
+        const requestedTargetMonth = planningMonth || monthKey(new Date())
+        stored = await loadMonthlyTargetWorkbook(requestedTargetMonth)
+        if (!stored?.bytes) stored = await loadActiveTargetWorkbook()
         if (stored?.bytes) await idbSetKey(TARGET_FILE_KEY, stored)
       } catch (cloudWorkbookError) {
-        console.warn('Cloud target workbook unavailable; using local fallback', cloudWorkbookError)
+        console.warn('Cloud monthly target workbook unavailable; using local fallback', cloudWorkbookError)
       }
 
       if (!stored?.bytes) stored = await idbGetKey(TARGET_FILE_KEY)
@@ -2810,7 +2851,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
         link.remove()
         setTimeout(() => URL.revokeObjectURL(url), 1500)
         setStatus(stored.source === 'cloud'
-          ? 'הורד קובץ היעדים הפעיל מהענן — זהה בכל המחשבים'
+          ? `הורד קובץ היעדים של ${planningMonth || monthKey(new Date())} מהענן — זהה בכל המחשבים`
           : 'הורד קובץ היעדים המקומי. הענן לא היה זמין ולכן נעשה שימוש בגיבוי המקומי.')
         return
       }

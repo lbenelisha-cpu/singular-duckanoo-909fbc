@@ -572,3 +572,114 @@ export async function loadActiveTargetWorkbook() {
     source: 'cloud',
   }
 }
+
+
+// Sprint 11.9.34 — monthly target history.
+// Unlike the legacy `targets` dataset (which keeps one active version), this
+// archive stores one normalized target snapshot per planning month.
+function monthlyTargetsSchemaError(error) {
+  if (isMissingSchema(error, ['iml_monthly_targets', 'iml_monthly_target_workbooks'])) {
+    return new Error('היסטוריית היעדים החודשית עדיין לא מותקנת ב-Supabase. יש להריץ SPRINT_11_9_34_MONTHLY_TARGET_HISTORY.sql פעם אחת.')
+  }
+  return error
+}
+
+export async function saveMonthlyTargetDataset(month, rows, meta = {}, user = null) {
+  requireClient()
+  if (!/^\d{4}-\d{2}$/.test(String(month || ''))) throw new Error('חודש היעדים אינו תקין')
+  if (!Array.isArray(rows) || !rows.length) throw new Error('לא נמצאו יעדים לשמירה חודשית')
+  await assertCloudWriteAccess()
+  const row = {
+    target_month: month,
+    rows_json: rows,
+    row_count: rows.length,
+    file_name: meta.originalFileName || meta.fileName || '',
+    target_version_id: meta.versionId || null,
+    uploaded_by: user?.id || null,
+    uploaded_by_email: user?.email || '',
+    updated_at: new Date().toISOString(),
+  }
+  const { data, error } = await supabase
+    .from('iml_monthly_targets')
+    .upsert(row, { onConflict:'target_month' })
+    .select('target_month,row_count,file_name,target_version_id,uploaded_by_email,updated_at')
+    .single()
+  if (error) throw monthlyTargetsSchemaError(error)
+  return data
+}
+
+export async function loadAllMonthlyTargetDatasets() {
+  requireClient()
+  const { data, error } = await supabase
+    .from('iml_monthly_targets')
+    .select('target_month,rows_json,row_count,file_name,target_version_id,uploaded_by_email,updated_at')
+    .order('target_month', { ascending:true })
+  if (error) throw monthlyTargetsSchemaError(error)
+  const months = data || []
+  const rows = months.flatMap(item => Array.isArray(item.rows_json) ? item.rows_json : [])
+  const latest = months.at(-1) || null
+  return {
+    rows,
+    months: months.map(item => ({
+      month:item.target_month, rows:Number(item.row_count || 0), fileName:item.file_name || '',
+      versionId:item.target_version_id || '', loadedBy:item.uploaded_by_email || '', loadedAt:item.updated_at || '',
+    })),
+    meta: latest ? {
+      fileName: latest.file_name || `יעדים ${latest.target_month}`,
+      rows: Number(latest.row_count || 0), loadedAt:latest.updated_at, loadedBy:latest.uploaded_by_email || '',
+      versionId:latest.target_version_id || '', source:'cloud-monthly', valid:true,
+    } : null,
+  }
+}
+
+export async function saveMonthlyTargetWorkbook(month, workbook, user = null) {
+  requireClient()
+  if (!/^\d{4}-\d{2}$/.test(String(month || ''))) throw new Error('חודש היעדים אינו תקין')
+  if (!workbook?.bytes) throw new Error('קובץ היעדים המקורי חסר')
+  await assertCloudWriteAccess()
+  const bytes = workbook.bytes instanceof Uint8Array ? workbook.bytes : new Uint8Array(workbook.bytes)
+  const row = {
+    target_month:month,
+    file_name:workbook.name || `IML_Monthly_Targets_${month}.xlsx`,
+    mime_type:workbook.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    byte_count:bytes.byteLength,
+    bytes_base64:arrayBufferToBase64(bytes),
+    last_modified:workbook.lastModified ? new Date(workbook.lastModified).toISOString() : null,
+    target_version_id:workbook.versionId || null,
+    uploaded_by:user?.id || null,
+    uploaded_by_email:user?.email || '',
+    updated_at:new Date().toISOString(),
+  }
+  const { data, error } = await supabase
+    .from('iml_monthly_target_workbooks')
+    .upsert(row, { onConflict:'target_month' })
+    .select('target_month,file_name,mime_type,byte_count,last_modified,target_version_id,uploaded_by_email,updated_at')
+    .single()
+  if (error) throw monthlyTargetsSchemaError(error)
+  return data
+}
+
+export async function loadMonthlyTargetWorkbook(month) {
+  requireClient()
+  if (!month) return null
+  const { data, error } = await supabase
+    .from('iml_monthly_target_workbooks')
+    .select('target_month,file_name,mime_type,byte_count,bytes_base64,last_modified,target_version_id,uploaded_by_email,updated_at')
+    .eq('target_month', month)
+    .maybeSingle()
+  if (error) throw monthlyTargetsSchemaError(error)
+  if (!data?.bytes_base64) return null
+  const bytes = base64ToUint8Array(data.bytes_base64)
+  return {
+    month:data.target_month,
+    name:data.file_name,
+    type:data.mime_type,
+    lastModified:data.last_modified ? new Date(data.last_modified).getTime() : 0,
+    savedAt:data.updated_at,
+    targetVersionId:data.target_version_id || '',
+    uploadedBy:data.uploaded_by_email || '',
+    byteCount:Number(data.byte_count || bytes.byteLength),
+    bytes,
+    source:'cloud-monthly',
+  }
+}
