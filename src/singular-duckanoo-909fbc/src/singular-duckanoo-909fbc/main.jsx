@@ -1,0 +1,60 @@
+const clean = value => String(value ?? '').trim().toUpperCase().replace(/[\s_-]+/g, ' ').replace(/\s+/g, ' ')
+
+export const DEFAULT_RESOURCE_MAPPINGS = [
+  { id:'1542-liquid-1', facility:'1542', description:'LIQUID 1 LITER', mode:'exact', resource:'LQ 1lt (42)', active:true },
+  { id:'1542-liquid-5', facility:'1542', description:'LIQUID 5 LITER', mode:'exact', resource:'LQ 5 lt (42)', active:true },
+  { id:'1542-liquid-10', facility:'1542', description:'LIQUID 10 LITER', mode:'exact', resource:'LQ 10/20 lt (42)', active:true },
+  { id:'1542-liquid-20', facility:'1542', description:'LIQUID 20 LITER', mode:'exact', resource:'LQ 10/20 lt (42)', active:true },
+  { id:'1540-diuron', facility:'1540', description:'DIURON', mode:'contains', resource:'Diuron (40)', active:true },
+  { id:'1540-tolurex', facility:'1540', description:'TOLUREX', mode:'contains', resource:'Tolurex (40)', active:true },
+]
+
+export const normalizeMappingText = clean
+
+export function matchResourceMapping(row, mappings = DEFAULT_RESOURCE_MAPPINGS) {
+  const facility = clean(row?.facility)
+  const description = clean(row?.routingDescription || row?.description || row?.desc)
+  if (!facility || !description) return null
+  return (mappings || []).find(item => {
+    if (item?.active === false || clean(item?.facility) !== facility) return false
+    const needle = clean(item?.description)
+    if (!needle) return false
+    return item?.mode === 'contains' ? description.includes(needle) : description === needle
+  }) || null
+}
+
+export function summarizeUnmappedRows(rows = [], mappings = DEFAULT_RESOURCE_MAPPINGS) {
+  const summary = new Map()
+  const monitoredFacilities = new Set((mappings || []).filter(item => item?.active !== false).map(item => clean(item.facility)))
+  rows.forEach(row => {
+    const description = String(row?.routingDescription || row?.desc || '').trim()
+    if (!row?.facility || !monitoredFacilities.has(clean(row.facility)) || !description || matchResourceMapping(row, mappings)) return
+    const key = `${row.facility}||${clean(description)}`
+    const current = summary.get(key) || { facility:row.facility, description, rows:0, qty:0 }
+    current.rows += 1
+    current.qty += Number(row?.qty) || 0
+    summary.set(key, current)
+  })
+  return [...summary.values()].sort((a,b) => b.qty - a.qty || b.rows - a.rows)
+}
+
+export async function loadResourceMappingsFromCloud(supabase) {
+  if (!supabase) return null
+  const { data, error } = await supabase.from('iml_resource_mappings').select('id,facility,description,match_mode,resource,active').order('facility').order('description')
+  if (error) {
+    const message = String(error.message || '').toLowerCase()
+    if (message.includes('does not exist') || message.includes('schema cache')) return null
+    throw error
+  }
+  return (data || []).map(row => ({ id:row.id, facility:row.facility, description:row.description, mode:row.match_mode || 'exact', resource:row.resource, active:row.active !== false }))
+}
+
+export async function saveResourceMappingsToCloud(supabase, mappings) {
+  if (!supabase) throw new Error('Supabase אינו מוגדר')
+  const { error: deleteError } = await supabase.from('iml_resource_mappings').delete().neq('id', '')
+  if (deleteError) throw deleteError
+  const rows = (mappings || []).map(row => ({ id:row.id, facility:String(row.facility), description:String(row.description), match_mode:row.mode || 'exact', resource:String(row.resource), active:row.active !== false, updated_at:new Date().toISOString() }))
+  if (!rows.length) return
+  const { error } = await supabase.from('iml_resource_mappings').insert(rows)
+  if (error) throw error
+}

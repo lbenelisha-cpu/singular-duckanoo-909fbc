@@ -36,8 +36,10 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   if (/^SC\s*\(28\)/.test(targetName)) return station === '1528'
 
   // Correct facility mapping for EC, Shaked ISO and LQ43.
-  const isLq43Resource = route.includes('43-P-A') || route.includes('43-P-B')
-  if (/^LQ\s*43\b/.test(targetName)) return station === '1543' && isLq43Resource
+  const isLq43Resource = route.includes('43-P-A') || route.includes('43-P-B') ||
+    /(^|\s)LQ-P-(1|5|10)(\s|$)/.test(route)
+  if (/^LQ\s*43\b/.test(targetName)) return station === '1543' &&
+    upper(row.orderType).includes('ZFIN') && isLq43Resource
   if (/^EC\s*\(23\)/.test(targetName)) return station === '1523'
   if (/^EC\s*\(25\)/.test(targetName)) return station === '1525'
   if (/^SHAKED\s+ISO\s+42$/.test(targetName)) {
@@ -48,6 +50,23 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   }
   if (/^SHAKED\s+ISO\s+23$/.test(targetName)) return station === '1123'
   if (/^PILOT\s*\(1521\)$/.test(targetName)) return station === '1521'
+
+  // Facility 24 has two separate monthly target cards. Prefer the DATA-sheet
+  // material lists when available so the same production is not counted in
+  // both cards; keep the description marker as a legacy fallback.
+  if (/^24F(?:128)?$/.test(targetName)) {
+    if (station !== '1524') return false
+    const material = upper(row.material)
+    const isLrhPack24 = material === '10000007617'
+    // Approved reassignment: all LRH Pack (24) production belongs to 24F128.
+    // It must be excluded from 24F so the quantity is counted exactly once.
+    if (targetName === '24F128' && isLrhPack24) return true
+    if (targetName === '24F' && isLrhPack24) return false
+    const targetMaterials = new Set((target.materials || []).map(upper).filter(Boolean))
+    if (targetMaterials.size) return targetMaterials.has(material)
+    const productionText = upper(`${row.desc || ''} ${row.routingDescription || ''} ${row.routingGroup || ''}`)
+    return targetName === '24F128' ? productionText.includes('24F128') : !productionText.includes('24F128')
+  }
 
   // Facility 42: identify packaging line by the actual SAP Routing group.
   // Keep the previous 42-P-* aliases and Description text as fallbacks for older files.
@@ -96,6 +115,44 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
 
     const bromacilText = upper(`${row.desc || ''} ${row.routingDescription || ''}`)
     return /(^|\s)BRMC\d*/.test(bromacilText) || bromacilText.includes('BROMACIL')
+  }
+
+  // Sprint 11.9.18 — approved production audit overrides (20/08/2026).
+  // Exact material assignment wins over the reporting storage location for target-card mapping.
+  const approvedMaterialFacility = {
+    '30000006846':'1525',
+    '10000001434':'1541',
+    '20000000716':'1523',
+    '10000015999':'1528',
+    '20000005829':'1525',
+    '20000000692':'1525',
+    '10000001198':'1523',
+    '10000011346':'1523',
+    '10000015919':'1540',
+    '10000015939':'1540',
+    '10000014392':'1540',
+    '10000015938':'1540',
+    '10000015930':'1540',
+    '20000007617':'1524',
+    '10000007617':'1524',
+    '10000014393':'1524',
+    '20000000246':'1524',
+    '20000001538':'1524',
+    '10000001477':'1524',
+    '50000000089':'1541',
+    '10000012624':'1541',
+  }
+  // Cleaning material: never count as production/packaging.
+  if (upper(row.material) === 'CL10000013819') return false
+  const approvedFacility = approvedMaterialFacility[upper(row.material)]
+  if (approvedFacility) {
+    const facilities = target.facilities?.length ? target.facilities.map(upper) : [upper(target.facility)].filter(Boolean)
+    if (facilities.includes(approvedFacility)) return true
+    // Also recognize standard card names when the target workbook uses a line/family label.
+    if (approvedFacility === '1528' && /^SC\s*\(28\)/.test(targetName)) return true
+    if (approvedFacility === '1523' && /^EC\s*\(23\)/.test(targetName)) return true
+    if (approvedFacility === '1525' && /^EC\s*\(25\)/.test(targetName)) return true
+    return false
   }
 
   // For all remaining resources, an explicit manual mapping may still override the generic DATA/family rule.
@@ -171,6 +228,40 @@ const latestDate = monthRows.reduce((latest, row) => {
       : monthRows.some(row => upper(row.facility) === item.facility)
     const alreadyExists = sourceRows.some(row => upper(row.resource) === upper(item.resource) || (row.facilities || [row.facility]).includes(item.facility))
     if (hasProduction && !alreadyExists) sourceRows.push({ facility:item.facility, facilities:[item.facility], resource:item.resource, target:0, capacity:0, descriptionTokens:[], station:item.facility, lineName:item.resource })
+  })
+
+  // Sprint 11.9.15 — automatically surface newly reported materials that are not
+  // present in the monthly target workbook yet. They appear as zero-target rows
+  // so production is never hidden while waiting for the next target-file update.
+  // Facility 42 (1542) and Facility 19 (1519) keep their approved line/family logic.
+  const autoMaterialExcludedFacilities = new Set(['1542', '1519'])
+  const unmatchedMaterialGroups = new Map()
+  monthRows.forEach(row => {
+    const facility = upper(row.facility)
+    const material = text(row.material)
+    if (!facility || !material || autoMaterialExcludedFacilities.has(facility)) return
+    const alreadyMatched = sourceRows.some(targetRow => matchProductionToTarget(row, targetRow, manualMappings))
+    if (alreadyMatched) return
+    const key = `${facility}::${upper(material)}`
+    if (!unmatchedMaterialGroups.has(key)) unmatchedMaterialGroups.set(key, row)
+  })
+  unmatchedMaterialGroups.forEach(row => {
+    const facility = text(row.facility)
+    const material = text(row.material)
+    const description = text(row.desc) || text(row.routingDescription) || material
+    sourceRows.push({
+      facility, facilities:[facility],
+      resource:description,
+      target:0, capacity:0,
+      materials:[material],
+      descriptionTokens:[],
+      station:facility,
+      lineName:description,
+      activity:'ייצור / אריזה',
+      mappingStatus:'auto-new-material',
+      mappingReason:'חומר חדש שדווח בתפוקה ואינו קיים עדיין בקובץ היעדים',
+      notes:`נוסף אוטומטית מהתפוקה · מק״ט ${material}`,
+    })
   })
 
   return sourceRows.map((targetRow, index) => {
