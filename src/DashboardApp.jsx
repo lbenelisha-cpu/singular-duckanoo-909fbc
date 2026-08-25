@@ -950,6 +950,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [dailyEventDate, setDailyEventDate] = useState('')
   const [dailyEvents, setDailyEvents] = useState(() => readLocalJson('iml-daily-events', []))
   const [dailyReportHistory, setDailyReportHistory] = useState(() => readLocalJson('iml-daily-report-history', []))
+  const [dailyCloudReady, setDailyCloudReady] = useState(false)
   const [availableUpdate, setAvailableUpdate] = useState(null)
 
   useEffect(() => { localStorage.setItem('iml-ui-sidebar-collapsed', sidebarCollapsed ? '1' : '0') }, [sidebarCollapsed])
@@ -957,6 +958,75 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => { localStorage.setItem('iml-daily-additional-facilities', JSON.stringify(dailyAdditionalFacilities)) }, [dailyAdditionalFacilities])
   useEffect(() => { localStorage.setItem('iml-daily-report-history', JSON.stringify(dailyReportHistory.slice(-5000))) }, [dailyReportHistory])
   useEffect(() => { localStorage.setItem('iml-daily-events', JSON.stringify(dailyEvents.slice(-3000))) }, [dailyEvents])
+
+  useEffect(() => {
+    if (!supabase) return
+    let active = true
+    const normalizeCloudEvent = row => ({
+      id: row.external_id || row.id,
+      date: row.event_date,
+      type: row.event_type || '',
+      facility: String(row.facility || ''),
+      severity: row.severity || '',
+      description: row.description || '',
+      createdAt: row.created_at || '',
+      createdBy: row.created_by || '',
+    })
+    const normalizeCloudReport = row => ({
+      id: row.id,
+      importedAt: row.imported_at || '',
+      fileName: row.file_name || '',
+      reportDate: row.report_date || '',
+      material: row.material || '',
+      facility: String(row.facility || ''),
+      line: row.line || '',
+      description: row.description || '',
+      batch: row.batch || '',
+      machineStatus: row.machine_status || '',
+      quantity: num(row.quantity),
+      facilityTotal: num(row.facility_total),
+      notes: row.notes || '',
+    })
+    const syncDailyCloud = async () => {
+      try {
+        const localEvents = readLocalJson('iml-daily-events', [])
+        const localReports = readLocalJson('iml-daily-report-history', [])
+        if (currentUser?.id && localEvents.length) {
+          const payload = localEvents.slice(-3000).filter(e => e?.id && e?.date).map(e => ({
+            external_id:String(e.id), event_date:e.date, event_type:e.type || '', facility:String(e.facility || ''),
+            severity:e.severity || '', description:e.description || '', created_at:e.createdAt || new Date().toISOString(),
+            created_by:e.createdBy || currentUser?.email || '', created_by_id:currentUser?.id || null,
+          }))
+          if (payload.length) await supabase.from('iml_daily_events').upsert(payload, { onConflict:'external_id', ignoreDuplicates:true })
+        }
+        if (currentUser?.id && localReports.length) {
+          const payload = localReports.slice(-5000).filter(r => r?.reportDate && r?.material).map((r, index) => ({
+            client_key: r.clientKey || `${reportDateToIso(r.reportDate) || r.reportDate}|${r.facility || ''}|${r.material || ''}|${r.batch || ''}|${r.line || ''}|${r.fileName || ''}|${r.importedAt || ''}|${index}`,
+            imported_at:r.importedAt || new Date().toISOString(), file_name:r.fileName || '', report_date:reportDateToIso(r.reportDate) || r.reportDate,
+            material:r.material || '', facility:String(r.facility || ''), line:r.line || '', description:r.description || '', batch:r.batch || '',
+            machine_status:r.machineStatus || '', quantity:num(r.quantity), facility_total:num(r.facilityTotal), notes:r.notes || '',
+            created_by:currentUser?.email || '', created_by_id:currentUser?.id || null,
+          }))
+          if (payload.length) await supabase.from('iml_daily_report_rows').upsert(payload, { onConflict:'client_key', ignoreDuplicates:true })
+        }
+        const [{ data:eventRows, error:eventError }, { data:reportRows, error:reportError }] = await Promise.all([
+          supabase.from('iml_daily_events').select('*').order('event_date', { ascending:false }).order('created_at', { ascending:false }).limit(5000),
+          supabase.from('iml_daily_report_rows').select('*').order('report_date', { ascending:false }).order('imported_at', { ascending:false }).limit(10000),
+        ])
+        if (eventError) throw eventError
+        if (reportError) throw reportError
+        if (!active) return
+        setDailyEvents((eventRows || []).map(normalizeCloudEvent))
+        setDailyReportHistory((reportRows || []).map(normalizeCloudReport))
+        setDailyCloudReady(true)
+      } catch (error) {
+        console.warn('Daily cloud sync failed; using browser cache', error)
+        if (active) setDailyCloudReady(false)
+      }
+    }
+    syncDailyCloud()
+    return () => { active = false }
+  }, [currentUser?.id])
   useEffect(() => {
     if (!canManageData || sessionStorage.getItem('iml-open-data-center-after-login') !== '1') return
     sessionStorage.removeItem('iml-open-data-center-after-login')
@@ -2402,10 +2472,15 @@ console.log("QUALITY =", qualityForBatchMaterial)
     resetDailyEventForm()
     setDailyEventFormOpen(true)
   }
-  const saveDailyEvent = () => {
+  const saveDailyEvent = async () => {
     const eventDate = dailyEventDate || selectedSingleReportDate || isoDate(new Date())
     if (!eventDate || !dailyEventType || !dailyEventFacility || !dailyEventSeverity || !dailyEventText.trim()) {
       setStatus('יש למלא תאריך, סוג אירוע, מתקן, חומרה ותיאור לפני השמירה.')
+      return
+    }
+    if (!supabase || !currentUser?.id) {
+      setStatus('כדי לשמור אירוע משותף לכל המחשבים יש להיכנס כמנהל או מנהל מתקן.')
+      onRequestAdminLogin?.()
       return
     }
     const entry = {
@@ -2416,12 +2491,28 @@ console.log("QUALITY =", qualityForBatchMaterial)
       severity: dailyEventSeverity,
       description: dailyEventText.trim(),
       createdAt: new Date().toISOString(),
-      createdBy: currentUser?.email || 'local-user',
+      createdBy: currentUser?.email || '',
     }
-    setDailyEvents(current => [...current, entry])
-    setDailyEventFormOpen(false)
-    resetDailyEventForm()
-    setStatus(`האירוע נשמר בהצלחה לתאריך ${new Date(`${eventDate}T12:00:00`).toLocaleDateString('he-IL')}.`)
+    try {
+      setBusy(true)
+      const { data, error } = await supabase.from('iml_daily_events').insert({
+        external_id:entry.id, event_date:entry.date, event_type:entry.type, facility:entry.facility,
+        severity:entry.severity, description:entry.description, created_at:entry.createdAt,
+        created_by:entry.createdBy, created_by_id:currentUser.id,
+      }).select().single()
+      if (error) throw error
+      const saved = { ...entry, id:data?.external_id || entry.id, createdAt:data?.created_at || entry.createdAt }
+      setDailyEvents(current => [saved, ...current.filter(item => item.id !== saved.id)])
+      setDailyEventFormOpen(false)
+      resetDailyEventForm()
+      setDailyCloudReady(true)
+      setStatus(`האירוע נשמר בענן בהצלחה לתאריך ${new Date(`${eventDate}T12:00:00`).toLocaleDateString('he-IL')} וזמין מכל מחשב.`)
+    } catch (error) {
+      console.error(error)
+      setStatus(`שמירת האירוע בענן נכשלה: ${error?.message || 'שגיאה לא ידועה'}`)
+    } finally {
+      setBusy(false)
+    }
   }
   const visibleDailyEvents = useMemo(() => dailyEvents.filter(event => {
     if (from && event.date < from) return false
@@ -2624,8 +2715,27 @@ console.log("QUALITY =", qualityForBatchMaterial)
         })
       })
       if (!imported.length) throw new Error('לא נמצאו רשומות להחזרה לאפליקציה')
-      setDailyReportHistory(current => [...current, ...imported])
-      setStatus(`הדוח הערוך נטען חזרה: ${fmt(imported.length)} רשומות נשמרו בהיסטוריה המקומית`)
+      if (!supabase || !currentUser?.id) throw new Error('נדרשת כניסת מנהל כדי לשמור דוח ערוך בענן')
+      const reportIso = reportDateToIso(reportDate)
+      if (!reportIso) throw new Error('לא זוהה תאריך תקין בכותרת הדוח')
+      const uploadToken = `${file.name}-${Date.now()}`
+      const payload = imported.map((row, index) => ({
+        client_key:`${reportIso}|${row.facility || ''}|${row.material || ''}|${row.batch || ''}|${row.line || ''}|${uploadToken}|${index}`,
+        imported_at:row.importedAt, file_name:row.fileName, report_date:reportIso, material:row.material,
+        facility:String(row.facility || ''), line:row.line, description:row.description, batch:row.batch,
+        machine_status:row.machineStatus, quantity:num(row.quantity), facility_total:num(row.facilityTotal), notes:row.notes,
+        created_by:currentUser?.email || '', created_by_id:currentUser.id,
+      }))
+      const { data:savedRows, error:saveError } = await supabase.from('iml_daily_report_rows').insert(payload).select('*')
+      if (saveError) throw saveError
+      const cloudRows = (savedRows || []).map(row => ({
+        id:row.id, importedAt:row.imported_at, fileName:row.file_name, reportDate:row.report_date,
+        material:row.material, facility:String(row.facility || ''), line:row.line || '', description:row.description || '',
+        batch:row.batch || '', machineStatus:row.machine_status || '', quantity:num(row.quantity), facilityTotal:num(row.facility_total), notes:row.notes || '',
+      }))
+      setDailyReportHistory(current => [...cloudRows, ...current])
+      setDailyCloudReady(true)
+      setStatus(`הדוח הערוך נטען חזרה: ${fmt(cloudRows.length)} רשומות נשמרו ב־Supabase וזמינות מכל מחשב`)
     } catch (error) {
       console.error(error)
       setStatus(`טעינת הדוח הערוך נכשלה: ${error?.message || 'שגיאה לא ידועה'}`)
@@ -3048,7 +3158,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>}
 
       {!!dailyReportHistory.length && <section className="details" id="daily-report-history-section">
-        <div className="details-title-row"><div><h2>היסטוריית דוחות יומיים שהוחזרו לאפליקציה</h2><p className="details-note">סיכום חודשי לפי מתקן מתוך דוחות Excel שנערכו ידנית ונטענו חזרה.</p></div><span className="production-record-count">{dailyReportHistory.length} רשומות</span></div>
+        <div className="details-title-row"><div><h2>היסטוריית דוחות יומיים שהוחזרו לאפליקציה</h2><p className="details-note">סיכום חודשי לפי מתקן מתוך דוחות Excel שנערכו ידנית ונטענו חזרה · {dailyCloudReady ? 'שמירה משותפת ב־Supabase' : 'מטמון מקומי עד לחיבור לענן'}.</p></div><span className="production-record-count">{dailyReportHistory.length} רשומות</span></div>
         <div className="table-wrap"><table><thead><tr><th>חודש</th><th>מתקן</th><th>דוחות</th><th>רשומות</th><th>סה״כ תפוקה</th><th>סטטוס מכונה</th><th>הערות</th></tr></thead><tbody>{monthlyDailyReportHistory.map(row=><tr key={`${row.month}-${row.facility}`}><td>{row.month}</td><td>{row.facility}</td><td>{row.reports}</td><td>{row.rows}</td><td>{fmt(row.quantity)}</td><td>{row.machineStatuses}</td><td>{row.notes}</td></tr>)}</tbody></table></div>
       </section>}
 
