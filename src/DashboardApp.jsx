@@ -42,8 +42,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.31'
-const BUILD_LABEL = 'Sprint 11.9.31 — Daily Events + Roundtrip + Batch'
+const APP_VERSION = '11.9.32'
+const BUILD_LABEL = 'Sprint 11.9.32 — Event Form + History + Severity'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -941,10 +941,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [showHome, setShowHome] = useState(true)
   const [facilityPickerOpen, setFacilityPickerOpen] = useState(false)
   const [showDataCenter, setShowDataCenter] = useState(false)
-  const [dailyEventEnabled, setDailyEventEnabled] = useState(false)
+  const [dailyEventFormOpen, setDailyEventFormOpen] = useState(false)
+  const [dailyEventHistoryOpen, setDailyEventHistoryOpen] = useState(false)
   const [dailyEventType, setDailyEventType] = useState('')
   const [dailyEventFacility, setDailyEventFacility] = useState('')
+  const [dailyEventSeverity, setDailyEventSeverity] = useState('')
   const [dailyEventText, setDailyEventText] = useState('')
+  const [dailyEventDate, setDailyEventDate] = useState('')
+  const [dailyEvents, setDailyEvents] = useState(() => readLocalJson('iml-daily-events', []))
   const [dailyReportHistory, setDailyReportHistory] = useState(() => readLocalJson('iml-daily-report-history', []))
   const [availableUpdate, setAvailableUpdate] = useState(null)
 
@@ -952,6 +956,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => { localStorage.setItem('iml-ui-management-mode', managementMode ? '1' : '0') }, [managementMode])
   useEffect(() => { localStorage.setItem('iml-daily-additional-facilities', JSON.stringify(dailyAdditionalFacilities)) }, [dailyAdditionalFacilities])
   useEffect(() => { localStorage.setItem('iml-daily-report-history', JSON.stringify(dailyReportHistory.slice(-5000))) }, [dailyReportHistory])
+  useEffect(() => { localStorage.setItem('iml-daily-events', JSON.stringify(dailyEvents.slice(-3000))) }, [dailyEvents])
   useEffect(() => {
     if (!canManageData || sessionStorage.getItem('iml-open-data-center-after-login') !== '1') return
     sessionStorage.removeItem('iml-open-data-center-after-login')
@@ -2386,6 +2391,48 @@ console.log("QUALITY =", qualityForBatchMaterial)
     return `${year}-${String(Number(match[2])).padStart(2,'0')}-${String(Number(match[1])).padStart(2,'0')}`
   }
   const selectedSingleReportDate = from && to && from === to ? from : ''
+  const resetDailyEventForm = () => {
+    setDailyEventType('')
+    setDailyEventFacility(selectedFacilities.length === 1 ? selectedFacilities[0] : '')
+    setDailyEventSeverity('')
+    setDailyEventText('')
+    setDailyEventDate(selectedSingleReportDate || isoDate(new Date()))
+  }
+  const openDailyEventForm = () => {
+    resetDailyEventForm()
+    setDailyEventFormOpen(true)
+  }
+  const saveDailyEvent = () => {
+    const eventDate = dailyEventDate || selectedSingleReportDate || isoDate(new Date())
+    if (!eventDate || !dailyEventType || !dailyEventFacility || !dailyEventSeverity || !dailyEventText.trim()) {
+      setStatus('יש למלא תאריך, סוג אירוע, מתקן, חומרה ותיאור לפני השמירה.')
+      return
+    }
+    const entry = {
+      id: `event-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      date: eventDate,
+      type: dailyEventType,
+      facility: String(dailyEventFacility),
+      severity: dailyEventSeverity,
+      description: dailyEventText.trim(),
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser?.email || 'local-user',
+    }
+    setDailyEvents(current => [...current, entry])
+    setDailyEventFormOpen(false)
+    resetDailyEventForm()
+    setStatus(`האירוע נשמר בהצלחה לתאריך ${new Date(`${eventDate}T12:00:00`).toLocaleDateString('he-IL')}.`)
+  }
+  const visibleDailyEvents = useMemo(() => dailyEvents.filter(event => {
+    if (from && event.date < from) return false
+    if (to && event.date > to) return false
+    if (selectedFacilities.length && !selectedFacilities.includes(String(event.facility || ''))) return false
+    return true
+  }).sort((a,b) => String(b.date).localeCompare(String(a.date)) || String(b.createdAt).localeCompare(String(a.createdAt))), [dailyEvents, from, to, selectedFacilities])
+  const savedDailyEventsForSelection = useMemo(() => dailyEvents.filter(event => {
+    if (!selectedSingleReportDate || event.date !== selectedSingleReportDate) return false
+    return !selectedFacilities.length || selectedFacilities.includes(String(event.facility || ''))
+  }), [dailyEvents, selectedSingleReportDate, selectedFacilities])
   const savedDailyReportRowsForSelection = useMemo(() => dailyReportHistory.filter(row => {
     if (!selectedSingleReportDate || reportDateToIso(row.reportDate) !== selectedSingleReportDate) return false
     return !selectedFacilities.length || selectedFacilities.includes(String(row.facility || ''))
@@ -2453,9 +2500,9 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const displayDate = from && to && from === to
       ? new Date(`${from}T12:00:00`).toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'})
       : (from || to || new Date().toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'}))
-    const eventText = dailyEventEnabled
-      ? `אירוע ${dailyEventType || 'כללי'}${dailyEventFacility ? ` · מתקן ${dailyEventFacility}` : ''}${dailyEventText ? ` - ${dailyEventText}` : ''}`
-      : 'הוספת אירוע - לא נבחר אירוע לדוח זה.'
+    const eventText = savedDailyEventsForSelection.length
+      ? savedDailyEventsForSelection.map(event => `אירוע ${event.type} · מתקן ${event.facility} · חומרה ${event.severity} - ${event.description}`).join(' | ')
+      : 'לא נשמרו אירועים לתאריך הדוח שנבחר.'
     const cell = (value='', style='formBody', extra='') => {
       const numeric = typeof value === 'number' && Number.isFinite(value)
       return `<Cell ss:StyleID="${style}"${extra}><Data ss:Type="${numeric ? 'Number' : 'String'}">${xmlEscape(value)}</Data></Cell>`
@@ -2883,13 +2930,9 @@ console.log("QUALITY =", qualityForBatchMaterial)
           <button type="button" className={`action ui-control ${uiSoundsEnabled ? 'active' : ''}`} data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילי ממשק' : 'הפעלת צלילי ממשק'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}<span>{uiSoundsEnabled ? 'צלילים פעילים' : 'צלילים כבויים'}</span></button><div className="user-session"><img className="user-brand-avatar" src="/icons/adama-mark-64.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
           <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת תבנית יעדים</button>
-          <div className="daily-event-export-controls" style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
-            <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,fontWeight:700}}><input type="checkbox" checked={dailyEventEnabled} onChange={e=>setDailyEventEnabled(e.target.checked)}/> הוספת אירוע</label>
-            {dailyEventEnabled && <>
-              <select value={dailyEventType} onChange={e=>setDailyEventType(e.target.value)} style={{height:36,borderRadius:9}}><option value="">סוג אירוע</option><option>בטיחות</option><option>איכות</option><option>סביבה</option></select>
-              <select value={dailyEventFacility} onChange={e=>setDailyEventFacility(e.target.value)} style={{height:36,borderRadius:9}}><option value="">בחר מתקן</option>{(selectedFacilities.length ? selectedFacilities : facilities).map(id=><option key={id} value={id}>{id}</option>)}</select>
-              <input value={dailyEventText} onChange={e=>setDailyEventText(e.target.value)} placeholder="תיאור האירוע..." style={{height:36,borderRadius:9,border:'1px solid #cbd5e1',padding:'0 9px',minWidth:190}}/>
-            </>}
+          <div className="daily-event-export-controls">
+            <button type="button" className="action secondary event-action-button" onClick={openDailyEventForm}><BellRing size={18}/> הוספת אירוע</button>
+            <button type="button" className="action secondary event-action-button" onClick={() => setDailyEventHistoryOpen(true)}><ClipboardList size={18}/> היסטוריית אירועים{visibleDailyEvents.length ? ` (${visibleDailyEvents.length})` : ''}</button>
           </div>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
           <label className={`action secondary ${busy ? 'disabled' : ''}`} style={{cursor:'pointer'}}><Upload size={18}/> טעינת דוח ערוך<input type="file" accept=".xls,.xlsx" hidden disabled={busy} onChange={e=>{const file=e.target.files?.[0]; if(file) handleDailyReportRoundtripFile(file); e.target.value=''}}/></label>
@@ -2899,6 +2942,28 @@ console.log("QUALITY =", qualityForBatchMaterial)
           {canManageData ? <button className="action secondary" onClick={onSignOut}><LogOut size={18}/> יציאת מנהל</button> : <button className="action secondary" onClick={onRequestAdminLogin}><ShieldCheck size={18}/> כניסת מנהל</button>}
         </div>
       </header>
+      {dailyEventFormOpen && <div className="daily-event-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setDailyEventFormOpen(false) }}>
+        <section className="daily-event-modal" dir="rtl" role="dialog" aria-modal="true" aria-label="הוספת אירוע">
+          <div className="daily-event-modal-head"><div><small>דיווח יומי</small><h2>הוספת אירוע</h2><p>מלא את פרטי האירוע ושמור. ניתן לשמור יותר מאירוע אחד לאותו יום.</p></div><button type="button" className="daily-event-close" onClick={() => setDailyEventFormOpen(false)} aria-label="סגור"><X size={20}/></button></div>
+          <div className="daily-event-form-grid">
+            <label><span>תאריך אירוע</span><input type="date" value={dailyEventDate} onChange={e=>setDailyEventDate(e.target.value)}/></label>
+            <label><span>סוג אירוע</span><select value={dailyEventType} onChange={e=>setDailyEventType(e.target.value)}><option value="">בחר סוג אירוע...</option><option>שפך</option><option>בטיחות</option><option>איכות</option><option>סביבה</option><option>תפעולי</option><option>אחר</option></select></label>
+            <label><span>מתקן</span><select value={dailyEventFacility} onChange={e=>setDailyEventFacility(e.target.value)}><option value="">בחר מתקן...</option>{facilities.map(id=><option key={id} value={id}>{id}</option>)}</select></label>
+            <label><span>חומרת אירוע</span><select value={dailyEventSeverity} onChange={e=>setDailyEventSeverity(e.target.value)}><option value="">בחר חומרה...</option><option>נמוכה</option><option>בינונית</option><option>גבוהה</option><option>קריטית</option></select></label>
+            <label className="daily-event-description"><span>תיאור האירוע</span><textarea rows="5" value={dailyEventText} onChange={e=>setDailyEventText(e.target.value)} placeholder="תאר בקצרה מה קרה, היכן ומה הפעולה שבוצעה..."/></label>
+          </div>
+          <div className="daily-event-modal-actions"><button type="button" className="action secondary" onClick={() => setDailyEventFormOpen(false)}>ביטול</button><button type="button" className="action event-save-button" onClick={saveDailyEvent}><Save size={18}/> שמור אירוע</button></div>
+        </section>
+      </div>}
+
+      {dailyEventHistoryOpen && <div className="daily-event-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setDailyEventHistoryOpen(false) }}>
+        <section className="daily-event-modal daily-event-history-modal" dir="rtl" role="dialog" aria-modal="true" aria-label="היסטוריית אירועים">
+          <div className="daily-event-modal-head"><div><small>היסטוריה לפי המסננים הפעילים</small><h2>היסטוריית אירועים</h2><p>{from || 'ללא תאריך התחלה'} עד {to || 'ללא תאריך סיום'}{selectedFacilities.length ? ` · מתקנים ${selectedFacilities.join(', ')}` : ' · כל המתקנים'}</p></div><button type="button" className="daily-event-close" onClick={() => setDailyEventHistoryOpen(false)} aria-label="סגור"><X size={20}/></button></div>
+          <div className="daily-event-history-list">{visibleDailyEvents.length ? visibleDailyEvents.map(event => <article key={event.id} className={`daily-event-history-card severity-${event.severity}`}><div className="daily-event-history-top"><strong>{event.type}</strong><span>{new Date(`${event.date}T12:00:00`).toLocaleDateString('he-IL')}</span></div><div className="daily-event-history-meta"><span>מתקן {event.facility}</span><b>{event.severity}</b></div><p>{event.description}</p><small>{event.createdAt ? `נשמר ${new Date(event.createdAt).toLocaleString('he-IL')}` : ''}</small></article>) : <div className="daily-event-history-empty">לא נמצאו אירועים בטווח ובמתקנים שנבחרו.</div>}</div>
+          <div className="daily-event-modal-actions"><button type="button" className="action secondary" onClick={() => setDailyEventHistoryOpen(false)}>סגור</button><button type="button" className="action event-save-button" onClick={() => { setDailyEventHistoryOpen(false); openDailyEventForm() }}><BellRing size={18}/> אירוע חדש</button></div>
+        </section>
+      </div>}
+
       {updateBanner}
 
       <section className="top-status-bar" aria-label="סטטוס מערכת">
