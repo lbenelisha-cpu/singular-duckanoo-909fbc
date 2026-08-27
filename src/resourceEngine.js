@@ -20,7 +20,7 @@ const workdayCount = (key, startDay = 1, endDay = daysInMonth(key)) => {
 }
 
 const resourceCode = row => upper(`${row.routingGroup || ''} ${row.routingDescription || ''} ${row.resource || ''} ${row.line || ''}`)
-const isSmallPack19 = row => ['19PWG-01','19PWG-05','19PWG-15'].some(code => resourceCode(row).includes(code))
+const isSmallPack19 = row => upper(row.mappedResource) === 'WG SMALL PACKS (19)' || ['19PWG-01','19PWG-05','19PWG-15','19-P-03','19-P-04','19-P-05','FCLT-19'].some(code => resourceCode(row).includes(code))
 
 const matchProductionToTarget = (row, target, manualMappings = []) => {
   // Approved business rules below take precedence over manual/legacy mappings.
@@ -30,6 +30,28 @@ const matchProductionToTarget = (row, target, manualMappings = []) => {
   const targetName = upper(target.resource)
   const station = upper(row.facility)
   const route = resourceCode(row)
+  const directResource = upper(row.mappedResource)
+
+  // Sprint 11.9.36 — PROD LINE first-pass mapping. For resources whose PROD LINE
+  // uniquely identifies a dashboard card, avoid repeated description/material
+  // tests. Facility 25 remains on the material rules below because it has several
+  // product-family target cards in addition to EC (25).
+  const directMappedCards = new Set([
+    'LQ 1LT (42)','LQ 5 LT (42)','LQ 10/20 LT (42)','LQ 43',
+    'WG (19)','WG SMALL PACKS (19)','EC (23)','24F','24F128','SC (28)',
+    'DIURON (40)','TOLUREX (40)'
+  ])
+  if (directResource && directMappedCards.has(directResource)) {
+    const isSameCard = targetName === directResource
+    if (directResource.startsWith('LQ ') && station === '1542') {
+      return isSameCard && upper(row.orderType).includes('ZFIN')
+    }
+    if (directResource.startsWith('WG')) {
+      const bulkMarkerText = upper(`${row.desc || ''} ${row.routingDescription || ''}`)
+      return isSameCard && !/(^|\D)777(\D|$)/.test(bulkMarkerText)
+    }
+    return isSameCard
+  }
 
   // Sprint 11.9.0 — business rules approved for monthly targets.
   // Specific line/resource rules always win over broad station rules.

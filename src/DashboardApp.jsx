@@ -9,6 +9,7 @@ import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCl
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
+import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
 import './styles.css'
 
 const LEGACY_DAILY_TARGETS = {
@@ -42,8 +43,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.35'
-const BUILD_LABEL = 'Sprint 11.9.35 — Selectable Facilities Scope'
+const APP_VERSION = '11.9.36'
+const BUILD_LABEL = 'Sprint 11.9.36 — PROD LINE Fast Mapping'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -280,6 +281,13 @@ const productionFacility = (facilityValue, routingGroup, routingDescription = ''
   if (facility !== '1542') return facility
   return isFacility42PackagingRoute(routingGroup, routingDescription) ? '1542' : ''
 }
+
+const productionAssignment = (facilityValue, routingGroup, routingDescription = '', prodLineValue = '') => {
+  if (isExcludedProdLine(prodLineValue)) return { facility:'', mapping:null }
+  const mapping = prodLineInfo(prodLineValue)
+  if (mapping?.facility) return { facility:mapping.facility, mapping }
+  return { facility:productionFacility(facilityValue, routingGroup, routingDescription), mapping:null }
+}
 const matchesDateRange = (date, from, to) => {
   const value = iso(date)
   if (!from && !to) return true
@@ -393,7 +401,7 @@ const stableDateKey = value => {
 // Stable row identities used to prevent duplicate records when a file is loaded again.
 const productionRowKey = row => [
   normalize(row?.facility), normalize(row?.productionDay), stableDateKey(row?.finishDate || row?.date),
-  normalize(row?.order), normalize(row?.batch), normalize(row?.material), normalize(row?.routingGroup),
+  normalize(row?.order), normalize(row?.batch), normalize(row?.material), normalize(row?.routingGroup), normalize(row?.prodLine),
   normalize(row?.orderType), String(Number(row?.qty) || 0), String(Number(row?.plannedQty) || 0)
 ].join('|')
 
@@ -1386,7 +1394,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     const present = (...names) => sample.some(r => names.some(n => getField(r, [n]) !== ''))
     const checks = {
       production: [
-        ['מתקן / Storage Location', present('Storage Location', 'Storage location')],
+        ['מתקן / Storage Location / PROD LINE', present('Storage Location', 'Storage location', 'PROD LINE', 'Prod Line', 'Production Line')],
         ['כמות', present('Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity')],
         ['Order או Batch', present('Order', 'Process Order', 'Batch', 'Batch Number')],
       ],
@@ -1435,13 +1443,17 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         let rowsForCloud = rows
         let lastFileUniqueRows = rows.length
         if (kind === 'production') {
-          const compact = dedupeRows(rows.map(r => ({
+          const compact = dedupeRows(rows.map(r => {
+            const prodLine = normalize(getField(r, ['PROD LINE', 'Prod Line', 'Production Line', 'Production line']))
+            const routingGroup = normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup']))
+            const routingDescription = normalize(getField(r, ['Description', 'Routing Description']))
+            const assignment = productionAssignment(getField(r, ['Storage Location', 'Storage location']), routingGroup, routingDescription, prodLine)
+            return {
             __compactProduction: true,
-            facility: productionFacility(
-              getField(r, ['Storage Location', 'Storage location']),
-              getField(r, ['Routing group', 'Routing Group', 'RoutingGroup']),
-              getField(r, ['Description', 'Routing Description'])
-            ),
+            facility: assignment.facility,
+            prodLine,
+            mappedResource: assignment.mapping?.resource || '',
+            prodLineTool: assignment.mapping?.tool || '',
             productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
             finishDate: localDateTimeString(
   combineExcelDateTime(
@@ -1457,9 +1469,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             material: normalize(getField(r, ['Material', 'Material #', 'Material Number', 'Material No.', 'מקט', 'מק"ט', 'מק״ט'])),
             desc: normalize(getField(r, ['Material description', 'Material Description'])),
             orderType: normalize(getField(r, ['Order Type'])),
-            routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup'])),
-            routingDescription: normalize(getField(r, ['Description', 'Routing Description'])),
-          })).filter(r => r.facility && (r.qty || r.order || r.batch)), productionRowKey)
+            routingGroup,
+            routingDescription,
+          }}).filter(r => r.facility && (r.qty || r.order || r.batch)), productionRowKey)
           storedCount = compact.length
           rowsForCloud = compact
           lastFileUniqueRows = compact.length
@@ -1665,8 +1677,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   const prod = useMemo(() => production.map(r => {
     if (r?.__compactProduction) {
+      const assignment = productionAssignment(r.facility, r.routingGroup, r.routingDescription, r.prodLine)
       return {
-        facility: productionFacility(r.facility, r.routingGroup, r.routingDescription),
+        facility: assignment.facility,
+        prodLine: normalize(r.prodLine),
+        mappedResource: normalize(r.mappedResource || assignment.mapping?.resource),
+        prodLineTool: normalize(r.prodLineTool || assignment.mapping?.tool),
         productionDay: normalize(r.productionDay) || iso(r.finishDate),
         date: productionDateFromDay(r.productionDay) || (r.finishDate ? new Date(r.finishDate) : null),
         qty: num(r.qty),
@@ -1687,12 +1703,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       getField(r, ['Actual Finish Time', 'Actual finish time']),
       getField(r, ['Release date (actual)', 'Time Stamp'])
     )
+    const prodLine = normalize(getField(r, ['PROD LINE', 'Prod Line', 'Production Line', 'Production line']))
+    const routingGroup = normalizeRouting(getField(r, ['Routing group', 'Routing Group', 'RoutingGroup']))
+    const routingDescription = normalize(getField(r, ['Description', 'Routing Description']))
+    const assignment = productionAssignment(getField(r, ['Storage Location', 'Storage location']), routingGroup, routingDescription, prodLine)
     return {
-      facility: productionFacility(
-        getField(r, ['Storage Location', 'Storage location']),
-        getField(r, ['Routing group', 'Routing Group', 'RoutingGroup']),
-        getField(r, ['Description', 'Routing Description'])
-      ),
+      facility: assignment.facility,
+      prodLine,
+      mappedResource: assignment.mapping?.resource || '',
+      prodLineTool: assignment.mapping?.tool || '',
       productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
       date: productionDateFromDay(localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date']))) || finish,
       qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
@@ -1710,8 +1729,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 ])),
       desc: normalize(getField(r, ['Material description', 'Material Description'])),
       orderType: normalize(getField(r, ['Order Type'])),
-      routingGroup: normalizeRouting(getField(r, ['Routing group', 'Routing Group'])),
-      routingDescription: normalize(getField(r, ['Description', 'Routing Description'])),
+      routingGroup,
+      routingDescription,
       hour: finish ? finish.getHours() : null,
       shift: shiftInfo(finish),
     }
@@ -1794,9 +1813,25 @@ material: normalize(getField(r, [
   const dashboardQualityRows = useMemo(() => qualityRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [qualityRows, selectableFacilitySet])
   const dashboardDeviationRows = useMemo(() => deviationRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [deviationRows, selectableFacilitySet])
 
-  // Build every quality lookup in one linear pass. The previous implementation
-  // scanned the 263K-row quality array several times and then filtered the whole
-  // array again for every deviation, which froze the browser after the fast cache render.
+  // Sprint 11.9.36 performance: index detailed quality characteristics only for
+  // deviation rows currently needed plus the Batch card currently opened. The quality
+  // dataset can exceed 800K result rows, so building full arrays for every Batch during
+  // initial render is unnecessary and can make Chrome report "Page Unresponsive".
+  const selectedQualityKey = useMemo(() => {
+    const batch = normalize(selectedBatch)
+    if (!batch) return ''
+    const requestedMaterial = normalize(selectedBatchMaterial)
+    if (requestedMaterial) return batchMaterialKey(batch, requestedMaterial)
+    const materials = [...new Set(dashboardProd.filter(row => normalize(row.batch) === batch).map(row => normalize(row.material)).filter(Boolean))]
+    return materials.length === 1 ? batchMaterialKey(batch, materials[0]) : ''
+  }, [selectedBatch, selectedBatchMaterial, dashboardProd])
+
+  const qualityDetailKeys = useMemo(() => {
+    const keys = new Set(dashboardDeviationRows.map(row => batchMaterialKey(row.batch, row.material)).filter(Boolean))
+    if (selectedQualityKey) keys.add(selectedQualityKey)
+    return keys
+  }, [dashboardDeviationRows, selectedQualityKey])
+
   const qualityIndex = useMemo(() => {
     const byBatch = new Map()
     const byBatchMaterial = new Map()
@@ -1820,25 +1855,8 @@ material: normalize(getField(r, [
     }
 
     dashboardQualityRows.forEach(row => {
-      if (normalize(row.batch) === '0000000101') {
-  console.log(
-    'QUALITY CHECK',
-    {
-      batch: row.batch,
-      material: row.material,
-      characteristic: row.characteristic,
-      status: row.status,
-      approval: row.approval,
-      inspectionLot: row.inspectionLot,
-      value: row.value
-    }
-  )
-}
       const key = batchMaterialKey(row.batch, row.material)
-      if (row.batch === '0000000101') {
-  console.log("MAP KEY =", key)
-}
-      if (!key) return
+      if (!key || !qualityDetailKeys.has(key)) return
 
       const list = byBatchMaterial.get(key) || []
       list.push(row)
@@ -1854,14 +1872,6 @@ material: normalize(getField(r, [
           latestByBatchMaterialLot.set(lotKey, { timestamp, date: row.date })
         }
       }
-console.log({
-  batch: row.batch,
-  material: row.material,
-  characteristic: row.characteristic,
-  status: row.status,
-  approval: row.approval,
-  value: row.value
-})
       const status = normalize(row.status || row.approval).toLowerCase()
       const isRejected = ['rejection', 'rejected', 'fail', 'failed', 'פסול', 'לא תקין', 'חריג'].some(x => status.includes(x))
       const item = {
@@ -1886,7 +1896,7 @@ console.log({
     latestByBatchMaterial,
     latestByBatchMaterialLot,
 }
-  }, [dashboardQualityRows])
+  }, [dashboardQualityRows, qualityDetailKeys])
 
   const enrichedDeviationRows = useMemo(() => dashboardDeviationRows.map(row => {
     const key = batchMaterialKey(row.batch, row.material)
@@ -1913,17 +1923,11 @@ console.log({
     const batchMaterials = [...new Set(batchProductionRows.map(row => normalize(row.material)).filter(Boolean))]
     const material = requestedMaterial || (batchMaterials.length === 1 ? batchMaterials[0] : '')
     const key = batchMaterialKey(batch, material)
-if (batch === '0000000101') {
-  alert(`KEY=${key}\nMaterial=${material}`)
-}
     const productionRows = material
       ? batchProductionRows.filter(row => normalize(row.material) === material)
       : batchProductionRows
 
     const qualityForBatchMaterial = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
-    console.log("Found quality records =", qualityForBatchMaterial.length)
-    console.log("KEY =", key)
-console.log("QUALITY =", qualityForBatchMaterial)
     const deviationForBatchMaterial = key
       ? enrichedDeviationRows.filter(row => batchMaterialKey(row.batch, row.material) === key)
       : []
@@ -1969,7 +1973,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     return dashboardProd.filter(r => {
       const day = r.productionDay || iso(r.date)
       const inRange = (!from || day >= from) && (!to || day <= to)
-      return inRange && (!q || [r.facility, r.order, r.batch, r.material, r.desc].some(v => String(v || '').toLowerCase().includes(q)))
+      return inRange && (!q || [r.facility, r.prodLine, r.prodLineTool, r.order, r.batch, r.material, r.desc].some(v => String(v || '').toLowerCase().includes(q)))
     })
   }, [dashboardProd, from, to, query])
   const filtered = useMemo(() => baseFiltered.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility)), [baseFiltered, selectedFacilities])
@@ -2059,10 +2063,10 @@ console.log("QUALITY =", qualityForBatchMaterial)
       if (material) exact.set(`${batch}|${material}`, ud)
       if (!byBatch.has(batch)) byBatch.set(batch, ud)
     }
-    qualityRows.forEach(put)
-    deviationRows.forEach(put)
+    dashboardQualityRows.forEach(put)
+    dashboardDeviationRows.forEach(put)
     return { exact, byBatch }
-  }, [qualityRows, deviationRows])
+  }, [dashboardQualityRows, dashboardDeviationRows])
 
   const productionUsageDecision = row => {
     const batch = normalize(row?.batch)
@@ -2336,6 +2340,8 @@ console.log("QUALITY =", qualityForBatchMaterial)
       Time: item.row.date ? new Date(item.row.date).toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'}) : '',
       StorageLocation: item.row.facility,
       FacilityFamily: item.family,
+      ProdLine: item.row.prodLine || '',
+      Tool: item.row.prodLineTool || '',
       RoutingGroup: item.row.routingGroup,
       OrderType: item.row.orderType,
       Order: item.row.order,
@@ -2834,9 +2840,21 @@ console.log("QUALITY =", qualityForBatchMaterial)
     const productionRows = [...filtered].sort(facilitySortDesc)
     const totals = productionRows.reduce((m,r) => { const f=String(r.facility||'—'); m.set(f,(m.get(f)||0)+num(r.qty)); return m }, new Map())
     const summaryRows = [...totals.entries()].sort((a,b)=>facilitySortDesc({facility:a[0]},{facility:b[0]})).map(([facility,total]) => ({ __facility:facility, Facility:facility, Records:productionRows.filter(r=>String(r.facility||'—')===facility).length, TotalQuantity:total }))
+    const facilityToolMap = new Map()
+    productionRows.filter(r => ['1523','1528'].includes(String(r.facility || ''))).forEach(r => {
+      const facility = excelFacilityLabel(r)
+      const tool = r.prodLineTool || r.prodLine || 'לא סווג'
+      const key = `${facility}|${tool}|${r.prodLine || ''}`
+      const current = facilityToolMap.get(key) || { __facility:String(r.facility || ''), Facility:facility, Tool:tool, ProdLine:r.prodLine || '', Records:0, TotalQuantity:0 }
+      current.Records += 1
+      current.TotalQuantity += num(r.qty)
+      facilityToolMap.set(key, current)
+    })
+    const facilityToolRows = [...facilityToolMap.values()].sort((a,b) => String(a.Facility).localeCompare(String(b.Facility),'he',{numeric:true}) || String(a.Tool).localeCompare(String(b.Tool),'he',{numeric:true}))
     exportStyledExcel([
-      { name:'Production', columns:[['Date','תאריך'],['Time','שעה'],['Facility','מתקן'],['FacilityTotal','סה״כ מתקן'],['Order','הזמנה'],['Batch','Batch'],['Material','מק״ט חומר'],['Description','תיאור חומר'],['RoutingGroup','מתקן / תחנה'],['Quantity','כמות'],['GroupTotal','סה״כ']].map(([key,label])=>({key,label})), rows:productionRows.map((r,index,rows)=>{ const facility=String(r.facility||'—'); const firstInFacility=index===0 || String(rows[index-1]?.facility||'—')!==facility; return { __facility:facility, Date:iso(r.date), Time:r.date?r.date.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'', Facility:r.facility, FacilityTotal:totals.get(facility)||0, Order:r.order, Batch:r.batch, Material:r.material, Description:r.desc, RoutingGroup:r.routingGroup, Quantity:r.qty, GroupTotal:firstInFacility ? (totals.get(facility)||0) : '' } }) },
+      { name:'Production', columns:[['Date','תאריך'],['Time','שעה'],['Facility','מתקן'],['ProdLine','PROD LINE'],['Tool','כלי / אזור'],['FacilityTotal','סה״כ מתקן'],['Order','הזמנה'],['Batch','Batch'],['Material','מק״ט חומר'],['Description','תיאור חומר'],['RoutingGroup','מתקן / תחנה'],['Quantity','כמות'],['GroupTotal','סה״כ']].map(([key,label])=>({key,label})), rows:productionRows.map((r,index,rows)=>{ const facility=String(r.facility||'—'); const firstInFacility=index===0 || String(rows[index-1]?.facility||'—')!==facility; return { __facility:facility, Date:iso(r.date), Time:r.date?r.date.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'', Facility:r.facility, ProdLine:r.prodLine || '', Tool:r.prodLineTool || '', FacilityTotal:totals.get(facility)||0, Order:r.order, Batch:r.batch, Material:r.material, Description:r.desc, RoutingGroup:r.routingGroup, Quantity:r.qty, GroupTotal:firstInFacility ? (totals.get(facility)||0) : '' } }) },
       { name:'סיכום מתקנים', columns:[{key:'Facility',label:'מתקן'},{key:'Records',label:'מספר רשומות'},{key:'TotalQuantity',label:'סה״כ כמות'}], rows:summaryRows },
+      { name:'פירוט 23-28', columns:[{key:'Facility',label:'מתקן'},{key:'Tool',label:'כלי / אזור'},{key:'ProdLine',label:'PROD LINE'},{key:'Records',label:'מספר רשומות'},{key:'TotalQuantity',label:'סה״כ כמות'}], rows:facilityToolRows },
       { name:'Planning', columns:[{key:'Month',label:'Month'},{key:'Facility',label:'Facility'},{key:'Station',label:'Station'},{key:'MonthlyTarget',label:'Monthly Target'},{key:'Actual',label:'Actual'},{key:'Remaining',label:'Remaining'},{key:'Forecast',label:'Forecast'},{key:'Status',label:'Status'}], rows:planningRows.map(r=>({__facility:String(r.facility||'—'),Month:planningMonth,Facility:r.facility,Station:r.station,MonthlyTarget:r.target,Actual:r.actual,Remaining:r.remaining,Forecast:r.forecast,Status:r.label})) },
       { name:'Quality', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'InspectionLot',label:'Inspection Lot'},{key:'Order',label:'Order'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'}], rows:qualityBad.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,InspectionLot:r.inspectionLot,Order:r.order,Batch:r.batch,Material:r.material,Status:r.status})) },
       { name:'Deviations', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'},{key:'Remarks',label:'Remarks'}], rows:openDeviations.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,Batch:r.batch,Material:r.material,Status:r.status,Remarks:r.remarks})) }
@@ -3426,7 +3444,7 @@ function ResourceDetailModal({ resource, onClose, onOpenBatch }) {
       Material:item.material, Description:item.description, Quantity:item.qty, Batches:item.batches.size, Orders:item.orders.size, Rows:item.rows,
     })), 'Materials')
     appendAutoFitJsonSheet(wb, rows.map(row => ({
-      Date:row.productionDay || iso(row.date), Facility:row.facility, RoutingGroup:row.routingGroup, OrderType:row.orderType,
+      Date:row.productionDay || iso(row.date), Facility:row.facility, ProdLine:row.prodLine || '', Tool:row.prodLineTool || '', RoutingGroup:row.routingGroup, OrderType:row.orderType,
       Order:row.order, Batch:row.batch, Material:row.material, Description:row.desc, Quantity:row.qty,
     })), 'Calculation Rows')
     XLSX.writeFile(wb, `IML_${String(resource.resource || 'resource').replace(/[^a-zA-Z0-9_-]+/g,'_')}_${planningSafeMonth(resource)}.xlsx`)
