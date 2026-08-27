@@ -42,8 +42,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.34'
-const BUILD_LABEL = 'Sprint 11.9.34 — Monthly Target History'
+const APP_VERSION = '11.9.35'
+const BUILD_LABEL = 'Sprint 11.9.35 — Selectable Facilities Scope'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -924,6 +924,13 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [planningMonth, setPlanningMonth] = useState('')
   const [additionalFacilities, setAdditionalFacilities] = useState([])
   const [facilityToAdd, setFacilityToAdd] = useState('')
+  // Dashboard scope rule: regular KPIs, tables, quality and planning only use
+  // facilities that are currently available in the main facility picker.
+  // A discovered facility starts contributing only after a manager explicitly
+  // adds it to the picker. This prevents unrelated storage locations in SAP
+  // exports from inflating IML CONTROL totals.
+  const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
+  const selectableFacilitySet = useMemo(() => new Set(facilities.map(String)), [facilities])
   const [dailyAdditionalFacilities, setDailyAdditionalFacilities] = useState(() => readLocalJson('iml-daily-additional-facilities', []))
   const [dailyFacilityToAdd, setDailyFacilityToAdd] = useState('')
   const [periodYear, setPeriodYear] = useState('')
@@ -1780,6 +1787,13 @@ material: normalize(getField(r, [
     udCode: normalize(getField(r, ['UD Code'])),
   })), [deviations])
 
+  // Normalized rows that are allowed to enter the dashboard. Raw uploaded rows
+  // remain in the cloud dataset, but unrelated facilities are excluded from all
+  // regular user-facing calculations until they are explicitly added to the picker.
+  const dashboardProd = useMemo(() => prod.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [prod, selectableFacilitySet])
+  const dashboardQualityRows = useMemo(() => qualityRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [qualityRows, selectableFacilitySet])
+  const dashboardDeviationRows = useMemo(() => deviationRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [deviationRows, selectableFacilitySet])
+
   // Build every quality lookup in one linear pass. The previous implementation
   // scanned the 263K-row quality array several times and then filtered the whole
   // array again for every deviation, which froze the browser after the fast cache render.
@@ -1805,7 +1819,7 @@ material: normalize(getField(r, [
       target.set(key, list)
     }
 
-    qualityRows.forEach(row => {
+    dashboardQualityRows.forEach(row => {
       if (normalize(row.batch) === '0000000101') {
   console.log(
     'QUALITY CHECK',
@@ -1872,9 +1886,9 @@ console.log({
     latestByBatchMaterial,
     latestByBatchMaterialLot,
 }
-  }, [qualityRows])
+  }, [dashboardQualityRows])
 
-  const enrichedDeviationRows = useMemo(() => deviationRows.map(row => {
+  const enrichedDeviationRows = useMemo(() => dashboardDeviationRows.map(row => {
     const key = batchMaterialKey(row.batch, row.material)
     const lotKey = key && row.inspectionLot ? `${key}|${normalize(row.inspectionLot)}` : ''
     const sampleDate = key
@@ -1886,7 +1900,7 @@ console.log({
       rejectedCharacteristics: key ? (qualityIndex.rejected.get(key) || []) : [],
       approvedCharacteristics: key ? (qualityIndex.approved.get(key) || []) : [],
     }
-  }), [deviationRows, qualityIndex])
+  }), [dashboardDeviationRows, qualityIndex])
 
   // Plant rule: a quality record is uniquely identified by exact Batch + Material.
   // Order, facility, routing group and inspection lot remain display fields only.
@@ -1895,7 +1909,7 @@ console.log({
     const requestedMaterial = normalize(selectedBatchMaterial)
     if (!batch) return null
 
-    const batchProductionRows = prod.filter(row => normalize(row.batch) === batch)
+    const batchProductionRows = dashboardProd.filter(row => normalize(row.batch) === batch)
     const batchMaterials = [...new Set(batchProductionRows.map(row => normalize(row.material)).filter(Boolean))]
     const material = requestedMaterial || (batchMaterials.length === 1 ? batchMaterials[0] : '')
     const key = batchMaterialKey(batch, material)
@@ -1921,7 +1935,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       quality: qualityForBatchMaterial,
       deviations: deviationForBatchMaterial,
     }
-  }, [selectedBatch, selectedBatchMaterial, prod, qualityIndex, enrichedDeviationRows])
+  }, [selectedBatch, selectedBatchMaterial, dashboardProd, qualityIndex, enrichedDeviationRows])
 
   const openBatchCard = (batch, material = '') => {
     if (!batch) return
@@ -1929,7 +1943,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     setSelectedBatchMaterial(normalize(material))
   }
 
-  const dataMonths = useMemo(() => [...new Set(prod.map(r => monthKey(r.date)).filter(Boolean))].sort(), [prod])
+  const dataMonths = useMemo(() => [...new Set(dashboardProd.map(r => monthKey(r.date)).filter(Boolean))].sort(), [dashboardProd])
   const targetMonths = useMemo(() => [...new Set(targets.map(r => r.month).filter(Boolean))].sort(), [targets])
   const availableMonths = useMemo(() => [...new Set([...targetMonths, ...dataMonths])].sort().reverse(), [targetMonths, dataMonths])
   useEffect(() => { if (!planningMonth && availableMonths.length) setPlanningMonth(availableMonths[0]) }, [availableMonths, planningMonth])
@@ -1943,21 +1957,21 @@ console.log("QUALITY =", qualityForBatchMaterial)
       if (time < minTime) minTime = time
       if (time > maxTime) maxTime = time
     })
-    scan(prod); scan(qualityRows); scan(deviationRows)
+    scan(dashboardProd); scan(dashboardQualityRows); scan(dashboardDeviationRows)
     return {
       min: Number.isFinite(minTime) ? iso(new Date(minTime)) : '',
       max: Number.isFinite(maxTime) ? iso(new Date(maxTime)) : '',
     }
-  }, [prod, qualityRows, deviationRows])
+  }, [dashboardProd, dashboardQualityRows, dashboardDeviationRows])
 
   const baseFiltered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return prod.filter(r => {
+    return dashboardProd.filter(r => {
       const day = r.productionDay || iso(r.date)
       const inRange = (!from || day >= from) && (!to || day <= to)
       return inRange && (!q || [r.facility, r.order, r.batch, r.material, r.desc].some(v => String(v || '').toLowerCase().includes(q)))
     })
-  }, [prod, from, to, query])
+  }, [dashboardProd, from, to, query])
   const filtered = useMemo(() => baseFiltered.filter(r => !selectedFacilities.length || selectedFacilities.includes(r.facility)), [baseFiltered, selectedFacilities])
 
   // Dedicated Facility 42 material balance. This view is intentionally independent
@@ -2091,7 +2105,6 @@ console.log("QUALITY =", qualityForBatchMaterial)
 
   const discoveredFacilities = useMemo(() => [...new Set([...targets.map(t => t.facility), ...prod.map(r => r.facility)].filter(Boolean))].sort(), [targets, prod])
   const optionalFacilities = useMemo(() => discoveredFacilities.filter(id => !PRIMARY_FACILITIES.includes(id) && !additionalFacilities.includes(id)), [discoveredFacilities, additionalFacilities])
-  const facilities = useMemo(() => [...PRIMARY_FACILITIES, ...additionalFacilities], [additionalFacilities])
   // Daily Management default: never show 11xx stations automatically.
   // They remain available in the manual "+ add facility" list.
   const dailyCoreFacilities = useMemo(
@@ -2106,7 +2119,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
     () => discoveredFacilities.filter(id => !dailyFacilities.includes(id)),
     [discoveredFacilities, dailyFacilities]
   )
-  const availableYears = useMemo(() => [...new Set(prod.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [prod])
+  const availableYears = useMemo(() => [...new Set(dashboardProd.map(r => r.date?.getFullYear()).filter(Boolean))].sort((a,b) => b-a), [dashboardProd])
 
   const targetsWithAdminMappings = useMemo(() => targets.map(target => {
     const resourceKey = normalize(target.resource).toUpperCase()
@@ -2120,13 +2133,18 @@ console.log("QUALITY =", qualityForBatchMaterial)
     return { ...normalizedTarget, facility:saved.family, facilities:[saved.family], station:saved.family, mappingStatus:'manual-approved', mappingReason:`מיפוי מנהל מאושר למשפחת תחנה ${saved.family}` }
   }), [targets, targetMappings])
 
+  const dashboardTargetsWithAdminMappings = useMemo(() => targetsWithAdminMappings.filter(target => {
+    const ids = (target.facilities || [target.facility]).map(String).filter(Boolean)
+    return ids.some(id => selectableFacilitySet.has(id))
+  }), [targetsWithAdminMappings, selectableFacilitySet])
+
   const planningRows = useMemo(() => buildResourceRows({
-    production: prod,
-    targets:targetsWithAdminMappings,
+    production: dashboardProd,
+    targets:dashboardTargetsWithAdminMappings,
     planningMonth,
     fallbackFacilities: facilities,
     manualMappings,
-  }), [planningMonth, prod, targetsWithAdminMappings, facilities, manualMappings])
+  }), [planningMonth, dashboardProd, dashboardTargetsWithAdminMappings, facilities, manualMappings])
 
 
   const mappingTargets = useMemo(() => planningRows.map(row => ({
@@ -2206,7 +2224,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
   }
 
 
-  const availableTargetFamilies = useMemo(() => [...new Set(prod.map(row => stationFamily(row.facility)).filter(Boolean))].sort(), [prod])
+  const availableTargetFamilies = useMemo(() => [...new Set(dashboardProd.map(row => stationFamily(row.facility)).filter(Boolean))].sort(), [dashboardProd])
   const unmappedPlanningTargets = useMemo(() => planningRows.filter(row => row.mappingStatus === 'requires-mapping'), [planningRows])
 
   const openTargetMappingDialog = row => {
@@ -2404,10 +2422,10 @@ console.log("QUALITY =", qualityForBatchMaterial)
   // A single date/facility scope is shared by production, quality and deviations.
   // This prevents quality/deviation cards from continuing to show rows outside
   // the selected period (for example when choosing "יום אחרון").
-  const filteredQualityRows = useMemo(() => qualityRows.filter(r =>
+  const filteredQualityRows = useMemo(() => dashboardQualityRows.filter(r =>
     (!selectedFacilities.length || selectedFacilities.includes(r.facility)) &&
     matchesDateRange(r.date, from, to)
-  ), [qualityRows, selectedFacilities, from, to])
+  ), [dashboardQualityRows, selectedFacilities, from, to])
 
   const filteredDeviationRows = useMemo(() => enrichedDeviationRows.filter(r =>
     (!selectedFacilities.length || selectedFacilities.includes(r.facility)) &&
@@ -2599,12 +2617,12 @@ console.log("QUALITY =", qualityForBatchMaterial)
 
   const controlTowerTrend = useMemo(() => {
     const byDay = new Map()
-    prod.filter(row => monthKey(row.date) === planningMonth).forEach(row => {
+    dashboardProd.filter(row => monthKey(row.date) === planningMonth).forEach(row => {
       const key = iso(row.date)
       if (key) byDay.set(key, (byDay.get(key) || 0) + row.qty)
     })
     return [...byDay.entries()].sort((a,b) => a[0].localeCompare(b[0])).slice(-7)
-  }, [prod, planningMonth])
+  }, [dashboardProd, planningMonth])
 
   const jumpToDetails = (tab) => {
     setActiveTab(tab)
@@ -3121,8 +3139,8 @@ console.log("QUALITY =", qualityForBatchMaterial)
         <div className={`top-status-item cloud ${cloudState.mode}`}><span className="status-dot"></span><small>ענן</small><b>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר' : 'מקומי'}</b></div>
         <div className="top-status-item"><small>עדכון אחרון</small><b>{cloudState.lastSync ? new Date(cloudState.lastSync).toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'}) : '—'}</b></div>
         <div className="top-status-item"><small>חודש פעיל</small><b>{planningMonth || '—'}</b></div>
-        <div className="top-status-item"><small>תפוקה</small><b>{fmt(production.length)}</b></div>
-        <div className="top-status-item"><small>איכות</small><b>{fmt(quality.length + deviations.length)}</b></div>
+        <div className="top-status-item"><small>תפוקה</small><b>{fmt(dashboardProd.length)}</b></div>
+        <div className="top-status-item"><small>איכות</small><b>{fmt(dashboardQualityRows.length + dashboardDeviationRows.length)}</b></div>
         <div className="top-status-item range"><small>טווח</small><b>{from || '—'} → {to || '—'}</b></div>
         {canManageData && <button type="button" className={`diagnostics-toggle ${diagnosticsOpen ? 'active' : ''}`} onClick={() => setDiagnosticsOpen(v => !v)} title="אבחון מערכת"><Activity size={16}/><span>אבחון</span></button>}
       </section>
@@ -3233,7 +3251,7 @@ console.log("QUALITY =", qualityForBatchMaterial)
       </section>
 
       <section className="extra-facilities">
-        <div><Factory size={18}/><strong>מתקנים נוספים</strong><span>ברירת המחדל מציגה רק את מתקני הליבה.</span></div>
+        <div><Factory size={18}/><strong>מתקנים נוספים</strong><span>רק מתקנים שמופיעים בבורר המתקנים נכנסים לחישובי הדשבורד. מתקן נוסף ייכלל רק לאחר הוספה מפורשת.</span></div>
         <div className="extra-facility-actions"><select value={facilityToAdd} onChange={e => setFacilityToAdd(e.target.value)}><option value="">בחר מתקן נוסף</option>{optionalFacilities.map(id => <option key={id} value={id}>{id}</option>)}</select><button onClick={addFacility} disabled={!facilityToAdd}>הוסף מתקן</button></div>
         {!!additionalFacilities.length && <div className="extra-facility-chips">{additionalFacilities.map(id => <button key={id} onClick={() => removeAdditionalFacility(id)}>{id}<X size={14}/></button>)}</div>}
       </section>
