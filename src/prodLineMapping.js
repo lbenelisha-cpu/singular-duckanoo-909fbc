@@ -5,19 +5,19 @@ const clean = value => String(value ?? '').trim().toUpperCase()
 // Storage/Material rules remain as fallback for resources not listed here.
 const EXACT = {
   // Facility 42 packaging
-  '42-P-02': { facility:'1542', resource:'LQ 1LT (42)', tool:'1 liter' },
-  '42-P-03': { facility:'1542', resource:'LQ 5 LT (42)', tool:'5 liter' },
-  '42-P-04': { facility:'1542', resource:'LQ 10/20 LT (42)', tool:'10/20 liter' },
+  '42-P-02': { facility:'1542', resource:'LQ 1LT (42)', tool:'1 Liter' },
+  '42-P-03': { facility:'1542', resource:'LQ 5 LT (42)', tool:'5 Liter' },
+  '42-P-04': { facility:'1542', resource:'LQ 10/20 LT (42)', tool:'10/20 Liter' },
 
   // Facility 43 packaging
   '43-P-A': { facility:'1543', resource:'LQ 43', tool:'43-A-1/5/10' },
   '43-P-B': { facility:'1543', resource:'LQ 43', tool:'43-B-5/10' },
 
   // Facility 19
-  '19-F-02': { facility:'1519', resource:'WG (19)', tool:'south - 19' },
-  '19-F-12': { facility:'1519', resource:'WG (19)', tool:'north - 19' },
-  '19-F-13': { facility:'1519', resource:'WG (19)', tool:'new - 19' },
-  '19-F-14': { facility:'1519', resource:'WG (19)', tool:'north - 19 - pilot' },
+  '19-F-02': { facility:'1519', resource:'WG (19)', tool:'south-19' },
+  '19-F-12': { facility:'1519', resource:'WG (19)', tool:'north-19' },
+  '19-F-13': { facility:'1519', resource:'WG (19)', tool:'new-19' },
+  '19-F-14': { facility:'1519', resource:'WG (19)', tool:'north-19-pilot' },
   '19-P-03': { facility:'1519', resource:'WG SMALL PACKS (19)', tool:'284' },
   '19-P-04': { facility:'1519', resource:'WG SMALL PACKS (19)', tool:'255' },
   '19-P-05': { facility:'1519', resource:'WG SMALL PACKS (19)', tool:'brevis' },
