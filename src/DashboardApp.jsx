@@ -9,11 +9,13 @@ import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
+import * as XLSXCore from 'xlsx'
 import './styles.css'
 
-// xlsx-js-style is loaded as a browser script in index.html.
-// This keeps Excel styling support without adding a Netlify/npm dependency.
-const XLSX = window.XLSX
+// Use the styled browser build when available, but always fall back to the
+// project's existing xlsx dependency so the app can never white-screen if
+// the external script is blocked or slow to load.
+const XLSX = window.XLSX || XLSXCore
 
 const LEGACY_DAILY_TARGETS = {
   '1519': 80000, '1521': 60000, '1523': 40000, '1524': 6000,
