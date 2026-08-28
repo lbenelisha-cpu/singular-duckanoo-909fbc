@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import * as XLSX from 'xlsx'
+import * as XLSX from 'xlsx-js-style'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
@@ -2701,6 +2701,8 @@ material: normalize(getField(r, [
     // produced SpreadsheetML 2003 XML, which caused Excel to warn that the
     // file format/extension did not match (or opened .xml in the browser).
     const wb = XLSX.utils.book_new()
+    wb.Workbook = wb.Workbook || {}
+    wb.Workbook.Views = [{ RTL:true }]
 
     const safeSheetName = (name, used) => {
       const base = String(name || 'Sheet').replace(/[\\/?*\[\]:]/g, ' ').trim().slice(0,31) || 'Sheet'
@@ -2752,6 +2754,71 @@ material: normalize(getField(r, [
     dailyWs['!rows'] = daily.map((_,i)=>({hpt:i===4?32:i===6?24:22}))
     dailyWs['!freeze'] = { xSplit:0, ySplit:7, topLeftCell:'A8', activePane:'bottomLeft', state:'frozen' }
     setRtl(dailyWs)
+
+    // Professional RTL styling for the editable daily formulations report.
+    const thinBorder = {
+      top:{style:'thin',color:{rgb:'9CA3AF'}},
+      bottom:{style:'thin',color:{rgb:'9CA3AF'}},
+      left:{style:'thin',color:{rgb:'9CA3AF'}},
+      right:{style:'thin',color:{rgb:'9CA3AF'}}
+    }
+    const headerStyle = {
+      font:{name:'Segoe UI',sz:11,bold:true,color:{rgb:'FFFFFF'}},
+      fill:{patternType:'solid',fgColor:{rgb:'0B2F4B'}},
+      alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
+      border:thinBorder
+    }
+    const bodyStyle = {
+      font:{name:'Segoe UI',sz:10,color:{rgb:'111827'}},
+      alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
+      border:thinBorder
+    }
+    const textBodyStyle = {
+      ...bodyStyle,
+      alignment:{horizontal:'right',vertical:'center',wrapText:true,readingOrder:2}
+    }
+    const eventStyle = {
+      font:{name:'Segoe UI',sz:11,bold:true,color:{rgb:'1F2937'}},
+      fill:{patternType:'solid',fgColor:{rgb:'FDE7A8'}},
+      alignment:{horizontal:'right',vertical:'center',wrapText:true,readingOrder:2},
+      border:thinBorder
+    }
+    const totalStyle = {
+      ...bodyStyle,
+      font:{name:'Segoe UI',sz:10,bold:true,color:{rgb:'0B2F4B'}},
+      fill:{patternType:'solid',fgColor:{rgb:'EAF3F8'}},
+      numFmt:'#,##0'
+    }
+
+    const dailyRange = XLSX.utils.decode_range(dailyWs['!ref'] || 'A1:J1')
+    for (let r=7; r<=dailyRange.e.r; r++) {
+      for (let c=1; c<=9; c++) {
+        const addr = XLSX.utils.encode_cell({r,c})
+        if (!dailyWs[addr]) dailyWs[addr] = {t:'s',v:''}
+        dailyWs[addr].s = (c===4 || c===6 || c===9) ? textBodyStyle : bodyStyle
+        if (c===7 || c===8) dailyWs[addr].z = '#,##0'
+      }
+    }
+    for (let c=1; c<=9; c++) {
+      const addr = XLSX.utils.encode_cell({r:6,c})
+      if (dailyWs[addr]) dailyWs[addr].s = headerStyle
+    }
+    for (let c=2; c<=9; c++) {
+      const addr = XLSX.utils.encode_cell({r:4,c})
+      if (!dailyWs[addr]) dailyWs[addr] = {t:'s',v:''}
+      dailyWs[addr].s = eventStyle
+    }
+    // Emphasize facility and total-output merged blocks like the previous report.
+    grouped.forEach((groupRows, facility) => {
+      const firstDataIndex = rows.findIndex(x => String(x.facility||'—') === facility)
+      if (firstDataIndex < 0) return
+      const excelR = 7 + firstDataIndex
+      const facilityCell = dailyWs[XLSX.utils.encode_cell({r:excelR,c:2})]
+      const totalCell = dailyWs[XLSX.utils.encode_cell({r:excelR,c:8})]
+      if (facilityCell) facilityCell.s = totalStyle
+      if (totalCell) totalCell.s = totalStyle
+    })
+
     XLSX.utils.book_append_sheet(wb, dailyWs, safeSheetName('דיווח יומי פורמולציות', usedNames))
 
     sheets.forEach(sh => {
@@ -2760,6 +2827,25 @@ material: normalize(getField(r, [
       ws['!cols'] = sh.columns.map((c,idx) => ({ wch:widthFor([c.label, ...sh.rows.map(r=>r[c.key])]) }))
       ws['!autofilter'] = sh.columns.length ? { ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:Math.max(0,aoa.length-1),c:sh.columns.length-1}}) } : undefined
       setRtl(ws)
+      const sheetRange = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1')
+      for (let c=0; c<=sheetRange.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({r:0,c})
+        if (ws[addr]) ws[addr].s = {
+          font:{name:'Segoe UI',sz:11,bold:true,color:{rgb:'FFFFFF'}},
+          fill:{patternType:'solid',fgColor:{rgb:'0B2F4B'}},
+          alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
+          border:{top:{style:'thin',color:{rgb:'9CA3AF'}},bottom:{style:'thin',color:{rgb:'9CA3AF'}},left:{style:'thin',color:{rgb:'9CA3AF'}},right:{style:'thin',color:{rgb:'9CA3AF'}}}
+        }
+      }
+      for (let r=1; r<=sheetRange.e.r; r++) for (let c=0; c<=sheetRange.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({r,c})
+        if (!ws[addr]) ws[addr] = {t:'s',v:''}
+        ws[addr].s = {
+          font:{name:'Segoe UI',sz:10,color:{rgb:'111827'}},
+          alignment:{horizontal:'right',vertical:'center',wrapText:true,readingOrder:2},
+          border:{top:{style:'thin',color:{rgb:'D1D5DB'}},bottom:{style:'thin',color:{rgb:'D1D5DB'}},left:{style:'thin',color:{rgb:'D1D5DB'}},right:{style:'thin',color:{rgb:'D1D5DB'}}}
+        }
+      }
       XLSX.utils.book_append_sheet(wb, ws, safeSheetName(sh.name, usedNames))
     })
 
