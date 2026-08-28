@@ -2697,38 +2697,75 @@ material: normalize(getField(r, [
   }
 
   const exportStyledExcel = (sheets, filename, productionRowsForTemplate = []) => {
-    const styleIds = new Map()
-    const facilities = [...new Set(sheets.flatMap(sh => sh.rows.map(r => r.__facility).filter(Boolean)))]
-    facilities.forEach((f,i) => styleIds.set(f, `fac${i}`))
-    const styles = facilities.map(f => `<Style ss:ID="${styleIds.get(f)}"><Interior ss:Color="${facilityColor(f)}" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D8E0E5"/></Borders></Style>`).join('')
-    const worksheetXml = sheets.map(sh => {
-      const widths = sh.columns.map(c => {
-        const longest = Math.max(String(c.label || '').length, ...sh.rows.map(r => String(r[c.key] ?? '').split(/\r?\n/).reduce((m,line)=>Math.max(m,line.length),0)))
-        return Math.min(520, Math.max(70, longest * 7.2 + 22))
-      })
-      const columns = widths.map(width => `<Column ss:AutoFitWidth="0" ss:Width="${width.toFixed(0)}"/>`).join('')
-      const header = `<Row>${sh.columns.map(c => `<Cell ss:StyleID="hdr"><Data ss:Type="String">${xmlEscape(c.label)}</Data></Cell>`).join('')}</Row>`
-      const rows = sh.rows.map(r => `<Row>${sh.columns.map(c => { const v=r[c.key]; const numeric=typeof v==='number' && Number.isFinite(v); const sid=r.__facility ? ` ss:StyleID="${styleIds.get(r.__facility)}"` : ''; return `<Cell${sid}><Data ss:Type="${numeric?'Number':'String'}">${xmlEscape(v)}</Data></Cell>` }).join('')}</Row>`).join('')
-      return `<Worksheet ss:Name="${xmlEscape(sh.name)}" ss:RightToLeft="1"><Table>${columns}${header}${rows}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DisplayRightToLeft/></WorksheetOptions></Worksheet>`
-    }).join('')
-    const templateSheet = buildDailyFormulationsWorksheet(productionRowsForTemplate)
-    const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="Arial" ss:Size="11"/></Style><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#DCE6F1" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formEvent"><Font ss:FontName="Arial" ss:Size="11"/><Interior ss:Color="#FFFF00" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formHeader"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1"/><Interior ss:Color="#EAF2F8" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style><Style ss:ID="formDateHeader"><Font ss:FontName="Arial" ss:Size="11" ss:Bold="1"/><Interior ss:Color="#EAF2F8" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><NumberFormat ss:Format="Short Date"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style><Style ss:ID="formPlain"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formBody"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formGroup"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formTotal"><Font ss:Bold="1"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formStatus"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formNotes"><Alignment ss:Horizontal="Right" ss:Vertical="Center" ss:WrapText="1"/><Borders><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style><Style ss:ID="formExtra"><Alignment ss:Horizontal="Right" ss:Vertical="Center" ss:WrapText="1"/></Style>${styles}</Styles>${templateSheet}${worksheetXml}</Workbook>`
-    // Modernize the daily formulations sheet without changing its workbook
-    // structure, cell positions, merges or values. Quantity totals retain their
-    // numeric values and are displayed with a thousands separator and no decimals.
-    const modernXml = xml
-      .replaceAll('ss:FontName="Arial"', 'ss:FontName="Segoe UI"')
-      .replace('<Interior ss:Color="#FFFF00" ss:Pattern="Solid"/>', '<Interior ss:Color="#FDE7A8" ss:Pattern="Solid"/>')
-      .replaceAll('<Font ss:FontName="Segoe UI" ss:Size="11" ss:Bold="1"/><Interior ss:Color="#EAF2F8" ss:Pattern="Solid"/>', '<Font ss:FontName="Segoe UI" ss:Size="11" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#0B2F4B" ss:Pattern="Solid"/>')
-      .replaceAll('<Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2"/>', '<Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#12A894"/>')
-      .replace('<Style ss:ID="formGroup"><Font ss:Bold="1"/>', '<Style ss:ID="formGroup"><Font ss:FontName="Segoe UI" ss:Bold="1" ss:Color="#0B2F4B"/><Interior ss:Color="#EEF6FA" ss:Pattern="Solid"/>')
-      .replace('<Style ss:ID="formTotal"><Font ss:Bold="1"/>', '<Style ss:ID="formTotal"><Font ss:FontName="Segoe UI" ss:Bold="1" ss:Color="#0B2F4B"/><Interior ss:Color="#F7FBFD" ss:Pattern="Solid"/>')
-      .replace('ss:Format="#,##0.00"', 'ss:Format="#,##0"')
-      .replaceAll('ss:Weight="1"/></Borders></Style>', 'ss:Weight="1" ss:Color="#CAD9E2"/></Borders></Style>')
-    const blob=new Blob([modernXml],{type:'application/xml;charset=utf-8'})
-    const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500)
-  }
+    // Generate a real Office Open XML .xlsx workbook. The previous exporter
+    // produced SpreadsheetML 2003 XML, which caused Excel to warn that the
+    // file format/extension did not match (or opened .xml in the browser).
+    const wb = XLSX.utils.book_new()
 
+    const safeSheetName = (name, used) => {
+      const base = String(name || 'Sheet').replace(/[\\/?*\[\]:]/g, ' ').trim().slice(0,31) || 'Sheet'
+      let candidate = base, n = 2
+      while (used.has(candidate)) candidate = `${base.slice(0, Math.max(1, 28-String(n).length))} ${n++}`
+      used.add(candidate)
+      return candidate
+    }
+    const usedNames = new Set()
+    const setRtl = ws => {
+      ws['!views'] = [{ RTL:true, rightToLeft:true }]
+      ws['!sheetView'] = { rightToLeft:true }
+    }
+    const widthFor = values => Math.min(60, Math.max(10, ...values.map(v => Math.ceil(String(v ?? '').length * 1.15 + 2))))
+
+    // First sheet: the editable daily formulations report, kept in the same
+    // cell positions expected by "טעינת דוח ערוך" (header on row 7).
+    const rows = [...productionRowsForTemplate].sort((a,b) => facilitySortDesc(a,b) || String(a.routingGroup||'').localeCompare(String(b.routingGroup||''), 'he', {numeric:true}) || String(a.material||'').localeCompare(String(b.material||''), 'he', {numeric:true}))
+    const grouped = new Map()
+    rows.forEach(row => { const f=String(row.facility||'—'); const arr=grouped.get(f)||[]; arr.push(row); grouped.set(f,arr) })
+    const displayDate = from && to && from === to
+      ? new Date(`${from}T12:00:00`).toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'})
+      : (from || to || new Date().toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'}))
+    const eventText = savedDailyEventsForSelection.length
+      ? savedDailyEventsForSelection.map(event => `אירוע ${event.type} · מתקן ${event.facility} · חומרה ${event.severity} - ${event.description}`).join(' | ')
+      : 'לא נשמרו אירועים לתאריך הדוח שנבחר.'
+    const daily = Array.from({length:7}, () => Array(10).fill(''))
+    daily[4][2] = eventText
+    daily[6] = ['', 'מקט', displayDate, 'קו יצור', 'חומר', 'מספר אצווה', 'סטטוס מכונה', 'תפוקה', 'סה"כ תפוקה', 'הערות']
+    const merges = [{s:{r:4,c:2},e:{r:4,c:9}}]
+    let outRow = 7
+    grouped.forEach((groupRows, facility) => {
+      const total = groupRows.reduce((sum,row) => sum + num(row.qty), 0)
+      const startRow = outRow
+      groupRows.forEach(row => {
+        daily.push(['', row.material||'', facility, row.prodLineTool || row.prodLine || row.routingGroup || '', row.desc||'', row.batch||'', row.machineStatus||'', num(row.qty), total, row.notes||''])
+        outRow++
+      })
+      if (groupRows.length > 1) {
+        merges.push({s:{r:startRow,c:2},e:{r:outRow-1,c:2}})
+        merges.push({s:{r:startRow,c:8},e:{r:outRow-1,c:8}})
+        for (let r=startRow+1; r<outRow; r++) { daily[r][2]=''; daily[r][8]='' }
+      }
+    })
+    if (!rows.length) daily.push(['','','אין נתוני תפוקה בטווח שנבחר','','','','','','',''])
+    const dailyWs = XLSX.utils.aoa_to_sheet(daily)
+    dailyWs['!merges'] = merges
+    dailyWs['!cols'] = [{wch:3},{wch:16},{wch:18},{wch:18},{wch:38},{wch:18},{wch:24},{wch:14},{wch:16},{wch:36}]
+    dailyWs['!rows'] = daily.map((_,i)=>({hpt:i===4?32:i===6?24:22}))
+    dailyWs['!freeze'] = { xSplit:0, ySplit:7, topLeftCell:'A8', activePane:'bottomLeft', state:'frozen' }
+    setRtl(dailyWs)
+    XLSX.utils.book_append_sheet(wb, dailyWs, safeSheetName('דיווח יומי פורמולציות', usedNames))
+
+    sheets.forEach(sh => {
+      const aoa = [sh.columns.map(c=>c.label), ...sh.rows.map(r=>sh.columns.map(c=>r[c.key] ?? ''))]
+      const ws = XLSX.utils.aoa_to_sheet(aoa)
+      ws['!cols'] = sh.columns.map((c,idx) => ({ wch:widthFor([c.label, ...sh.rows.map(r=>r[c.key])]) }))
+      ws['!autofilter'] = sh.columns.length ? { ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:Math.max(0,aoa.length-1),c:sh.columns.length-1}}) } : undefined
+      setRtl(ws)
+      XLSX.utils.book_append_sheet(wb, ws, safeSheetName(sh.name, usedNames))
+    })
+
+    const outName = String(filename || 'IML_Facility_Report.xlsx').replace(/\.(xml|xls|xlsx)$/i, '.xlsx')
+    XLSX.writeFile(wb, outName, { bookType:'xlsx', compression:true })
+  }
 
 
   const handleDailyReportRoundtripFile = async file => {
@@ -2832,7 +2869,7 @@ material: normalize(getField(r, [
         Description:row.description, Batch:row.batch, MachineStatus:row.machineStatus,
         Quantity:num(row.quantity), Notes:row.notes
       })) }
-    ], `IML_Daily_Report_Saved_${selectedSingleReportDate}.xml`, restoredRows)
+    ], `IML_Daily_Report_Saved_${selectedSingleReportDate}.xlsx`, restoredRows)
     setStatus(`הדוח הערוך השמור לתאריך ${selectedSingleReportDate} הורד בהצלחה`)
   }
 
@@ -2858,7 +2895,7 @@ material: normalize(getField(r, [
       { name:'Planning', columns:[{key:'Month',label:'Month'},{key:'Facility',label:'Facility'},{key:'Station',label:'Station'},{key:'MonthlyTarget',label:'Monthly Target'},{key:'Actual',label:'Actual'},{key:'Remaining',label:'Remaining'},{key:'Forecast',label:'Forecast'},{key:'Status',label:'Status'}], rows:planningRows.map(r=>({__facility:String(r.facility||'—'),Month:planningMonth,Facility:r.facility,Station:r.station,MonthlyTarget:r.target,Actual:r.actual,Remaining:r.remaining,Forecast:r.forecast,Status:r.label})) },
       { name:'Quality', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'InspectionLot',label:'Inspection Lot'},{key:'Order',label:'Order'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'}], rows:qualityBad.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,InspectionLot:r.inspectionLot,Order:r.order,Batch:r.batch,Material:r.material,Status:r.status})) },
       { name:'Deviations', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'},{key:'Remarks',label:'Remarks'}], rows:openDeviations.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,Batch:r.batch,Material:r.material,Status:r.status,Remarks:r.remarks})) }
-    ], `IML_Facility_Report_${from && to ? (from === to ? from : `${from}_to_${to}`) : (from || to || new Date().toISOString().slice(0,10))}.xml`, productionRows)
+    ], `IML_Facility_Report_${from && to ? (from === to ? from : `${from}_to_${to}`) : (from || to || new Date().toISOString().slice(0,10))}.xlsx`, productionRows)
   }
 
   const downloadTargetWorkbook = async () => {
@@ -3122,7 +3159,7 @@ material: normalize(getField(r, [
             <button type="button" className="action secondary event-action-button" onClick={() => setDailyEventHistoryOpen(true)}><ClipboardList size={18}/> היסטוריית אירועים{visibleDailyEvents.length ? ` (${visibleDailyEvents.length})` : ''}</button>
           </div>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
-          <label className={`action secondary ${busy ? 'disabled' : ''}`} style={{cursor:'pointer'}}><Upload size={18}/> טעינת דוח ערוך<input type="file" accept=".xml,.xls,.xlsx" hidden disabled={busy} onChange={e=>{const file=e.target.files?.[0]; if(file) handleDailyReportRoundtripFile(file); e.target.value=''}}/></label>
+          <label className={`action secondary ${busy ? 'disabled' : ''}`} style={{cursor:'pointer'}}><Upload size={18}/> טעינת דוח ערוך<input type="file" accept=".xlsx,.xls" hidden disabled={busy} onChange={e=>{const file=e.target.files?.[0]; if(file) handleDailyReportRoundtripFile(file); e.target.value=''}}/></label>
           <button className="action secondary" type="button" onClick={downloadSavedDailyReport} disabled={!selectedSingleReportDate}><Download size={18}/> הורדת דוח שמור</button>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
           {canManageData ? <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label> : <button className="action upload" type="button" onClick={onRequestAdminLogin}><Upload size={19}/> טעינת Excel</button>}
