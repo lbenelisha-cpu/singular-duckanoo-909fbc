@@ -1914,7 +1914,19 @@ material: normalize(getField(r, [
   // remain in the cloud dataset, but unrelated facilities are excluded from all
   // regular user-facing calculations until they are explicitly added to the picker.
   const dashboardProd = useMemo(() => prod.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [prod, selectableFacilitySet])
-  const dashboardQualityRows = useMemo(() => qualityRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [qualityRows, selectableFacilitySet])
+  const dashboardProdQualityKeys = useMemo(() => {
+    const keys = new Set()
+    dashboardProd.forEach(row => {
+      const key = batchMaterialKey(row.batch, row.material)
+      if (key) keys.add(key)
+    })
+    return keys
+  }, [dashboardProd])
+  const dashboardQualityRows = useMemo(() => qualityRows.filter(row => {
+    if (selectableFacilitySet.has(String(row.facility || ''))) return true
+    const key = batchMaterialKey(row.batch, row.material)
+    return !!key && dashboardProdQualityKeys.has(key)
+  }), [qualityRows, selectableFacilitySet, dashboardProdQualityKeys])
   const dashboardDeviationRows = useMemo(() => deviationRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [deviationRows, selectableFacilitySet])
 
   // Sprint 11.9.36 performance: index detailed quality characteristics only for
@@ -1958,7 +1970,7 @@ material: normalize(getField(r, [
       target.set(key, list)
     }
 
-    dashboardQualityRows.forEach(row => {
+    qualityRows.forEach(row => {
       const key = batchMaterialKey(row.batch, row.material)
       if (!key || !qualityDetailKeys.has(key)) return
 
@@ -2000,7 +2012,7 @@ material: normalize(getField(r, [
     latestByBatchMaterial,
     latestByBatchMaterialLot,
 }
-  }, [dashboardQualityRows, qualityDetailKeys])
+  }, [qualityRows, qualityDetailKeys])
 
   const enrichedDeviationRows = useMemo(() => dashboardDeviationRows.map(row => {
     const key = batchMaterialKey(row.batch, row.material)
@@ -2031,7 +2043,10 @@ material: normalize(getField(r, [
       ? batchProductionRows.filter(row => normalize(row.material) === material)
       : batchProductionRows
 
-    const qualityForBatchMaterial = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
+    const indexedQuality = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
+    const qualityForBatchMaterial = indexedQuality.length
+      ? indexedQuality
+      : (key ? qualityRows.filter(row => batchMaterialKey(row.batch, row.material) === key) : [])
     const deviationForBatchMaterial = key
       ? enrichedDeviationRows.filter(row => batchMaterialKey(row.batch, row.material) === key)
       : []
@@ -2043,7 +2058,7 @@ material: normalize(getField(r, [
       quality: qualityForBatchMaterial,
       deviations: deviationForBatchMaterial,
     }
-  }, [selectedBatch, selectedBatchMaterial, dashboardProd, qualityIndex, enrichedDeviationRows])
+  }, [selectedBatch, selectedBatchMaterial, dashboardProd, qualityIndex, qualityRows, enrichedDeviationRows])
 
   const openBatchCard = async (batch, material = '') => {
     if (!batch) return
@@ -2057,8 +2072,27 @@ material: normalize(getField(r, [
         setStatus(`טוען תוצאות איכות למנה ${normalizedBatch}...`)
         try {
           const dataset = await loadCloudDatasetMatching('quality', row => {
-          const rowBatch = normalize(row?.batch || row?.Batch || row?.['Batch'])
-          const rowMaterial = normalize(row?.material || row?.Material || row?.['Material'])
+          const rowBatch = normalize(
+            row?.batch ??
+            row?.Batch ??
+            row?.['Batch'] ??
+            row?.['Batch Number'] ??
+            row?.['Batch No'] ??
+            row?.['מספר מנה'] ??
+            row?.['מנה'] ??
+            row?.['מספר אצווה']
+          )
+          const rowMaterial = normalize(
+            row?.material ??
+            row?.Material ??
+            row?.['Material'] ??
+            row?.['Material #'] ??
+            row?.['Material Number'] ??
+            row?.['Material No.'] ??
+            row?.['מקט'] ??
+            row?.['מק"ט'] ??
+            row?.['מק״ט']
+          )
           if (rowBatch !== normalizedBatch) return false
           return !normalizedMaterial || !rowMaterial || rowMaterial === normalizedMaterial
         })
