@@ -6,8 +6,13 @@ export const FUTURE_CLOUD_KINDS = [...CLOUD_KINDS, 'packaging_plan']
 // Keep every request deliberately small. A quality file can contain hundreds of
 // thousands of rows, and large JSONB responses are what caused the database
 // statement timeouts in the previous build.
-const ROWS_PER_CHUNK = 75
-const CHUNKS_PER_UPLOAD_REQUEST = 1
+// Build 11.6.1 Large File Fast Upload: compact rows are small, so 300 rows per
+// JSONB chunk stays comfortably below request limits while cutting the number of
+// round trips by ~4x. Two chunks are sent per request and up to four requests
+// run concurrently (max ~2,400 compact rows in flight).
+const ROWS_PER_CHUNK = 300
+const CHUNKS_PER_UPLOAD_REQUEST = 2
+const UPLOAD_CONCURRENCY = 4
 const CHUNKS_PER_SERVER_COPY_REQUEST = 200
 const CHUNKS_PER_DOWNLOAD_PAGE = 100
 const MAX_RETRIES = 4
@@ -304,24 +309,29 @@ export async function uploadCloudDataset(kind, rows, meta, user, onProgress) {
   }, 'יצירת גרסת נתונים')
 
   try {
+    let uploadedChunks = 0
+    const uploadJobs = []
     for (let offset = 0; offset < chunks.length; offset += CHUNKS_PER_UPLOAD_REQUEST) {
-      const batch = chunks.slice(offset, offset + CHUNKS_PER_UPLOAD_REQUEST).map((payload, batchIndex) => ({
-        version_id: version.id,
-        chunk_index: offset + batchIndex,
-        payload,
-        row_count: payload.length,
+      uploadJobs.push({
+        offset,
+        batch: chunks.slice(offset, offset + CHUNKS_PER_UPLOAD_REQUEST).map((payload, batchIndex) => ({
+          version_id: version.id,
+          chunk_index: offset + batchIndex,
+          payload,
+          row_count: payload.length,
+        })),
+      })
+    }
+    for (let jobOffset = 0; jobOffset < uploadJobs.length; jobOffset += UPLOAD_CONCURRENCY) {
+      const wave = uploadJobs.slice(jobOffset, jobOffset + UPLOAD_CONCURRENCY)
+      await Promise.all(wave.map(async ({ offset, batch }) => {
+        await withRetry(async () => {
+          const { error } = await supabase.from('iml_dataset_chunks').upsert(batch, { onConflict:'version_id,chunk_index' })
+          if (error) throw error
+        }, `העלאת מקטעים ${offset + 1}-${offset + batch.length}`)
+        uploadedChunks += batch.length
+        emit(onProgress, 'upload', Math.min(uploadedChunks, chunks.length), chunks.length || 1, 'מעלה נתונים במקביל ל־Supabase')
       }))
-
-      await withRetry(async () => {
-        // Upsert makes a retried request idempotent if the network response was
-        // lost after Supabase had already committed the batch.
-        const { error } = await supabase
-          .from('iml_dataset_chunks')
-          .upsert(batch, { onConflict: 'version_id,chunk_index' })
-        if (error) throw error
-      }, `העלאת מקטעים ${offset + 1}-${offset + batch.length}`)
-
-      emit(onProgress, 'upload', Math.min(offset + batch.length, chunks.length), chunks.length || 1, 'מעלה מקטעים קטנים ל־Supabase')
       await sleep(0)
     }
 
@@ -461,18 +471,29 @@ export async function uploadCloudDatasetIncremental(kind, newRows, meta, user, o
       }
     }
 
+    let uploadedChunks = 0
+    const uploadJobs = []
     for (let offset = 0; offset < chunks.length; offset += CHUNKS_PER_UPLOAD_REQUEST) {
-      const batch = chunks.slice(offset, offset + CHUNKS_PER_UPLOAD_REQUEST).map((payload, batchIndex) => ({
-        version_id: version.version_id,
-        chunk_index: baseChunkIndex + offset + batchIndex,
-        payload,
-        row_count: payload.length,
+      uploadJobs.push({
+        offset,
+        batch: chunks.slice(offset, offset + CHUNKS_PER_UPLOAD_REQUEST).map((payload, batchIndex) => ({
+          version_id: version.version_id,
+          chunk_index: baseChunkIndex + offset + batchIndex,
+          payload,
+          row_count: payload.length,
+        })),
+      })
+    }
+    for (let jobOffset = 0; jobOffset < uploadJobs.length; jobOffset += UPLOAD_CONCURRENCY) {
+      const wave = uploadJobs.slice(jobOffset, jobOffset + UPLOAD_CONCURRENCY)
+      await Promise.all(wave.map(async ({ offset, batch }) => {
+        await withRetry(async () => {
+          const { error } = await supabase.from('iml_dataset_chunks').upsert(batch, { onConflict:'version_id,chunk_index' })
+          if (error) throw error
+        }, `העלאת רשומות איכות חדשות ${offset + 1}-${offset + batch.length}`)
+        uploadedChunks += batch.length
+        emit(onProgress, 'upload', Math.min(uploadedChunks, chunks.length), chunks.length || 1, 'מעלה רשומות איכות חדשות במקביל')
       }))
-      await withRetry(async () => {
-        const { error } = await supabase.from('iml_dataset_chunks').upsert(batch, { onConflict:'version_id,chunk_index' })
-        if (error) throw error
-      }, `העלאת רשומות איכות חדשות ${offset + 1}-${offset + batch.length}`)
-      emit(onProgress, 'upload', Math.min(offset + batch.length, chunks.length), chunks.length || 1, 'מעלה רק את רשומות האיכות החדשות')
       await sleep(0)
     }
 
