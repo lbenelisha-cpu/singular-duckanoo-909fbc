@@ -884,3 +884,65 @@ button,input,select,textarea{font:inherit}
   .mobile-lite-header{padding-inline:10px}
   .mobile-filter-card,.mobile-production-card{margin:9px}
 }
+
+
+/* ===== Mobile management KPIs: quantity + quality + quantitative risk ===== */
+.mobile-kpi-grid{
+  margin:12px;
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+}
+.mobile-kpi-card{
+  background:#fff;
+  border:1px solid rgba(16,73,99,.11);
+  border-radius:15px;
+  padding:11px 9px;
+  box-shadow:0 6px 18px rgba(15,55,76,.06);
+  min-width:0;
+}
+.mobile-kpi-card>div{display:flex;align-items:center;gap:5px;color:#5f7583;font-size:11px;font-weight:800}
+.mobile-kpi-card>strong{display:block;font-size:20px;margin:7px 0 3px;color:#173f58;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mobile-kpi-card>small{display:block;font-size:9px;color:#708593;line-height:1.3}
+.mobile-kpi-card.good{border-color:#bfe6d8;background:#f4fbf8}
+.mobile-kpi-card.warning{border-color:#f0d89c;background:#fffaf0}
+.mobile-kpi-card.danger{border-color:#efb9b9;background:#fff5f5}
+.mobile-risk-card,.mobile-quality-summary{
+  margin:12px;
+  background:#fff;
+  border:1px solid rgba(16,73,99,.11);
+  border-radius:18px;
+  box-shadow:0 7px 24px rgba(15,55,76,.07);
+  overflow:hidden;
+}
+.mobile-risk-list{padding:7px}
+.mobile-risk-row{border:1px solid #e0e9ed;border-radius:13px;padding:10px;margin-bottom:7px;background:#fbfdfe}
+.mobile-risk-row.risk{border-color:#efc4c4;background:#fff7f7}
+.mobile-risk-row.warning{border-color:#eedcae;background:#fffaf1}
+.mobile-risk-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+.mobile-risk-title strong{font-size:12px}
+.mobile-risk-title span{font-size:10px;font-weight:900;border-radius:999px;padding:4px 7px;background:#eef3f6}
+.mobile-risk-row.risk .mobile-risk-title span{background:#ffe1e1;color:#a42d32}
+.mobile-risk-row.warning .mobile-risk-title span{background:#fff0c9;color:#8a6511}
+.mobile-risk-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+.mobile-risk-metrics>div{background:rgba(238,245,248,.75);border-radius:9px;padding:6px 4px;text-align:center;min-width:0}
+.mobile-risk-metrics small{display:block;font-size:8px;color:#738591}
+.mobile-risk-metrics b{display:block;font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis}
+.mobile-risk-total{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-top:1px solid #e6edef;font-size:11px}
+.mobile-risk-total strong{font-size:14px;color:#a04235}
+.mobile-ok-state{display:flex;align-items:center;justify-content:center;gap:7px;padding:18px 12px;color:#14745f;font-size:11px;font-weight:800}
+.mobile-quality-list{padding:7px}
+.mobile-quality-list button{width:100%;border:0;border-bottom:1px solid #e8eef1;background:#fff;padding:10px 7px;display:flex;align-items:center;justify-content:space-between;gap:9px;text-align:right;color:inherit}
+.mobile-quality-list button:last-child{border-bottom:0}
+.mobile-quality-list button span{display:flex;flex-direction:column;gap:3px;min-width:0}
+.mobile-quality-list button strong{font-size:12px}
+.mobile-quality-list button small{font-size:10px;color:#71838f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mobile-quality-list button>b{font-size:9px;background:#fff0e0;color:#9b5b14;border-radius:999px;padding:5px 7px;white-space:nowrap}
+.mobile-quality-note{margin:0;padding:9px 13px;border-top:1px solid #edf1f3;color:#71838f;font-size:9px;line-height:1.35}
+@media(max-width:420px){
+  .mobile-kpi-grid{margin:9px;gap:6px}
+  .mobile-kpi-card{padding:9px 7px}
+  .mobile-kpi-card>strong{font-size:17px}
+  .mobile-risk-card,.mobile-quality-summary{margin:9px}
+  .mobile-risk-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
