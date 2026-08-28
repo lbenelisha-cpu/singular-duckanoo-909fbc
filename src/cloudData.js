@@ -36,6 +36,8 @@ function retryable(error) {
   return text.includes('statement timeout') ||
     text.includes('canceling statement') ||
     text.includes('failed to fetch') ||
+    text.includes('load failed') ||
+    text.includes('network request failed') ||
     text.includes('network') ||
     text.includes('timeout') ||
     text.includes('502') ||
@@ -68,16 +70,24 @@ export async function detectCloudSchema(force = false) {
   requireClient()
   if (schemaCapability && !force) return schemaCapability
 
-  const { error: sourceError } = await supabase
-    .from('iml_data_sources')
-    .select('kind,active_version_id')
-    .limit(1)
+  const { error: sourceError } = await withRetry(async () => {
+    const result = await supabase
+      .from('iml_data_sources')
+      .select('kind,active_version_id')
+      .limit(1)
+    if (result.error && retryable(result.error)) throw result.error
+    return result
+  }, 'בדיקת חיבור ל-Supabase')
 
   if (!sourceError) {
-    const { error: versionError } = await supabase
-      .from('iml_dataset_versions')
-      .select('id')
-      .limit(1)
+    const { error: versionError } = await withRetry(async () => {
+      const result = await supabase
+        .from('iml_dataset_versions')
+        .select('id')
+        .limit(1)
+      if (result.error && retryable(result.error)) throw result.error
+      return result
+    }, 'בדיקת סכמת הנתונים')
     schemaCapability = {
       legacy: true,
       versioned: !versionError,
@@ -88,7 +98,11 @@ export async function detectCloudSchema(force = false) {
   }
 
   if (isMissingSchema(sourceError, ['active_version_id'])) {
-    const { error: legacyError } = await supabase.from('iml_data_sources').select('kind').limit(1)
+    const { error: legacyError } = await withRetry(async () => {
+      const result = await supabase.from('iml_data_sources').select('kind').limit(1)
+      if (result.error && retryable(result.error)) throw result.error
+      return result
+    }, 'בדיקת סכמת ענן ישנה')
     if (!legacyError) {
       schemaCapability = {
         legacy: true,
@@ -153,7 +167,11 @@ export async function getCloudDatasetMeta(kind) {
   const fields = capability.versioned
     ? 'kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at,active_version_id'
     : 'kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at'
-  const { data, error } = await supabase.from('iml_data_sources').select(fields).eq('kind', kind).maybeSingle()
+  const { data, error } = await withRetry(async () => {
+    const result = await supabase.from('iml_data_sources').select(fields).eq('kind', kind).maybeSingle()
+    if (result.error) throw result.error
+    return result
+  }, `קריאת מטא-דאטה ${kind}`)
   if (error) throw error
   return data || null
 }

@@ -1258,7 +1258,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
       try {
         const remoteMeta = {}
-        await Promise.all(kinds.map(async kind => { remoteMeta[kind] = await getCloudDatasetMeta(kind) }))
+        for (const kind of kinds) {
+          if (!active) return
+          remoteMeta[kind] = await getCloudDatasetMeta(kind)
+          // Avoid a burst of parallel PostgREST requests on iPhone/Safari.
+          if (IS_MOBILE_DEVICE) await new Promise(resolve => setTimeout(resolve, 120))
+        }
         if (!active) return
         setPerformance(current => ({ ...current, queries:current.queries + kinds.length }))
 
@@ -1337,7 +1342,17 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       } catch (cloudError) {
         console.warn('Smart cloud restore failed', cloudError)
         if (!active) return
-        setCloudState({ mode:cached ? 'offline' : 'error', lastSync:cached?.savedAt || null, message:cached ? 'השרת אינו זמין — מוצג מטמון מקומי' : (cloudError?.message || 'טעינת הנתונים נכשלה'), latencyMs:null, live:false })
+        const cloudMessage = String(cloudError?.message || '')
+        const safariLoadFailure = /load failed|failed to fetch|network/i.test(cloudMessage)
+        setCloudState({
+          mode:cached ? 'offline' : 'error',
+          lastSync:cached?.savedAt || null,
+          message:safariLoadFailure
+            ? 'החיבור ל-Supabase נותק זמנית — המערכת ניסתה חיבור חוזר אוטומטי'
+            : (cached ? 'השרת אינו זמין — מוצג מטמון מקומי' : (cloudMessage || 'טעינת הנתונים נכשלה')),
+          latencyMs:null,
+          live:false
+        })
         setStatus(cached ? 'מוצג גיבוי מקומי; הסנכרון לענן נכשל' : 'לא נמצאו נתונים זמינים')
       }
     })()
