@@ -813,3 +813,74 @@ button,input,select,textarea{font:inherit}
   .mapping-table-wrap{max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch}
   .mapping-table-wrap table{min-width:1450px}
 }
+
+
+/* ===== IML mobile-lite mode: production first, quality on batch tap ===== */
+.mobile-lite-app{
+  min-height:100dvh;
+  background:#eef4f7;
+  color:#183348;
+  padding:0 0 28px;
+  font-family:inherit;
+}
+.mobile-lite-header{
+  position:sticky;
+  top:0;
+  z-index:20;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 14px;
+  background:rgba(255,255,255,.96);
+  backdrop-filter:blur(14px);
+  border-bottom:1px solid rgba(15,66,92,.12);
+}
+.mobile-lite-header>div{display:flex;align-items:center;gap:9px;min-width:0}
+.mobile-lite-header img{width:36px;height:36px;object-fit:contain}
+.mobile-lite-header span span{display:flex;flex-direction:column}
+.mobile-lite-header strong{font-size:15px}
+.mobile-lite-header small{font-size:11px;color:#6c7f8e}
+.mobile-cloud-badge{padding:7px 10px;border-radius:999px;font-size:11px;font-weight:800;background:#fff3cd;color:#8a6500;white-space:nowrap}
+.mobile-cloud-badge.cloud{background:#dff5eb;color:#087a58}
+.mobile-cloud-badge.error,.mobile-cloud-badge.offline{background:#ffe3e3;color:#a12f35}
+.mobile-filter-card,.mobile-production-card{
+  margin:12px;
+  background:#fff;
+  border:1px solid rgba(16,73,99,.11);
+  border-radius:18px;
+  box-shadow:0 7px 24px rgba(15,55,76,.07);
+  overflow:hidden;
+}
+.mobile-filter-card{padding:13px}
+.mobile-date-row{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.mobile-date-row label{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:700;color:#607787}
+.mobile-date-row input{width:100%;min-width:0;border:1px solid #d5e0e6;border-radius:10px;padding:9px 8px;background:#fbfdfe;color:#183348}
+.mobile-facility-title{display:flex;align-items:center;gap:7px;margin:13px 0 8px}
+.mobile-facility-title button{margin-inline-start:auto;border:0;background:none;color:#16806f;font-weight:800}
+.mobile-facility-chips{display:flex;gap:7px;overflow-x:auto;padding:2px 0 6px;scrollbar-width:none}
+.mobile-facility-chips::-webkit-scrollbar{display:none}
+.mobile-facility-chips button{flex:0 0 auto;border:1px solid #d6e2e8;background:#f7fafb;color:#365367;border-radius:999px;padding:8px 12px;font-weight:800}
+.mobile-facility-chips button.active{background:#0d7d6e;color:#fff;border-color:#0d7d6e}
+.mobile-quick-row{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:8px}
+.mobile-quick-row button{border:0;border-radius:10px;padding:8px;background:#eaf3f6;color:#234d63;font-weight:800}
+.mobile-section-head{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #e4ecef}
+.mobile-section-head>div{display:flex;align-items:center;gap:7px}
+.mobile-section-head span{font-size:11px;color:#6b8190}
+.mobile-production-list{padding:8px}
+.mobile-production-row{padding:11px 10px;border-bottom:1px solid #e8eef1}
+.mobile-production-row:last-child{border-bottom:0}
+.mobile-production-top{display:grid;grid-template-columns:auto auto 1fr;gap:7px;align-items:center;font-size:11px;color:#6d7f8a}
+.mobile-production-top b{background:#eaf2f6;color:#234f66;border-radius:8px;padding:4px 7px}
+.mobile-production-top strong{text-align:left;font-size:16px;color:#0d6f62}
+.mobile-production-desc{font-weight:800;font-size:13px;margin:8px 0 5px;line-height:1.35}
+.mobile-production-meta,.mobile-production-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:#657a88}
+.mobile-production-bottom{margin-top:8px}
+.mobile-batch-button{border:0;background:#143f5a;color:#fff;border-radius:10px;padding:8px 10px;font-weight:800;font-size:11px}
+.mobile-batch-button:disabled{opacity:.6}
+.mobile-empty{padding:28px 15px;text-align:center;color:#758996}
+@media (max-width:420px){
+  .mobile-date-row{grid-template-columns:1fr}
+  .mobile-lite-header{padding-inline:10px}
+  .mobile-filter-card,.mobile-production-card{margin:9px}
+}

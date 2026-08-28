@@ -246,6 +246,117 @@ export async function loadCloudDataset(kind, onProgress) {
   }
 }
 
+
+async function readChunkPagesMatching({ table, filterColumn, filterValue, expectedChunks = 0, matcher, onProgress, kind }) {
+  const matches = []
+  let from = 0
+
+  while (true) {
+    const to = from + CHUNKS_PER_DOWNLOAD_PAGE - 1
+    const page = await withRetry(async () => {
+      const { data, error } = await supabase
+        .from(table)
+        .select('chunk_index,payload')
+        .eq(filterColumn, filterValue)
+        .order('chunk_index', { ascending: true })
+        .range(from, to)
+      if (error) throw error
+      return data || []
+    }, `קריאת ${kind || 'נתונים'} מסוננים מהענן`)
+
+    for (const chunk of page) {
+      if (!Array.isArray(chunk.payload)) continue
+      for (const row of chunk.payload) {
+        if (!matcher || matcher(row)) matches.push(row)
+      }
+    }
+
+    const completedChunks = Math.min(from + page.length, expectedChunks || from + page.length)
+    emit(
+      onProgress,
+      'download-filtered',
+      completedChunks,
+      expectedChunks || Math.max(completedChunks, 1),
+      `מחפש ${kind || 'נתונים'} עבור המנה שנבחרה`,
+      { matchedRows: matches.length }
+    )
+
+    if (page.length < CHUNKS_PER_DOWNLOAD_PAGE) break
+    from += CHUNKS_PER_DOWNLOAD_PAGE
+    await sleep(0)
+  }
+
+  return matches
+}
+
+export async function loadCloudDatasetMatching(kind, matcher, onProgress) {
+  requireClient()
+  const capability = await detectCloudSchema()
+  const sourceFields = capability.versioned
+    ? 'kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at,active_version_id'
+    : 'kind,file_name,row_count,raw_row_count,facilities,loaded_at,loaded_by_email,updated_at'
+
+  const source = await withRetry(async () => {
+    const { data, error } = await supabase
+      .from('iml_data_sources')
+      .select(sourceFields)
+      .eq('kind', kind)
+      .maybeSingle()
+    if (error) throw error
+    return data
+  }, `קריאת מקור ${kind}`)
+
+  if (!source) return { rows: [], meta: null }
+
+  if (capability.versioned && source.active_version_id) {
+    const version = await withRetry(async () => {
+      const { data, error } = await supabase
+        .from('iml_dataset_versions')
+        .select('id,version_no,chunk_count,status,created_at,activated_at')
+        .eq('id', source.active_version_id)
+        .single()
+      if (error) throw error
+      return data
+    }, `קריאת גרסת ${kind}`)
+
+    const rows = await readChunkPagesMatching({
+      table: 'iml_dataset_chunks',
+      filterColumn: 'version_id',
+      filterValue: version.id,
+      expectedChunks: Number(version.chunk_count || 0),
+      matcher,
+      onProgress,
+      kind,
+    })
+
+    return {
+      rows,
+      meta: {
+        fileName: source.file_name,
+        rows: Number(source.row_count || 0),
+        rawRows: Number(source.raw_row_count || 0),
+        facilities: source.facilities,
+        loadedAt: source.loaded_at || source.updated_at,
+        loadedBy: source.loaded_by_email,
+        valid: true,
+        source: 'cloud-filtered',
+        version: version.version_no,
+        versionId: version.id,
+      },
+    }
+  }
+
+  const rows = await readChunkPagesMatching({
+    table: 'iml_data_chunks',
+    filterColumn: 'kind',
+    filterValue: kind,
+    matcher,
+    onProgress,
+    kind,
+  })
+  return { rows, meta: { fileName: source.file_name, loadedAt: source.loaded_at || source.updated_at, source:'cloud-filtered', valid:true } }
+}
+
 export async function loadAllCloudDatasets(onProgress) {
   const result = {}
   for (let index = 0; index < CLOUD_KINDS.length; index += 1) {

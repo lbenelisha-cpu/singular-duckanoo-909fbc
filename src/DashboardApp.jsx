@@ -4,7 +4,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
-import { loadCloudDatasetOnce, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
+import { loadCloudDatasetOnce, loadCloudDatasetMatching, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
@@ -61,6 +61,13 @@ const IS_IOS_DEVICE = (() => {
   const platform = String(navigator.platform || '')
   const touchMac = platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1
   return /iPad|iPhone|iPod/i.test(ua) || touchMac
+})()
+
+const IS_MOBILE_DEVICE = (() => {
+  if (typeof navigator === 'undefined') return false
+  const ua = String(navigator.userAgent || '')
+  const narrowScreen = typeof window !== 'undefined' && Math.min(window.innerWidth || 9999, window.screen?.width || 9999) <= 820
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || narrowScreen
 })()
 
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
@@ -963,6 +970,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [dataMeta, setDataMeta] = useState({ production:null, quality:null, deviations:null, targets:null })
   const [selectedBatch, setSelectedBatch] = useState('')
   const [selectedBatchMaterial, setSelectedBatchMaterial] = useState('')
+  const [mobileQualityLoading, setMobileQualityLoading] = useState(false)
   const [selectedResource, setSelectedResource] = useState(null)
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
@@ -970,7 +978,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('iml-ui-sidebar-collapsed') === '1')
   const [managementMode, setManagementMode] = useState(() => localStorage.getItem('iml-ui-management-mode') === '1')
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
-  const [showHome, setShowHome] = useState(true)
+  const [showHome, setShowHome] = useState(() => !IS_MOBILE_DEVICE)
   const [facilityPickerOpen, setFacilityPickerOpen] = useState(false)
   const [showDataCenter, setShowDataCenter] = useState(false)
   const [dailyEventFormOpen, setDailyEventFormOpen] = useState(false)
@@ -980,8 +988,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [dailyEventSeverity, setDailyEventSeverity] = useState('')
   const [dailyEventText, setDailyEventText] = useState('')
   const [dailyEventDate, setDailyEventDate] = useState('')
-  const [dailyEvents, setDailyEvents] = useState(() => readLocalJson('iml-daily-events', []))
-  const [dailyReportHistory, setDailyReportHistory] = useState(() => readLocalJson('iml-daily-report-history', []))
+  const [dailyEvents, setDailyEvents] = useState(() => IS_MOBILE_DEVICE ? [] : readLocalJson('iml-daily-events', []))
+  const [dailyReportHistory, setDailyReportHistory] = useState(() => IS_MOBILE_DEVICE ? [] : readLocalJson('iml-daily-report-history', []))
   const [dailyCloudReady, setDailyCloudReady] = useState(false)
   const [availableUpdate, setAvailableUpdate] = useState(null)
 
@@ -992,7 +1000,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => { localStorage.setItem('iml-daily-events', JSON.stringify(dailyEvents.slice(-3000))) }, [dailyEvents])
 
   useEffect(() => {
-    if (!supabase) return
+    if (!supabase || IS_MOBILE_DEVICE) return
     let active = true
     const normalizeCloudEvent = row => ({
       id: row.external_id || row.id,
@@ -1067,6 +1075,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   }, [canManageData])
 
   useEffect(() => {
+    if (IS_MOBILE_DEVICE) return
     let active = true
 
     const currentBundlePath = () => {
@@ -1188,7 +1197,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => {
     let active = true
     const startedAt = performance.now()
-    const kinds = ['production', 'quality', 'deviations', 'targets']
+    const kinds = IS_MOBILE_DEVICE ? ['production'] : ['production', 'quality', 'deviations', 'targets']
 
     const applyDataset = (kind, dataset) => {
       const rows = dataset?.rows || []
@@ -1216,7 +1225,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     ;(async () => {
       let cached = null
       try {
-        cached = IS_IOS_DEVICE ? null : await idbGet()
+        cached = IS_MOBILE_DEVICE ? null : await idbGet()
         if (active && cached) {
           setProduction(
   dedupeRows((cached.production || []), productionRowKey).map(row => {
@@ -1270,47 +1279,52 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           await new Promise(resolve => setTimeout(resolve, 0))
         }
 
-        for (const kind of ['targets', 'quality', 'deviations']) {
-          if (!active) return
-          if (!changed(kind)) continue
-          setStatus(`טוען ${kind} ברקע...`)
-          loadedRows += applyDataset(kind, await loadCloudDatasetOnce(kind))
-          setPerformance(current => ({ ...current, queries:current.queries + 1, phase:`נטען ${kind}` }))
-          await new Promise(resolve => setTimeout(resolve, 0))
-        }
-
-        // Sprint 11.9.34: the monthly archive is the source of truth for targets.
-        // It contains August, September, October... together, so changing the
-        // planning month never makes an older month disappear.
-        try {
-          const monthlyArchive = await loadAllMonthlyTargetDatasets()
-          if (monthlyArchive?.rows?.length) {
-            setTargets(normalizeStoredTargets(monthlyArchive.rows))
-            setDataMeta(current => ({ ...current, targets:normalizeDatasetMeta('targets', monthlyArchive.meta, monthlyArchive.months?.at(-1)?.month || planningMonth) }))
-            loadedRows += monthlyArchive.rows.length
+        if (!IS_MOBILE_DEVICE) {
+          for (const kind of ['targets', 'quality', 'deviations']) {
+            if (!active) return
+            if (!changed(kind)) continue
+            setStatus(`טוען ${kind} ברקע...`)
+            loadedRows += applyDataset(kind, await loadCloudDatasetOnce(kind))
+            setPerformance(current => ({ ...current, queries:current.queries + 1, phase:`נטען ${kind}` }))
+            await new Promise(resolve => setTimeout(resolve, 0))
           }
-        } catch (monthlyTargetError) {
-          console.warn('Monthly target archive unavailable; active target dataset remains as fallback', monthlyTargetError)
         }
 
-        // Keep the exact target workbook synchronized as well as the normalized rows.
-        // This solves the case where computer B sees the new target cards but still
-        // downloads an older local template.
-        if (remoteMeta.targets) {
+        if (!IS_MOBILE_DEVICE) {
+          // Sprint 11.9.34: the monthly archive is the source of truth for targets.
+          // It contains August, September, October... together, so changing the
+          // planning month never makes an older month disappear.
           try {
-            const targetMonthForWorkbook = planningMonth || monthKey(new Date())
-            const cloudWorkbook = await loadMonthlyTargetWorkbook(targetMonthForWorkbook).catch(() => null) || await loadActiveTargetWorkbook()
-            if (cloudWorkbook?.bytes) await idbSetKey(TARGET_FILE_KEY, cloudWorkbook)
-          } catch (workbookError) {
-            console.warn('Target workbook background sync skipped', workbookError)
+            const monthlyArchive = await loadAllMonthlyTargetDatasets()
+            if (monthlyArchive?.rows?.length) {
+              setTargets(normalizeStoredTargets(monthlyArchive.rows))
+              setDataMeta(current => ({ ...current, targets:normalizeDatasetMeta('targets', monthlyArchive.meta, monthlyArchive.months?.at(-1)?.month || planningMonth) }))
+              loadedRows += monthlyArchive.rows.length
+            }
+          } catch (monthlyTargetError) {
+            console.warn('Monthly target archive unavailable; active target dataset remains as fallback', monthlyTargetError)
           }
+
+          // Keep the exact target workbook synchronized as well as the normalized rows.
+          // This solves the case where computer B sees the new target cards but still
+          // downloads an older local template.
+          if (remoteMeta.targets) {
+            try {
+              const targetMonthForWorkbook = planningMonth || monthKey(new Date())
+              const cloudWorkbook = await loadMonthlyTargetWorkbook(targetMonthForWorkbook).catch(() => null) || await loadActiveTargetWorkbook()
+              if (cloudWorkbook?.bytes) await idbSetKey(TARGET_FILE_KEY, cloudWorkbook)
+            } catch (workbookError) {
+              console.warn('Target workbook background sync skipped', workbookError)
+            }
+          }
+
         }
 
-        const health = await getCloudHealth().catch(() => null)
+        const health = IS_MOBILE_DEVICE ? null : await getCloudHealth().catch(() => null)
         if (!active) return
         const elapsed = Math.round(performance.now() - startedAt)
         const lastSync = Object.values(remoteMeta).map(x => x?.loaded_at || x?.updated_at).filter(Boolean).sort().at(-1) || new Date().toISOString()
-        setCloudState({ mode:'cloud', lastSync, message:IS_IOS_DEVICE ? 'מחובר לענן — מצב iPhone חסכוני ללא מטמון מקומי כבד' : 'מחובר לענן — טעינה חכמה של 7 ימים כברירת מחדל', latencyMs:health?.latencyMs ?? null, live:true })
+        setCloudState({ mode:'cloud', lastSync, message:IS_MOBILE_DEVICE ? 'מחובר לענן — מצב נייד קל: ייצור ואריזה בלבד' : 'מחובר לענן — טעינה חכמה של 7 ימים כברירת מחדל', latencyMs:health?.latencyMs ?? null, live:true })
         setStatus(cached && loadedRows === 0 ? 'הנתונים במטמון מעודכנים — לא נדרשה הורדה מחדש' : 'הנתונים המעודכנים נטענו בהצלחה')
         setPerformance(current => ({ ...current, loadMs:elapsed, rows:current.rows + loadedRows, phase:'הושלם' }))
       } catch (cloudError) {
@@ -1324,7 +1338,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   }, [])
 
   useEffect(() => {
-    if (!supabase) return
+    if (!supabase || IS_MOBILE_DEVICE) return
     let refreshTimer
     const channel = supabase.channel('iml-data-sources-live')
       .on('postgres_changes', { event:'*', schema:'public', table:'iml_data_sources' }, payload => {
@@ -1398,7 +1412,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   }, [])
 
   useEffect(() => {
-    if (IS_IOS_DEVICE) return
+    if (IS_MOBILE_DEVICE) return
     if (!production.length && !quality.length && !deviations.length && !targets.length) return
     const timer = setTimeout(() => {
       idbSet({ production, quality, deviations, targets, dataMeta, savedAt: new Date().toISOString() })
@@ -1959,10 +1973,35 @@ material: normalize(getField(r, [
     }
   }, [selectedBatch, selectedBatchMaterial, dashboardProd, qualityIndex, enrichedDeviationRows])
 
-  const openBatchCard = (batch, material = '') => {
+  const openBatchCard = async (batch, material = '') => {
     if (!batch) return
-    setSelectedBatch(normalize(batch))
-    setSelectedBatchMaterial(normalize(material))
+    const normalizedBatch = normalize(batch)
+    const normalizedMaterial = normalize(material)
+
+    if (IS_MOBILE_DEVICE) {
+      setMobileQualityLoading(true)
+      setStatus(`טוען תוצאות איכות למנה ${normalizedBatch}...`)
+      try {
+        const dataset = await loadCloudDatasetMatching('quality', row => {
+          const rowBatch = normalize(row?.batch || row?.Batch || row?.['Batch'])
+          const rowMaterial = normalize(row?.material || row?.Material || row?.['Material'])
+          if (rowBatch !== normalizedBatch) return false
+          return !normalizedMaterial || !rowMaterial || rowMaterial === normalizedMaterial
+        })
+        const rows = dataset?.rows || []
+        setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
+        setDataMeta(current => ({ ...current, quality:normalizeDatasetMeta('quality', dataset?.meta || null) }))
+        setStatus(rows.length ? `נטענו ${rows.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}` : `לא נמצאו תוצאות איכות למנה ${normalizedBatch}`)
+      } catch (error) {
+        console.warn('Mobile batch quality load failed', error)
+        setStatus(`טעינת האיכות למנה ${normalizedBatch} נכשלה`)
+      } finally {
+        setMobileQualityLoading(false)
+      }
+    }
+
+    setSelectedBatch(normalizedBatch)
+    setSelectedBatchMaterial(normalizedMaterial)
   }
 
   const dataMonths = useMemo(() => [...new Set(dashboardProd.map(r => monthKey(r.date)).filter(Boolean))].sort(), [dashboardProd])
@@ -3162,6 +3201,38 @@ material: normalize(getField(r, [
     <div style={{display:'flex',alignItems:'center',gap:10}}><RefreshCw size={19}/><div><strong style={{display:'block'}}>קיים עדכון חדש ל-IML CONTROL</strong><small>{availableUpdate.version && availableUpdate.version !== 'חדשה' ? `גרסה חדשה ${availableUpdate.version} · ` : ''}נמצא Build חדש בשרת · נדרש רענון אפליקציה</small></div></div>
     <button type="button" onClick={refreshApplication} style={{border:0,borderRadius:9,padding:'9px 15px',fontWeight:800,cursor:'pointer',background:'#0f8f7d',color:'#fff',whiteSpace:'nowrap'}}>רענן עכשיו</button>
   </div> : null
+
+  if (IS_MOBILE_DEVICE) return <div className="mobile-lite-app" dir="rtl">
+    <header className="mobile-lite-header">
+      <div><img src="/icons/adama-mark-64.png" alt="IML"/><span><strong>IML CONTROL</strong><small>ייצור ואריזה — מצב נייד</small></span></div>
+      <span className={`mobile-cloud-badge ${cloudState.mode}`}>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר...' : 'לא מחובר'}</span>
+    </header>
+
+    <section className="mobile-filter-card">
+      <div className="mobile-date-row">
+        <label><span>מתאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={from} onChange={e => { setFrom(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+        <label><span>עד תאריך</span><input type="date" min={dateBounds.min} max={dateBounds.max} value={to} onChange={e => { setTo(e.target.value); setPeriodYear(''); setPeriodQuarter('') }}/></label>
+      </div>
+      <div className="mobile-facility-title"><Factory size={17}/><strong>בחירת מתקנים</strong><button type="button" onClick={() => setSelectedFacilities([])}>נקה</button></div>
+      <div className="mobile-facility-chips">{facilities.map(id => <button type="button" key={id} className={selectedFacilities.includes(id) ? 'active' : ''} onClick={() => toggleFacility(id)}>{id}</button>)}</div>
+      <div className="mobile-quick-row"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(7)}>7 ימים</button></div>
+    </section>
+
+    <section className="mobile-production-card">
+      <div className="mobile-section-head"><div><BarChart3 size={18}/><strong>נתוני ייצור ואריזה</strong></div><span>{filtered.length.toLocaleString()} רשומות</span></div>
+      <div className="mobile-production-list">
+        {sortedRecentProduction.map((r, i) => <article className="mobile-production-row" key={`${r.order}-${r.batch}-${i}`}>
+          <div className="mobile-production-top"><span>{iso(r.date)}</span><b>{r.facility || '—'}</b><strong>{fmt(r.qty)}</strong></div>
+          <div className="mobile-production-desc">{r.desc || r.material || 'ללא תיאור'}</div>
+          <div className="mobile-production-meta"><span>קו: {r.routingGroup || r.prodLine || '—'}</span><span>Order: {r.order || '—'}</span></div>
+          <div className="mobile-production-bottom"><span>מק״ט {r.material || '—'}</span>{r.batch ? <button type="button" className="mobile-batch-button" disabled={mobileQualityLoading} onClick={() => openBatchCard(r.batch, r.material)}>{mobileQualityLoading ? 'טוען איכות...' : `מנה ${r.batch} · איכות`}</button> : <span>ללא מנה</span>}</div>
+        </article>)}
+        {!sortedRecentProduction.length && <div className="mobile-empty">אין נתוני ייצור/אריזה בטווח ובמתקנים שנבחרו.</div>}
+      </div>
+    </section>
+
+    {selectedBatchData && <BatchControlCard data={selectedBatchData} onClose={() => { setSelectedBatch(''); setSelectedBatchMaterial('') }}/>}
+  </div>
 
   if (showHome) return <div className="command-home" dir="rtl">
     <header className="command-home-header">
