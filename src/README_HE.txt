@@ -1,16 +1,10 @@
-IML CONTROL – Excel RTL & Style Update
+תיקון Build עבור xlsx-js-style
 
-להחליף בפרויקט:
-1. src/DashboardApp.jsx
-2. package.json
+להחליף בשורש הפרויקט:
+1. package.json
+2. netlify.toml
 
-מה תוקן:
-- קובץ XLSX אמיתי.
-- גיליון דיווח יומי פורמולציות מימין לשמאל.
-- כותרת כהה ומודגשת כמו בדוחות הקודמים.
-- גבולות מלאים לכל תאי הטבלה.
-- הדגשת מתקן וסה״כ תפוקה.
-- שמירה על Short Description בעמודת קו ייצור.
-- עיצוב RTL גם בגיליונות הנוספים.
+אין צורך לשנות שוב את DashboardApp.jsx אם כבר הוחלף בעדכון RTL האחרון.
 
-הערה: package.json כולל xlsx-js-style כדי שהעיצוב יישמר בתוך XLSX אמיתי. Netlify יתקין את התלות בזמן Build.
+הסיבה: package-lock.json הישן לא הכיל את xlsx-js-style, ולכן Netlify בנה עם dependencies ישנים וה-import נכשל.
+הפקודה החדשה מריצה npm install לפני build ומסנכרנת את התלות החדשה.
