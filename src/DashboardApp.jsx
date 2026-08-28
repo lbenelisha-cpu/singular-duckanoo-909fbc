@@ -2725,7 +2725,7 @@ material: normalize(getField(r, [
       .replace('<Style ss:ID="formTotal"><Font ss:Bold="1"/>', '<Style ss:ID="formTotal"><Font ss:FontName="Segoe UI" ss:Bold="1" ss:Color="#0B2F4B"/><Interior ss:Color="#F7FBFD" ss:Pattern="Solid"/>')
       .replace('ss:Format="#,##0.00"', 'ss:Format="#,##0"')
       .replaceAll('ss:Weight="1"/></Borders></Style>', 'ss:Weight="1" ss:Color="#CAD9E2"/></Borders></Style>')
-    const blob=new Blob([modernXml],{type:'application/vnd.ms-excel;charset=utf-8'})
+    const blob=new Blob([modernXml],{type:'application/xml;charset=utf-8'})
     const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500)
   }
 
@@ -2832,7 +2832,7 @@ material: normalize(getField(r, [
         Description:row.description, Batch:row.batch, MachineStatus:row.machineStatus,
         Quantity:num(row.quantity), Notes:row.notes
       })) }
-    ], `IML_Daily_Report_Saved_${selectedSingleReportDate}.xls`, restoredRows)
+    ], `IML_Daily_Report_Saved_${selectedSingleReportDate}.xml`, restoredRows)
     setStatus(`הדוח הערוך השמור לתאריך ${selectedSingleReportDate} הורד בהצלחה`)
   }
 
@@ -2858,7 +2858,7 @@ material: normalize(getField(r, [
       { name:'Planning', columns:[{key:'Month',label:'Month'},{key:'Facility',label:'Facility'},{key:'Station',label:'Station'},{key:'MonthlyTarget',label:'Monthly Target'},{key:'Actual',label:'Actual'},{key:'Remaining',label:'Remaining'},{key:'Forecast',label:'Forecast'},{key:'Status',label:'Status'}], rows:planningRows.map(r=>({__facility:String(r.facility||'—'),Month:planningMonth,Facility:r.facility,Station:r.station,MonthlyTarget:r.target,Actual:r.actual,Remaining:r.remaining,Forecast:r.forecast,Status:r.label})) },
       { name:'Quality', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'InspectionLot',label:'Inspection Lot'},{key:'Order',label:'Order'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'}], rows:qualityBad.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,InspectionLot:r.inspectionLot,Order:r.order,Batch:r.batch,Material:r.material,Status:r.status})) },
       { name:'Deviations', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'},{key:'Remarks',label:'Remarks'}], rows:openDeviations.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,Batch:r.batch,Material:r.material,Status:r.status,Remarks:r.remarks})) }
-    ], `IML_Facility_Report_${from && to ? (from === to ? from : `${from}_to_${to}`) : (from || to || new Date().toISOString().slice(0,10))}.xls`, productionRows)
+    ], `IML_Facility_Report_${from && to ? (from === to ? from : `${from}_to_${to}`) : (from || to || new Date().toISOString().slice(0,10))}.xml`, productionRows)
   }
 
   const downloadTargetWorkbook = async () => {
@@ -3122,7 +3122,7 @@ material: normalize(getField(r, [
             <button type="button" className="action secondary event-action-button" onClick={() => setDailyEventHistoryOpen(true)}><ClipboardList size={18}/> היסטוריית אירועים{visibleDailyEvents.length ? ` (${visibleDailyEvents.length})` : ''}</button>
           </div>
           <button className="action secondary" onClick={exportWorkbook} disabled={!production.length}><Download size={18}/> יצוא Excel</button>
-          <label className={`action secondary ${busy ? 'disabled' : ''}`} style={{cursor:'pointer'}}><Upload size={18}/> טעינת דוח ערוך<input type="file" accept=".xls,.xlsx" hidden disabled={busy} onChange={e=>{const file=e.target.files?.[0]; if(file) handleDailyReportRoundtripFile(file); e.target.value=''}}/></label>
+          <label className={`action secondary ${busy ? 'disabled' : ''}`} style={{cursor:'pointer'}}><Upload size={18}/> טעינת דוח ערוך<input type="file" accept=".xml,.xls,.xlsx" hidden disabled={busy} onChange={e=>{const file=e.target.files?.[0]; if(file) handleDailyReportRoundtripFile(file); e.target.value=''}}/></label>
           <button className="action secondary" type="button" onClick={downloadSavedDailyReport} disabled={!selectedSingleReportDate}><Download size={18}/> הורדת דוח שמור</button>
           {canDeleteData && <button className="action danger" onClick={clearAllData} disabled={!production.length && !quality.length && !deviations.length && !targets.length}><Trash2 size={18}/> מחיקה</button>}
           {canManageData ? <label className={`upload ${busy ? 'disabled' : ''}`}><Upload size={19}/>{busy ? 'טוען...' : 'טעינת Excel'}<input type="file" multiple accept=".xlsx,.xls" disabled={busy} onChange={e => handleFiles([...e.target.files])}/></label> : <button className="action upload" type="button" onClick={onRequestAdminLogin}><Upload size={19}/> טעינת Excel</button>}
