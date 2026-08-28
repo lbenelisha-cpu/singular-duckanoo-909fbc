@@ -52,6 +52,17 @@ const APP_VERSION = '11.9.36'
 const BUILD_LABEL = 'Sprint 11.9.36 — PROD LINE Fast Mapping'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
+// iPhone/iPad Safari can be terminated by iOS when a very large dashboard
+// state is duplicated into IndexedDB. Keep cloud data in memory on iOS and
+// avoid cloning the full Production / Quality arrays into local storage.
+const IS_IOS_DEVICE = (() => {
+  if (typeof navigator === 'undefined') return false
+  const ua = String(navigator.userAgent || '')
+  const platform = String(navigator.platform || '')
+  const touchMac = platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1
+  return /iPad|iPhone|iPod/i.test(ua) || touchMac
+})()
+
 const FACILITY_COLOR_PALETTE = ['#E8F3FF','#E9F8EF','#FFF3D9','#F4EAFF','#FFE9EC','#E7F7F7','#F1F1F1','#FFF0E5','#EAF0FF','#F6F0E8','#E8F8FF','#FDEBFF']
 // Stable, collision-free colors for the facilities used by IML CONTROL.
 // This keeps the same facility color in the table, summary chips, print and Excel export.
@@ -1205,7 +1216,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     ;(async () => {
       let cached = null
       try {
-        cached = await idbGet()
+        cached = IS_IOS_DEVICE ? null : await idbGet()
         if (active && cached) {
           setProduction(
   dedupeRows((cached.production || []), productionRowKey).map(row => {
@@ -1299,7 +1310,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         if (!active) return
         const elapsed = Math.round(performance.now() - startedAt)
         const lastSync = Object.values(remoteMeta).map(x => x?.loaded_at || x?.updated_at).filter(Boolean).sort().at(-1) || new Date().toISOString()
-        setCloudState({ mode:'cloud', lastSync, message:'מחובר לענן — טעינה חכמה של 7 ימים כברירת מחדל', latencyMs:health?.latencyMs ?? null, live:true })
+        setCloudState({ mode:'cloud', lastSync, message:IS_IOS_DEVICE ? 'מחובר לענן — מצב iPhone חסכוני ללא מטמון מקומי כבד' : 'מחובר לענן — טעינה חכמה של 7 ימים כברירת מחדל', latencyMs:health?.latencyMs ?? null, live:true })
         setStatus(cached && loadedRows === 0 ? 'הנתונים במטמון מעודכנים — לא נדרשה הורדה מחדש' : 'הנתונים המעודכנים נטענו בהצלחה')
         setPerformance(current => ({ ...current, loadMs:elapsed, rows:current.rows + loadedRows, phase:'הושלם' }))
       } catch (cloudError) {
@@ -1387,6 +1398,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   }, [])
 
   useEffect(() => {
+    if (IS_IOS_DEVICE) return
     if (!production.length && !quality.length && !deviations.length && !targets.length) return
     const timer = setTimeout(() => {
       idbSet({ production, quality, deviations, targets, dataMeta, savedAt: new Date().toISOString() })
