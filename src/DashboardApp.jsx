@@ -903,8 +903,9 @@ const useUiSounds = enabled => {
 export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
   useUniversalTableTools()
 
-  const canManageData = ['admin', 'manager'].includes(userRole)
-  const canDeleteData = userRole === 'admin'
+  const normalizedUserRole = String(userRole || 'viewer').trim().toLowerCase()
+  const canManageData = ['admin', 'manager'].includes(normalizedUserRole)
+  const canDeleteData = normalizedUserRole === 'admin'
   const [uiSoundsEnabled, setUiSoundsEnabled] = useState(() => localStorage.getItem(UI_SOUNDS_STORAGE_KEY) !== '0')
   useUiSounds(uiSoundsEnabled)
   useEffect(() => { localStorage.setItem(UI_SOUNDS_STORAGE_KEY, uiSoundsEnabled ? '1' : '0') }, [uiSoundsEnabled])
