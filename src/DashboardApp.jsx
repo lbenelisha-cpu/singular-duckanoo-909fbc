@@ -2743,7 +2743,7 @@ material: normalize(getField(r, [
       const total = groupRows.reduce((sum,row) => sum + num(row.qty), 0)
       const startRow = outRow
       groupRows.forEach(row => {
-        daily.push(['', row.material||'', facility, row.prodLineTool || row.prodLine || row.routingGroup || '', row.desc||'', row.batch||'', row.machineStatus||'', num(row.qty), total, row.notes||''])
+        daily.push(['', row.material||'', facility, row.prodLineTool || row.prodLine || row.routingGroup || '', row.desc||'', row.batch||'', '', num(row.qty), total, ''])
         outRow++
       })
       if (groupRows.length > 1) {
@@ -2800,7 +2800,7 @@ material: normalize(getField(r, [
       for (let c=1; c<=9; c++) {
         const addr = XLSX.utils.encode_cell({r,c})
         if (!dailyWs[addr]) dailyWs[addr] = {t:'s',v:''}
-        dailyWs[addr].s = (c===4 || c===6 || c===9) ? textBodyStyle : bodyStyle
+        dailyWs[addr].s = bodyStyle
         if (c===7 || c===8) dailyWs[addr].z = '#,##0'
       }
     }
