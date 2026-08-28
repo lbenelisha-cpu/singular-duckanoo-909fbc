@@ -760,55 +760,56 @@ button,input,select,textarea{font:inherit}
 .daily-event-history-modal{width:min(800px,96vw)}.daily-event-history-list{display:grid;gap:11px;margin-top:18px;max-height:56vh;overflow:auto;padding:2px}.daily-event-history-card{border:1px solid rgba(12,73,98,.12);border-radius:17px;background:rgba(255,255,255,.72);padding:15px 16px;box-shadow:0 7px 20px rgba(10,56,76,.06)}.daily-event-history-top,.daily-event-history-meta{display:flex;justify-content:space-between;gap:12px;align-items:center}.daily-event-history-top strong{font-size:17px;color:#0c354c}.daily-event-history-top span,.daily-event-history-card small{color:#71828d;font-size:12px}.daily-event-history-meta{margin-top:6px}.daily-event-history-meta span{font-size:13px;font-weight:700;color:#486372}.daily-event-history-meta b{font-size:12px;border-radius:999px;padding:4px 9px;background:#eef5f7;color:#31586a}.daily-event-history-card p{margin:10px 0 8px;color:#29495a;line-height:1.55}.daily-event-history-empty{text-align:center;padding:42px 16px;color:#71828d;border:1px dashed rgba(12,73,98,.2);border-radius:17px;background:rgba(255,255,255,.45)}
 @media(max-width:700px){.daily-event-modal-backdrop{padding:10px}.daily-event-modal{padding:18px;border-radius:22px}.daily-event-form-grid{grid-template-columns:1fr}.daily-event-description{grid-column:auto}.daily-event-modal-head h2{font-size:24px}}
 
-/* IML responsive viewport profiles — applied automatically on app open/resize */
-html[data-iml-viewport="compact"] .main{padding:18px 22px}
-html[data-iml-viewport="compact"] .header{align-items:flex-start}
-html[data-iml-viewport="compact"] .header-actions{gap:6px}
-html[data-iml-viewport="compact"] .header-actions .action,
-html[data-iml-viewport="compact"] .header-actions .upload{padding:9px 11px;font-size:12px}
-html[data-iml-viewport="compact"] .tabs{gap:6px;overflow-x:auto;overflow-y:hidden;padding-bottom:4px;scrollbar-width:thin}
-html[data-iml-viewport="compact"] .tabs button{flex:0 0 auto;padding:9px 12px;font-size:12px}
-html[data-iml-viewport="compact"] .summary-grid{grid-template-columns:repeat(3,minmax(150px,1fr));gap:10px}
-html[data-iml-viewport="compact"] .facility-grid{grid-template-columns:repeat(4,minmax(180px,1fr));gap:10px}
-html[data-iml-viewport="compact"] .forecast-grid{grid-template-columns:repeat(3,minmax(210px,1fr));gap:10px}
-html[data-iml-viewport="compact"] table{font-size:12px}
-html[data-iml-viewport="compact"] th,html[data-iml-viewport="compact"] td{padding:8px}
+/* IML responsive layout — CSS only. No JavaScript resize/orientation listeners. */
+@media (max-width:1600px), (max-height:820px){
+  .main{padding:18px 22px}
+  .header{align-items:flex-start}
+  .header-actions{gap:6px}
+  .header-actions .action,.header-actions .upload{padding:9px 11px;font-size:12px}
+  .tabs{gap:6px;overflow-x:auto;overflow-y:hidden;padding-bottom:4px;scrollbar-width:thin}
+  .tabs button{flex:0 0 auto;padding:9px 12px;font-size:12px}
+  .summary-grid{grid-template-columns:repeat(3,minmax(150px,1fr));gap:10px}
+  .facility-grid{grid-template-columns:repeat(4,minmax(180px,1fr));gap:10px}
+  .forecast-grid{grid-template-columns:repeat(3,minmax(210px,1fr));gap:10px}
+  table{font-size:12px}
+  th,td{padding:8px}
+}
 
-html[data-iml-viewport="tablet"] .side,html[data-iml-viewport="tablet"] .filter-side{display:none!important}
-html[data-iml-viewport="tablet"] .main{margin-right:0!important;width:100%!important;padding:14px 16px}
-html[data-iml-viewport="tablet"] .header{align-items:flex-start;flex-direction:column}
-html[data-iml-viewport="tablet"] .header-actions{width:100%;gap:6px}
-html[data-iml-viewport="tablet"] .header-actions .action,
-html[data-iml-viewport="tablet"] .header-actions .upload{padding:9px 10px;font-size:12px}
-html[data-iml-viewport="tablet"] .tabs{display:flex;overflow-x:auto;overflow-y:hidden;gap:6px;padding-bottom:6px;scrollbar-width:thin}
-html[data-iml-viewport="tablet"] .tabs button{flex:0 0 auto;white-space:nowrap}
-html[data-iml-viewport="tablet"] .executive-strip{grid-template-columns:repeat(3,minmax(160px,1fr))}
-html[data-iml-viewport="tablet"] .summary-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}
-html[data-iml-viewport="tablet"] .facility-grid{grid-template-columns:repeat(2,minmax(220px,1fr))}
-html[data-iml-viewport="tablet"] .forecast-grid{grid-template-columns:repeat(2,minmax(220px,1fr))}
-html[data-iml-viewport="tablet"] .table-wrap{max-width:100%;overflow:auto}
+@media (max-width:1100px){
+  .side,.filter-side{display:none!important}
+  .main{margin-right:0!important;width:100%!important;padding:14px 16px}
+  .header{align-items:flex-start;flex-direction:column}
+  .header-actions{width:100%;gap:6px}
+  .header-actions .action,.header-actions .upload{padding:9px 10px;font-size:12px}
+  .tabs{display:flex;overflow-x:auto;overflow-y:hidden;gap:6px;padding-bottom:6px;scrollbar-width:thin}
+  .tabs button{flex:0 0 auto;white-space:nowrap}
+  .executive-strip{grid-template-columns:repeat(3,minmax(160px,1fr))}
+  .summary-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}
+  .facility-grid{grid-template-columns:repeat(2,minmax(220px,1fr))}
+  .forecast-grid{grid-template-columns:repeat(2,minmax(220px,1fr))}
+  .table-wrap{max-width:100%;overflow:auto}
+}
 
-html[data-iml-viewport="mobile"] .side,html[data-iml-viewport="mobile"] .filter-side{display:none!important}
-html[data-iml-viewport="mobile"] .main{margin-right:0!important;width:100%!important;padding:10px}
-html[data-iml-viewport="mobile"] .header{align-items:flex-start;flex-direction:column;gap:10px}
-html[data-iml-viewport="mobile"] .header h1{font-size:21px}
-html[data-iml-viewport="mobile"] .header-actions{width:100%;gap:5px}
-html[data-iml-viewport="mobile"] .header-actions .action,
-html[data-iml-viewport="mobile"] .header-actions .upload{padding:8px 9px;font-size:11px;min-height:38px}
-html[data-iml-viewport="mobile"] .user-session{max-width:100%}
-html[data-iml-viewport="mobile"] .top-status-bar{overflow-x:auto;flex-wrap:nowrap}
-html[data-iml-viewport="mobile"] .top-status-item{flex:0 0 auto;min-width:92px}
-html[data-iml-viewport="mobile"] .tabs{display:flex;overflow-x:auto;overflow-y:hidden;gap:5px;padding-bottom:6px;scrollbar-width:thin}
-html[data-iml-viewport="mobile"] .tabs button{flex:0 0 auto;white-space:nowrap;padding:8px 10px;font-size:11px}
-html[data-iml-viewport="mobile"] .executive-strip,
-html[data-iml-viewport="mobile"] .summary-grid,
-html[data-iml-viewport="mobile"] .facility-grid,
-html[data-iml-viewport="mobile"] .forecast-grid{grid-template-columns:1fr}
-html[data-iml-viewport="mobile"] .filters{display:grid;grid-template-columns:1fr}
-html[data-iml-viewport="mobile"] .filters label,html[data-iml-viewport="mobile"] .filters button{width:100%}
-html[data-iml-viewport="mobile"] .selection{align-items:flex-start;flex-direction:column;gap:8px}
-html[data-iml-viewport="mobile"] .table-wrap{max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch}
-html[data-iml-viewport="mobile"] table{font-size:11px;min-width:max-content}
-html[data-iml-viewport="mobile"] th,html[data-iml-viewport="mobile"] td{padding:7px 8px}
-html[data-iml-viewport="mobile"] .mapping-summary-grid{grid-template-columns:1fr}
-html[data-iml-viewport="mobile"] .mapping-table-wrap table{min-width:1450px}
+@media (max-width:760px){
+  .side,.filter-side{display:none!important}
+  .main{margin-right:0!important;width:100%!important;padding:10px}
+  .header{align-items:flex-start;flex-direction:column;gap:10px}
+  .header h1{font-size:21px}
+  .header-actions{width:100%;gap:5px}
+  .header-actions .action,.header-actions .upload{padding:8px 9px;font-size:11px;min-height:38px}
+  .user-session{max-width:100%}
+  .top-status-bar{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}
+  .top-status-item{flex:0 0 auto;min-width:92px}
+  .tabs{display:flex;overflow-x:auto;overflow-y:hidden;gap:5px;padding-bottom:6px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+  .tabs button{flex:0 0 auto;white-space:nowrap;padding:8px 10px;font-size:11px}
+  .executive-strip,.summary-grid,.facility-grid,.forecast-grid{grid-template-columns:1fr}
+  .filters{display:grid;grid-template-columns:1fr}
+  .filters label,.filters button{width:100%}
+  .selection{align-items:flex-start;flex-direction:column;gap:8px}
+  .table-wrap{max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch}
+  table{font-size:11px;min-width:max-content}
+  th,td{padding:7px 8px}
+  .mapping-summary-grid{grid-template-columns:1fr}
+  .mapping-table-wrap{max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch}
+  .mapping-table-wrap table{min-width:1450px}
+}

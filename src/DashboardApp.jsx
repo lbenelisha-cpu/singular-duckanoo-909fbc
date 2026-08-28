@@ -906,26 +906,6 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const normalizedUserRole = String(userRole || 'viewer').trim().toLowerCase()
   const canManageData = ['admin', 'manager'].includes(normalizedUserRole)
   const canDeleteData = normalizedUserRole === 'admin'
-  useEffect(() => {
-    const applyViewportProfile = () => {
-      const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 1366)
-      const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 768)
-      const profile = viewportWidth <= 760 ? 'mobile' : viewportWidth <= 1100 ? 'tablet' : (viewportWidth <= 1600 || viewportHeight <= 820) ? 'compact' : 'wide'
-      const root = document.documentElement
-      root.dataset.imlViewport = profile
-      root.style.setProperty('--iml-vw', `${viewportWidth}px`)
-      root.style.setProperty('--iml-vh', `${viewportHeight}px`)
-    }
-    applyViewportProfile()
-    window.addEventListener('resize', applyViewportProfile)
-    window.addEventListener('orientationchange', applyViewportProfile)
-    window.visualViewport?.addEventListener('resize', applyViewportProfile)
-    return () => {
-      window.removeEventListener('resize', applyViewportProfile)
-      window.removeEventListener('orientationchange', applyViewportProfile)
-      window.visualViewport?.removeEventListener('resize', applyViewportProfile)
-    }
-  }, [])
   const [uiSoundsEnabled, setUiSoundsEnabled] = useState(() => localStorage.getItem(UI_SOUNDS_STORAGE_KEY) !== '0')
   useUiSounds(uiSoundsEnabled)
   useEffect(() => { localStorage.setItem(UI_SOUNDS_STORAGE_KEY, uiSoundsEnabled ? '1' : '0') }, [uiSoundsEnabled])
