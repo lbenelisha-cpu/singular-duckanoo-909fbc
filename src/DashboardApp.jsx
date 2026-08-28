@@ -1423,56 +1423,30 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
     let active = true
     const timer = setTimeout(async () => {
-      setStatus('מסנכרן איכות לפי המנות שנבחרו...')
+      setStatus('מסנכרן איכות לפי התאריך והמתקנים שנבחרו...')
       try {
-        // The production table is already filtered by the selected dates/facilities.
-        // Use its batch/material keys as the source of truth for mobile quality matching.
-        const batchKeys = new Set()
-        const batchOnly = new Set()
-
-        for (const row of filtered) {
-          const batch = normalize(row?.batch || row?.Batch || row?.['Batch'])
-          const material = normalize(row?.material || row?.Material || row?.['Material'])
-          if (!batch) continue
-          batchOnly.add(batch)
-          if (material) batchKeys.add(`${batch}::${material}`)
-        }
-
-        if (!batchOnly.size) {
-          if (active) {
-            setQuality([])
-            setStatus('אין מנות בטווח ובמתקנים שנבחרו')
-          }
-          return
-        }
+        const selectedSet = new Set((selectedFacilities || []).map(value => normalize(value)))
+        const fromMs = from ? new Date(`${from}T00:00:00`).getTime() : -Infinity
+        const toMs = to ? new Date(`${to}T23:59:59.999`).getTime() : Infinity
 
         const dataset = await loadCloudDatasetMatching('quality', row => {
-          const rowBatch = normalize(
-            row?.batch ??
-            row?.Batch ??
-            row?.['Batch'] ??
-            row?.['Batch No'] ??
-            row?.['Batch Number'] ??
-            row?.['מספר מנה'] ??
-            row?.['מנה'] ??
-            row?.['מספר אצווה']
-          )
-          if (!rowBatch || !batchOnly.has(rowBatch)) return false
+          const rawDate = row?.date ?? row?.Date ?? row?.['Sampling Date'] ?? row?.['Actual Finish Date'] ?? row?.['תאריך']
+          const parsedDate = rawDate instanceof Date ? rawDate : new Date(rawDate)
+          const rowMs = Number.isFinite(parsedDate?.getTime?.()) ? parsedDate.getTime() : NaN
+          if (Number.isFinite(rowMs) && (rowMs < fromMs || rowMs > toMs)) return false
 
-          const rowMaterial = normalize(
-            row?.material ??
-            row?.Material ??
-            row?.['Material'] ??
-            row?.['Material No'] ??
-            row?.['Material Number'] ??
-            row?.['מקט'] ??
-            row?.['מק"ט']
-          )
+          if (selectedSet.size) {
+            const facilityCandidates = [
+              row?.facility,
+              row?.station,
+              row?.storage,
+              row?.storageLocation,
+              row?.['Storage Location'],
+              row?.['תחנה'],
+              row?.['מתקן'],
+            ].map(value => normalize(value)).filter(Boolean)
 
-          // When the quality file contains a material number, require batch+material.
-          // If material is absent in QUALITY, matching by batch is still accepted.
-          if (rowMaterial && batchKeys.size) {
-            return batchKeys.has(`${rowBatch}::${rowMaterial}`)
+            if (!facilityCandidates.some(value => selectedSet.has(value))) return false
           }
           return true
         })
@@ -1481,10 +1455,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         const rows = dataset?.rows || []
         setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
         setDataMeta(current => ({ ...current, quality:normalizeDatasetMeta('quality', dataset?.meta || null) }))
-        setStatus(`איכות מסונכרנת — ${rows.length.toLocaleString()} רשומות עבור ${batchOnly.size.toLocaleString()} מנות`)
+        setStatus(`איכות מסונכרנת — ${rows.length.toLocaleString()} רשומות לטווח שנבחר`)
       } catch (error) {
-        console.warn('Mobile batch-linked quality sync failed', error)
-        if (active) setStatus('נתוני הכמות מחוברים; סנכרון האיכות לפי מנה נכשל')
+        console.warn('Mobile filtered quality sync failed', error)
+        if (active) setStatus('נתוני הכמות מחוברים; סנכרון האיכות נכשל')
       }
     }, 450)
 
@@ -1492,7 +1466,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       active = false
       clearTimeout(timer)
     }
-  }, [filtered])
+  }, [from, to, selectedFacilities])
 
   useEffect(() => {
     if (IS_MOBILE_DEVICE) return
@@ -1925,13 +1899,7 @@ material: normalize(getField(r, [
   // remain in the cloud dataset, but unrelated facilities are excluded from all
   // regular user-facing calculations until they are explicitly added to the picker.
   const dashboardProd = useMemo(() => prod.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [prod, selectableFacilitySet])
-  // Mobile QUALITY is already narrowed by the selected production Batch + Material.
-  // Do not filter it again by facility because the QUALITY source does not always
-  // carry the same facility/storage code as the production dataset.
-  const dashboardQualityRows = useMemo(
-    () => IS_MOBILE_DEVICE ? qualityRows : qualityRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))),
-    [qualityRows, selectableFacilitySet]
-  )
+  const dashboardQualityRows = useMemo(() => qualityRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [qualityRows, selectableFacilitySet])
   const dashboardDeviationRows = useMemo(() => deviationRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [deviationRows, selectableFacilitySet])
 
   // Sprint 11.9.36 performance: index detailed quality characteristics only for
@@ -2074,26 +2042,8 @@ material: normalize(getField(r, [
         setStatus(`טוען תוצאות איכות למנה ${normalizedBatch}...`)
         try {
           const dataset = await loadCloudDatasetMatching('quality', row => {
-          const rowBatch = normalize(
-            row?.batch ??
-            row?.Batch ??
-            row?.['Batch'] ??
-            row?.['Batch No'] ??
-            row?.['Batch Number'] ??
-            row?.['מספר מנה'] ??
-            row?.['מנה'] ??
-            row?.['מספר אצווה']
-          )
-          const rowMaterial = normalize(
-            row?.material ??
-            row?.Material ??
-            row?.['Material'] ??
-            row?.['Material No'] ??
-            row?.['Material Number'] ??
-            row?.['מקט'] ??
-            row?.['מק"ט'] ??
-            row?.['מק״ט']
-          )
+          const rowBatch = normalize(row?.batch || row?.Batch || row?.['Batch'])
+          const rowMaterial = normalize(row?.material || row?.Material || row?.['Material'])
           if (rowBatch !== normalizedBatch) return false
           return !normalizedMaterial || !rowMaterial || rowMaterial === normalizedMaterial
         })
@@ -3340,7 +3290,7 @@ material: normalize(getField(r, [
       <article className={`mobile-kpi-card quality ${openDeviations.length ? 'warning' : 'good'}`}>
         <div><FlaskConical size={18}/><span>איכות</span></div>
         <strong>{quality.length.toLocaleString()}</strong>
-        <small>{quality.length ? `רשומות איכות מקושרות למנות שנבחרו` : (openDeviations.length ? `${openDeviations.length} חריגות פתוחות` : 'לא נמצאו תוצאות איכות למנות שנבחרו')}</small>
+        <small>{openDeviations.length ? `${openDeviations.length} חריגות פתוחות` : 'אין חריגות פתוחות בטווח'}</small>
       </article>
     </section>
 
@@ -3355,7 +3305,7 @@ material: normalize(getField(r, [
           <b>{normalize(row.status) || 'חריגה פתוחה'}</b>
         </button>)}
       </div> : <div className="mobile-ok-state"><CheckCircle2 size={18}/> אין חריגות איכות פתוחות בטווח ובמתקנים שנבחרו.</div>}
-      <p className="mobile-quality-note">נתוני האיכות מקושרים למנות הייצור בטווח ובמתקנים שנבחרו לפי מספר מנה + מק״ט. לחיצה על מנה מציגה את הפירוט שלה.</p>
+      <p className="mobile-quality-note">נתוני האיכות מסונכרנים לפי התאריך והמתקנים שנבחרו. לחיצה על מנה מציגה את תוצאות האיכות המפורטות שלה.</p>
     </section>
 
     <section className="mobile-production-card">
