@@ -126,7 +126,7 @@ export default function App() {
   if (!cloudConfigured || configurationError) return <SetupRequired error={configurationError} />
   if (publicViewer) return <DashboardApp currentUser={null} userRole="viewer" isGuest={true} onSignOut={signOut} onRequestAdminLogin={()=>setPublicViewer(false)}/>
   if (!session) return <div className="auth-page" dir="rtl"><form className="auth-card" onSubmit={signIn}>
-    <div className="auth-brand"><img src="/icons/icon-192.png" alt="IML Control"/><div className="auth-logo">IML<span>CONTROL</span></div></div>
+    <div className="auth-brand"><img src="/icons/iml-brand-v11-192.png" alt="IML Control"/><div className="auth-logo">IML<span>CONTROL</span></div></div>
     <div className="auth-icon"><LockKeyhole/></div><h1>כניסה למערכת</h1><p>התחבר כדי לצפות בנתוני המתקנים המשותפים.</p>
     <label><span>דוא״ל</span><div><Mail size={18}/><input type="email" value={email} onChange={e=>setEmail(e.target.value)} required autoComplete="email"/></div></label>
     <label><span>סיסמה</span><div><LockKeyhole size={18}/><input type={showPassword?'text':'password'} value={password} onChange={e=>setPassword(e.target.value)} required autoComplete="current-password"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword?<EyeOff size={18}/>:<Eye size={18}/>}</button></div></label>
