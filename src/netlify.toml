@@ -1,5 +1,5 @@
 [build]
-  command = "npm install && npm run build"
+  command = "npm install xlsx-js-style@1.2.0 --no-save --no-package-lock && npm run build"
   publish = "dist"
 
 [[redirects]]
