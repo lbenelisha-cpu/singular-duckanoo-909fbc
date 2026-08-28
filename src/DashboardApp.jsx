@@ -1925,7 +1925,13 @@ material: normalize(getField(r, [
   // remain in the cloud dataset, but unrelated facilities are excluded from all
   // regular user-facing calculations until they are explicitly added to the picker.
   const dashboardProd = useMemo(() => prod.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [prod, selectableFacilitySet])
-  const dashboardQualityRows = useMemo(() => qualityRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [qualityRows, selectableFacilitySet])
+  // Mobile QUALITY is already narrowed by the selected production Batch + Material.
+  // Do not filter it again by facility because the QUALITY source does not always
+  // carry the same facility/storage code as the production dataset.
+  const dashboardQualityRows = useMemo(
+    () => IS_MOBILE_DEVICE ? qualityRows : qualityRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))),
+    [qualityRows, selectableFacilitySet]
+  )
   const dashboardDeviationRows = useMemo(() => deviationRows.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [deviationRows, selectableFacilitySet])
 
   // Sprint 11.9.36 performance: index detailed quality characteristics only for
@@ -2068,8 +2074,26 @@ material: normalize(getField(r, [
         setStatus(`טוען תוצאות איכות למנה ${normalizedBatch}...`)
         try {
           const dataset = await loadCloudDatasetMatching('quality', row => {
-          const rowBatch = normalize(row?.batch || row?.Batch || row?.['Batch'])
-          const rowMaterial = normalize(row?.material || row?.Material || row?.['Material'])
+          const rowBatch = normalize(
+            row?.batch ??
+            row?.Batch ??
+            row?.['Batch'] ??
+            row?.['Batch No'] ??
+            row?.['Batch Number'] ??
+            row?.['מספר מנה'] ??
+            row?.['מנה'] ??
+            row?.['מספר אצווה']
+          )
+          const rowMaterial = normalize(
+            row?.material ??
+            row?.Material ??
+            row?.['Material'] ??
+            row?.['Material No'] ??
+            row?.['Material Number'] ??
+            row?.['מקט'] ??
+            row?.['מק"ט'] ??
+            row?.['מק״ט']
+          )
           if (rowBatch !== normalizedBatch) return false
           return !normalizedMaterial || !rowMaterial || rowMaterial === normalizedMaterial
         })
