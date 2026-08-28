@@ -1,12 +1,29 @@
-IML CONTROL - Excel style root fix
+IML CONTROL — New ADAMA IML Brand Icon
 
-IMPORTANT:
-1. Replace package.json in the PROJECT ROOT (same folder as netlify.toml), NOT src/package.json.
-2. Replace src/DashboardApp.jsx.
-3. Do NOT replace netlify.toml.
+להחליף:
+- index.html
+- public/manifest.webmanifest
+- public/apple-touch-icon.png
+- public/favicon-32.png
+- public/icon-192.png
+- public/icon-512.png
+- כל הקבצים המצורפים תחת public/icons/
 
-Verification in Netlify log:
-Before vite build you MUST see:
-IML_STYLE_PATCH_ACTIVE
+מה משתנה:
+- אייקון חדש ADAMA + IML בתוך האפליקציה.
+- אייקון חדש לקיצור דרך באייפון.
+- אייקון חדש ב-PWA / מסך הבית.
+- favicon חדש בדפדפן.
+- נוספה הפניית manifest תקינה ו-cache-busting כדי שהאייקון החדש ייטען.
 
-If that line does not appear, the root package.json was not replaced.
+לא נוגעים ב:
+- DashboardApp.jsx
+- cloudData.js
+- styles.css
+- Supabase
+- package.json
+- netlify.toml
+
+באייפון:
+לאחר Deploy, אם קיצור הדרך הישן עדיין מציג את האייקון הקודם,
+מחק את הקיצור ממסך הבית והוסף אותו מחדש דרך Safari > שיתוף > הוסף למסך הבית.
