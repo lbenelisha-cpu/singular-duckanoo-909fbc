@@ -1468,6 +1468,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             batch: normalize(getField(r, ['Batch', 'Batch Number'])),
             material: normalize(getField(r, ['Material', 'Material #', 'Material Number', 'Material No.', 'מקט', 'מק"ט', 'מק״ט'])),
             desc: normalize(getField(r, ['Material description', 'Material Description'])),
+            shortDescription: normalize(getField(r, ['Short Description', 'Short description', 'SHORT DESCRIPTION', 'Short Desc', 'Short Desc.', 'Short text', 'Short Text'])),
             orderType: normalize(getField(r, ['Order Type'])),
             routingGroup,
             routingDescription,
@@ -1691,6 +1692,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         batch: normalize(r.batch),
         material: normalize(r.material),
         desc: normalize(r.desc),
+        shortDescription: normalize(r.shortDescription),
         orderType: normalize(r.orderType),
         routingGroup: normalizeRouting(r.routingGroup),
         routingDescription: normalize(r.routingDescription),
@@ -1728,6 +1730,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   'Material'
 ])),
       desc: normalize(getField(r, ['Material description', 'Material Description'])),
+      shortDescription: normalize(getField(r, ['Short Description', 'Short description', 'SHORT DESCRIPTION', 'Short Desc', 'Short Desc.', 'Short text', 'Short Text'])),
       orderType: normalize(getField(r, ['Order Type'])),
       routingGroup,
       routingDescription,
@@ -2671,7 +2674,7 @@ material: normalize(getField(r, [
         cells.push(cell(row.material || '', 'formPlain', ' ss:Index="2"'))
         if (index === 0) {
           cells.push(cell(facility, 'formGroup', span ? ` ss:MergeDown="${span}"` : ''))
-          cells.push(cell(row.routingGroup || '', 'formBody'))
+          cells.push(cell(row.shortDescription || row.routingDescription || row.routingGroup || '', 'formBody'))
           cells.push(cell(row.desc || '', 'formBody'))
           cells.push(cell(row.batch || '', 'formBody'))
           cells.push(cell(row.machineStatus || '', 'formStatus'))
@@ -2680,7 +2683,7 @@ material: normalize(getField(r, [
           cells.push(cell(row.notes || '', 'formNotes'))
           cells.push(cell('', 'formExtra'))
         } else {
-          cells.push(cell(row.routingGroup || '', 'formBody', ' ss:Index="4"'))
+          cells.push(cell(row.shortDescription || row.routingDescription || row.routingGroup || '', 'formBody', ' ss:Index="4"'))
           cells.push(cell(row.desc || '', 'formBody'))
           cells.push(cell(row.batch || '', 'formBody'))
           cells.push(cell(row.machineStatus || '', 'formStatus'))
