@@ -9,9 +9,13 @@ import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
-import * as XLSX from 'xlsx-js-style'
+import * as XLSXCore from 'xlsx'
 import './styles.css'
 
+// Use the styled browser build when available, but always fall back to the
+// project's existing xlsx dependency so the app can never white-screen if
+// the external script is blocked or slow to load.
+const XLSX = window.XLSX || XLSXCore
 
 const LEGACY_DAILY_TARGETS = {
   '1519': 80000, '1521': 60000, '1523': 40000, '1524': 6000,
@@ -2731,15 +2735,9 @@ material: normalize(getField(r, [
       ? savedDailyEventsForSelection.map(event => `אירוע ${event.type} · מתקן ${event.facility} · חומרה ${event.severity} - ${event.description}`).join(' | ')
       : 'לא נשמרו אירועים לתאריך הדוח שנבחר.'
     const daily = Array.from({length:7}, () => Array(10).fill(''))
-    daily[1][1] = 'דוח יומי – מתקנים נבחרים'
-    daily[2][1] = `מספר מתקנים בדוח: ${grouped.size}`
-    daily[4][1] = eventText
+    daily[4][2] = eventText
     daily[6] = ['', 'מקט', displayDate, 'קו יצור', 'חומר', 'מספר אצווה', 'סטטוס מכונה', 'תפוקה', 'סה"כ תפוקה', 'הערות']
-    const merges = [
-      {s:{r:1,c:1},e:{r:1,c:9}},
-      {s:{r:2,c:1},e:{r:2,c:9}},
-      {s:{r:4,c:1},e:{r:4,c:9}}
-    ]
+    const merges = [{s:{r:4,c:2},e:{r:4,c:9}}]
     let outRow = 7
     grouped.forEach((groupRows, facility) => {
       const total = groupRows.reduce((sum,row) => sum + num(row.qty), 0)
@@ -2758,7 +2756,7 @@ material: normalize(getField(r, [
     const dailyWs = XLSX.utils.aoa_to_sheet(daily)
     dailyWs['!merges'] = merges
     dailyWs['!cols'] = [{wch:3},{wch:16},{wch:18},{wch:18},{wch:38},{wch:18},{wch:24},{wch:14},{wch:16},{wch:36}]
-    dailyWs['!rows'] = daily.map((_,i)=>({hpt:i===1?28:i===4?32:i===6?26:22}))
+    dailyWs['!rows'] = daily.map((_,i)=>({hpt:i===4?32:i===6?24:22}))
     dailyWs['!freeze'] = { xSplit:0, ySplit:7, topLeftCell:'A8', activePane:'bottomLeft', state:'frozen' }
     setRtl(dailyWs)
 
@@ -2787,19 +2785,7 @@ material: normalize(getField(r, [
     const eventStyle = {
       font:{name:'Segoe UI',sz:11,bold:true,color:{rgb:'1F2937'}},
       fill:{patternType:'solid',fgColor:{rgb:'FDE7A8'}},
-      alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
-      border:thinBorder
-    }
-    const titleStyle = {
-      font:{name:'Segoe UI',sz:15,bold:true,color:{rgb:'FFFFFF'}},
-      fill:{patternType:'solid',fgColor:{rgb:'0B2F4B'}},
-      alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
-      border:thinBorder
-    }
-    const metaStyle = {
-      font:{name:'Segoe UI',sz:10,bold:true,color:{rgb:'0B2F4B'}},
-      fill:{patternType:'solid',fgColor:{rgb:'DCEAF3'}},
-      alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
+      alignment:{horizontal:'right',vertical:'center',wrapText:true,readingOrder:2},
       border:thinBorder
     }
     const totalStyle = {
@@ -2822,16 +2808,10 @@ material: normalize(getField(r, [
       const addr = XLSX.utils.encode_cell({r:6,c})
       if (dailyWs[addr]) dailyWs[addr].s = headerStyle
     }
-    for (let c=1; c<=9; c++) {
-      const titleAddr = XLSX.utils.encode_cell({r:1,c})
-      const metaAddr = XLSX.utils.encode_cell({r:2,c})
-      const eventAddr = XLSX.utils.encode_cell({r:4,c})
-      if (!dailyWs[titleAddr]) dailyWs[titleAddr] = {t:'s',v:''}
-      if (!dailyWs[metaAddr]) dailyWs[metaAddr] = {t:'s',v:''}
-      if (!dailyWs[eventAddr]) dailyWs[eventAddr] = {t:'s',v:''}
-      dailyWs[titleAddr].s = titleStyle
-      dailyWs[metaAddr].s = metaStyle
-      dailyWs[eventAddr].s = eventStyle
+    for (let c=2; c<=9; c++) {
+      const addr = XLSX.utils.encode_cell({r:4,c})
+      if (!dailyWs[addr]) dailyWs[addr] = {t:'s',v:''}
+      dailyWs[addr].s = eventStyle
     }
     // Emphasize facility and total-output merged blocks like the previous report.
     grouped.forEach((groupRows, facility) => {
@@ -2867,7 +2847,7 @@ material: normalize(getField(r, [
         if (!ws[addr]) ws[addr] = {t:'s',v:''}
         ws[addr].s = {
           font:{name:'Segoe UI',sz:10,color:{rgb:'111827'}},
-          alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
+          alignment:{horizontal:'right',vertical:'center',wrapText:true,readingOrder:2},
           border:{top:{style:'thin',color:{rgb:'D1D5DB'}},bottom:{style:'thin',color:{rgb:'D1D5DB'}},left:{style:'thin',color:{rgb:'D1D5DB'}},right:{style:'thin',color:{rgb:'D1D5DB'}}}
         }
       }
