@@ -2702,160 +2702,103 @@ material: normalize(getField(r, [
   }
 
   const exportStyledExcel = (sheets, filename, productionRowsForTemplate = []) => {
-    // Generate a real Office Open XML .xlsx workbook. The previous exporter
-    // produced SpreadsheetML 2003 XML, which caused Excel to warn that the
-    // file format/extension did not match (or opened .xml in the browser).
-    const wb = XLSX.utils.book_new()
-    wb.Workbook = wb.Workbook || {}
-    wb.Workbook.Views = [{ RTL:true }]
-
-    const safeSheetName = (name, used) => {
-      const base = String(name || 'Sheet').replace(/[\\/?*\[\]:]/g, ' ').trim().slice(0,31) || 'Sheet'
-      let candidate = base, n = 2
-      while (used.has(candidate)) candidate = `${base.slice(0, Math.max(1, 28-String(n).length))} ${n++}`
-      used.add(candidate)
-      return candidate
+    // Self-contained Office Open XML writer. This keeps the report as a real
+    // .xlsx file while preserving fills, borders, RTL and alignment without
+    // adding any npm/CDN dependency (important for stable Netlify builds).
+    const esc = value => String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    const colName = n => { let s=''; for (let x=n+1; x>0; x=Math.floor((x-1)/26)) s=String.fromCharCode(65+((x-1)%26))+s; return s }
+    const cellXml = (r,c,value,style=5) => {
+      if (value === null || value === undefined || value === '') return ''
+      const ref = `${colName(c)}${r+1}`
+      if (typeof value === 'number' && Number.isFinite(value)) return `<c r="${ref}" s="${style}" t="n"><v>${value}</v></c>`
+      return `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${esc(value)}</t></is></c>`
     }
-    const usedNames = new Set()
-    const setRtl = ws => {
-      ws['!views'] = [{ RTL:true, rightToLeft:true }]
-      ws['!sheetView'] = { rightToLeft:true }
-    }
-    const widthFor = values => Math.min(60, Math.max(10, ...values.map(v => Math.ceil(String(v ?? '').length * 1.15 + 2))))
-
-    // First sheet: the editable daily formulations report, kept in the same
-    // cell positions expected by "טעינת דוח ערוך" (header on row 7).
-    const rows = [...productionRowsForTemplate].sort((a,b) => facilitySortDesc(a,b) || String(a.routingGroup||'').localeCompare(String(b.routingGroup||''), 'he', {numeric:true}) || String(a.material||'').localeCompare(String(b.material||''), 'he', {numeric:true}))
-    const grouped = new Map()
-    rows.forEach(row => { const f=String(row.facility||'—'); const arr=grouped.get(f)||[]; arr.push(row); grouped.set(f,arr) })
-    const displayDate = from && to && from === to
-      ? new Date(`${from}T12:00:00`).toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'})
-      : (from || to || new Date().toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'2-digit'}))
-    const eventText = savedDailyEventsForSelection.length
-      ? savedDailyEventsForSelection.map(event => `אירוע ${event.type} · מתקן ${event.facility} · חומרה ${event.severity} - ${event.description}`).join(' | ')
-      : 'לא נשמרו אירועים לתאריך הדוח שנבחר.'
-    const daily = Array.from({length:7}, () => Array(10).fill(''))
-    daily[4][2] = eventText
-    daily[6] = ['', 'מקט', displayDate, 'קו יצור', 'חומר', 'מספר אצווה', 'סטטוס מכונה', 'תפוקה', 'סה"כ תפוקה', 'הערות']
-    const merges = [{s:{r:4,c:2},e:{r:4,c:9}}]
-    let outRow = 7
-    grouped.forEach((groupRows, facility) => {
-      const total = groupRows.reduce((sum,row) => sum + num(row.qty), 0)
-      const startRow = outRow
-      groupRows.forEach(row => {
-        daily.push(['', row.material||'', facility, row.prodLineTool || row.prodLine || row.routingGroup || '', row.desc||'', row.batch||'', '', num(row.qty), total, ''])
-        outRow++
+    const crcTable = (() => {
+      const t = new Uint32Array(256)
+      for (let n=0;n<256;n++) { let c=n; for (let k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c>>>0 }
+      return t
+    })()
+    const crc32 = bytes => { let c=0xFFFFFFFF; for (const b of bytes) c=crcTable[(c^b)&255]^(c>>>8); return (c^0xFFFFFFFF)>>>0 }
+    const u16 = n => [n&255,(n>>>8)&255]
+    const u32 = n => [n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255]
+    const encoder = new TextEncoder()
+    const zipStore = entries => {
+      const locals=[], centrals=[]; let offset=0
+      entries.forEach(({name,text}) => {
+        const nb=encoder.encode(name), data=encoder.encode(text), crc=crc32(data)
+        const local = new Uint8Array([0x50,0x4b,0x03,0x04,...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(nb.length),...u16(0),...nb,...data])
+        locals.push(local)
+        const central = new Uint8Array([0x50,0x4b,0x01,0x02,...u16(20),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(nb.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(offset),...nb])
+        centrals.push(central); offset += local.length
       })
-      if (groupRows.length > 1) {
-        merges.push({s:{r:startRow,c:2},e:{r:outRow-1,c:2}})
-        merges.push({s:{r:startRow,c:8},e:{r:outRow-1,c:8}})
-        for (let r=startRow+1; r<outRow; r++) { daily[r][2]=''; daily[r][8]='' }
-      }
+      const centralSize=centrals.reduce((n,a)=>n+a.length,0)
+      const end = new Uint8Array([0x50,0x4b,0x05,0x06,...u16(0),...u16(0),...u16(entries.length),...u16(entries.length),...u32(centralSize),...u32(offset),...u16(0)])
+      return new Blob([...locals,...centrals,end], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+    }
+    const safeSheetName = (name, used) => {
+      const base=String(name||'Sheet').replace(/[\\/?*\[\]:]/g,' ').trim().slice(0,31)||'Sheet'
+      let candidate=base,n=2; while(used.has(candidate)) candidate=`${base.slice(0,Math.max(1,28-String(n).length))} ${n++}`
+      used.add(candidate); return candidate
+    }
+    const usedNames=new Set()
+    const xmlSheets=[]
+
+    const rows=[...productionRowsForTemplate].sort((a,b)=>facilitySortDesc(a,b)||String(a.routingGroup||'').localeCompare(String(b.routingGroup||''),'he',{numeric:true})||String(a.material||'').localeCompare(String(b.material||''),'he',{numeric:true}))
+    const grouped=new Map()
+    rows.forEach(row=>{const f=String(row.facility||'—'); const arr=grouped.get(f)||[]; arr.push(row); grouped.set(f,arr)})
+    const displayDate=from&&to&&from===to?new Date(`${from}T12:00:00`).toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'}):(from||to||new Date().toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'}))
+    const eventText=savedDailyEventsForSelection.length?savedDailyEventsForSelection.map(event=>`אירוע ${event.type} · מתקן ${event.facility} · חומרה ${event.severity} - ${event.description}`).join(' | '):'לא נשמרו אירועים לתאריך הדוח שנבחר.'
+    const dailyRows=[]
+    dailyRows.push(`<row r="2" ht="28" customHeight="1">${cellXml(1,1,'דוח יומי – מתקנים נבחרים',1)}</row>`)
+    dailyRows.push(`<row r="3" ht="22" customHeight="1">${cellXml(2,1,`מספר מתקנים בדוח: ${grouped.size}`,2)}</row>`)
+    dailyRows.push(`<row r="5" ht="30" customHeight="1">${cellXml(4,1,eventText,3)}</row>`)
+    const headers=['מקט',displayDate,'קו יצור','חומר','מספר אצווה','סטטוס מכונה','תפוקה','סה"כ תפוקה','הערות']
+    dailyRows.push(`<row r="7" ht="26" customHeight="1">${headers.map((h,i)=>cellXml(6,i+1,h,4)).join('')}</row>`)
+    const merges=['B2:J2','B3:J3','B5:J5']
+    let rr=7
+    grouped.forEach((groupRows,facility)=>{
+      const total=groupRows.reduce((sum,row)=>sum+num(row.qty),0), start=rr
+      groupRows.forEach((row,index)=>{
+        const cells=[
+          cellXml(rr,1,row.material||'',5),
+          index===0?cellXml(rr,2,facility,6):'',
+          cellXml(rr,3,row.prodLineTool||row.prodLine||row.routingGroup||'',5),
+          cellXml(rr,4,row.desc||'',5),
+          cellXml(rr,5,row.batch||'',5),
+          '', // סטטוס מכונה — intentionally blank for manual edit
+          cellXml(rr,7,num(row.qty),7),
+          index===0?cellXml(rr,8,total,7):'',
+          ''  // הערות — intentionally blank for manual edit
+        ]
+        dailyRows.push(`<row r="${rr+1}" ht="22" customHeight="1">${cells.join('')}</row>`); rr++
+      })
+      if(groupRows.length>1){merges.push(`C${start+1}:C${rr}`); merges.push(`I${start+1}:I${rr}`)}
     })
-    if (!rows.length) daily.push(['','','אין נתוני תפוקה בטווח שנבחר','','','','','','',''])
-    const dailyWs = XLSX.utils.aoa_to_sheet(daily)
-    dailyWs['!merges'] = merges
-    dailyWs['!cols'] = [{wch:3},{wch:16},{wch:18},{wch:18},{wch:38},{wch:18},{wch:24},{wch:14},{wch:16},{wch:36}]
-    dailyWs['!rows'] = daily.map((_,i)=>({hpt:i===4?32:i===6?24:22}))
-    dailyWs['!freeze'] = { xSplit:0, ySplit:7, topLeftCell:'A8', activePane:'bottomLeft', state:'frozen' }
-    setRtl(dailyWs)
+    if(!rows.length) dailyRows.push(`<row r="8" ht="22" customHeight="1">${cellXml(7,1,'אין נתוני תפוקה בטווח שנבחר',5)}</row>`)
+    const dailySheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="7" topLeftCell="A8" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="1" width="3" customWidth="1"/><col min="2" max="2" width="16" customWidth="1"/><col min="3" max="3" width="18" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="5" width="42" customWidth="1"/><col min="6" max="6" width="18" customWidth="1"/><col min="7" max="7" width="24" customWidth="1"/><col min="8" max="8" width="14" customWidth="1"/><col min="9" max="9" width="16" customWidth="1"/><col min="10" max="10" width="36" customWidth="1"/></cols><sheetData>${dailyRows.join('')}</sheetData><mergeCells count="${merges.length}">${merges.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`
+    xmlSheets.push({name:safeSheetName('דיווח יומי פורמולציות',usedNames),xml:dailySheet})
 
-    // Professional RTL styling for the editable daily formulations report.
-    const thinBorder = {
-      top:{style:'thin',color:{rgb:'9CA3AF'}},
-      bottom:{style:'thin',color:{rgb:'9CA3AF'}},
-      left:{style:'thin',color:{rgb:'9CA3AF'}},
-      right:{style:'thin',color:{rgb:'9CA3AF'}}
-    }
-    const headerStyle = {
-      font:{name:'Segoe UI',sz:11,bold:true,color:{rgb:'FFFFFF'}},
-      fill:{patternType:'solid',fgColor:{rgb:'0B2F4B'}},
-      alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
-      border:thinBorder
-    }
-    const bodyStyle = {
-      font:{name:'Segoe UI',sz:10,color:{rgb:'111827'}},
-      alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
-      border:thinBorder
-    }
-    const textBodyStyle = {
-      ...bodyStyle,
-      alignment:{horizontal:'right',vertical:'center',wrapText:true,readingOrder:2}
-    }
-    const eventStyle = {
-      font:{name:'Segoe UI',sz:11,bold:true,color:{rgb:'1F2937'}},
-      fill:{patternType:'solid',fgColor:{rgb:'FDE7A8'}},
-      alignment:{horizontal:'right',vertical:'center',wrapText:true,readingOrder:2},
-      border:thinBorder
-    }
-    const totalStyle = {
-      ...bodyStyle,
-      font:{name:'Segoe UI',sz:10,bold:true,color:{rgb:'0B2F4B'}},
-      fill:{patternType:'solid',fgColor:{rgb:'EAF3F8'}},
-      numFmt:'#,##0'
-    }
-
-    const dailyRange = XLSX.utils.decode_range(dailyWs['!ref'] || 'A1:J1')
-    for (let r=7; r<=dailyRange.e.r; r++) {
-      for (let c=1; c<=9; c++) {
-        const addr = XLSX.utils.encode_cell({r,c})
-        if (!dailyWs[addr]) dailyWs[addr] = {t:'s',v:''}
-        dailyWs[addr].s = bodyStyle
-        if (c===7 || c===8) dailyWs[addr].z = '#,##0'
-      }
-    }
-    for (let c=1; c<=9; c++) {
-      const addr = XLSX.utils.encode_cell({r:6,c})
-      if (dailyWs[addr]) dailyWs[addr].s = headerStyle
-    }
-    for (let c=2; c<=9; c++) {
-      const addr = XLSX.utils.encode_cell({r:4,c})
-      if (!dailyWs[addr]) dailyWs[addr] = {t:'s',v:''}
-      dailyWs[addr].s = eventStyle
-    }
-    // Emphasize facility and total-output merged blocks like the previous report.
-    grouped.forEach((groupRows, facility) => {
-      const firstDataIndex = rows.findIndex(x => String(x.facility||'—') === facility)
-      if (firstDataIndex < 0) return
-      const excelR = 7 + firstDataIndex
-      const facilityCell = dailyWs[XLSX.utils.encode_cell({r:excelR,c:2})]
-      const totalCell = dailyWs[XLSX.utils.encode_cell({r:excelR,c:8})]
-      if (facilityCell) facilityCell.s = totalStyle
-      if (totalCell) totalCell.s = totalStyle
+    sheets.forEach(sh=>{
+      const cols=sh.columns||[], body=sh.rows||[]
+      const sheetRows=[]
+      sheetRows.push(`<row r="1" ht="24" customHeight="1">${cols.map((c,i)=>cellXml(0,i,c.label,4)).join('')}</row>`)
+      body.forEach((r,ri)=>sheetRows.push(`<row r="${ri+2}" ht="21" customHeight="1">${cols.map((c,ci)=>cellXml(ri+1,ci,r[c.key]??'',typeof r[c.key]==='number'?7:5)).join('')}</row>`))
+      const widths=cols.map((c,i)=>{const vals=[c.label,...body.map(r=>r[c.key])]; const w=Math.min(55,Math.max(10,...vals.map(v=>Math.ceil(String(v??'').length*1.1+2)))); return `<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`}).join('')
+      const ref=cols.length?`A1:${colName(cols.length-1)}${Math.max(1,body.length+1)}`:'A1:A1'
+      const xml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"/></sheetViews><cols>${widths}</cols><sheetData>${sheetRows.join('')}</sheetData>${cols.length?`<autoFilter ref="${ref}"/>`:''}<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`
+      xmlSheets.push({name:safeSheetName(sh.name,usedNames),xml})
     })
 
-    XLSX.utils.book_append_sheet(wb, dailyWs, safeSheetName('דיווח יומי פורמולציות', usedNames))
-
-    sheets.forEach(sh => {
-      const aoa = [sh.columns.map(c=>c.label), ...sh.rows.map(r=>sh.columns.map(c=>r[c.key] ?? ''))]
-      const ws = XLSX.utils.aoa_to_sheet(aoa)
-      ws['!cols'] = sh.columns.map((c,idx) => ({ wch:widthFor([c.label, ...sh.rows.map(r=>r[c.key])]) }))
-      ws['!autofilter'] = sh.columns.length ? { ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:Math.max(0,aoa.length-1),c:sh.columns.length-1}}) } : undefined
-      setRtl(ws)
-      const sheetRange = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1')
-      for (let c=0; c<=sheetRange.e.c; c++) {
-        const addr = XLSX.utils.encode_cell({r:0,c})
-        if (ws[addr]) ws[addr].s = {
-          font:{name:'Segoe UI',sz:11,bold:true,color:{rgb:'FFFFFF'}},
-          fill:{patternType:'solid',fgColor:{rgb:'0B2F4B'}},
-          alignment:{horizontal:'center',vertical:'center',wrapText:true,readingOrder:2},
-          border:{top:{style:'thin',color:{rgb:'9CA3AF'}},bottom:{style:'thin',color:{rgb:'9CA3AF'}},left:{style:'thin',color:{rgb:'9CA3AF'}},right:{style:'thin',color:{rgb:'9CA3AF'}}}
-        }
-      }
-      for (let r=1; r<=sheetRange.e.r; r++) for (let c=0; c<=sheetRange.e.c; c++) {
-        const addr = XLSX.utils.encode_cell({r,c})
-        if (!ws[addr]) ws[addr] = {t:'s',v:''}
-        ws[addr].s = {
-          font:{name:'Segoe UI',sz:10,color:{rgb:'111827'}},
-          alignment:{horizontal:'right',vertical:'center',wrapText:true,readingOrder:2},
-          border:{top:{style:'thin',color:{rgb:'D1D5DB'}},bottom:{style:'thin',color:{rgb:'D1D5DB'}},left:{style:'thin',color:{rgb:'D1D5DB'}},right:{style:'thin',color:{rgb:'D1D5DB'}}}
-        }
-      }
-      XLSX.utils.book_append_sheet(wb, ws, safeSheetName(sh.name, usedNames))
-    })
-
-    const outName = String(filename || 'IML_Facility_Report.xlsx').replace(/\.(xml|xls|xlsx)$/i, '.xlsx')
-    XLSX.writeFile(wb, outName, { bookType:'xlsx', compression:true })
+    const styles=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="5"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="15"/><color rgb="FFFFFFFF"/><name val="Segoe UI"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Segoe UI"/></font><font><b/><sz val="10"/><color rgb="FF0B2F4A"/><name val="Segoe UI"/></font><font><sz val="10"/><color rgb="FF1F2937"/><name val="Segoe UI"/></font></fonts><fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0B2F4A"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDCEAF3"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFDE7A8"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEAF3F8"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFB8C6D1"/></left><right style="thin"><color rgb="FFB8C6D1"/></right><top style="thin"><color rgb="FFB8C6D1"/></top><bottom style="thin"><color rgb="FFB8C6D1"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" readingOrder="2"/></xf><xf numFmtId="0" fontId="3" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" readingOrder="2"/></xf><xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1" readingOrder="2"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1" readingOrder="2"/></xf><xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1" readingOrder="2"/></xf><xf numFmtId="0" fontId="3" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1" readingOrder="2"/></xf><xf numFmtId="3" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1" applyNumberFormat="1"><alignment horizontal="center" vertical="center" readingOrder="2"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`
+    const workbookSheets=xmlSheets.map((sh,i)=>`<sheet name="${esc(sh.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('')
+    const workbook=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>${workbookSheets}</sheets></workbook>`
+    const wbRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${xmlSheets.map((_,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('')}<Relationship Id="rId${xmlSheets.length+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`
+    const types=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${xmlSheets.map((_,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`
+    const rootRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`
+    const entries=[{name:'[Content_Types].xml',text:types},{name:'_rels/.rels',text:rootRels},{name:'xl/workbook.xml',text:workbook},{name:'xl/_rels/workbook.xml.rels',text:wbRels},{name:'xl/styles.xml',text:styles},...xmlSheets.map((sh,i)=>({name:`xl/worksheets/sheet${i+1}.xml`,text:sh.xml}))]
+    const blob=zipStore(entries)
+    const outName=String(filename||'IML_Facility_Report.xlsx').replace(/\.(xml|xls|xlsx)$/i,'.xlsx')
+    const url=URL.createObjectURL(blob), a=document.createElement('a'); a.href=url; a.download=outName; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000)
   }
 
 
