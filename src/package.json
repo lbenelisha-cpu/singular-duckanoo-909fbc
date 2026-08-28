@@ -16,7 +16,7 @@
     "lucide-react": "0.468.0",
     "xlsx": "0.18.5",
     "@supabase/supabase-js": "2.49.1",
-    "xlsx-js-style": "^1.2.0"
+    "xlsx-js-style": "1.2.0"
   },
   "devDependencies": {}
 }
