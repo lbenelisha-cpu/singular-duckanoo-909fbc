@@ -1438,42 +1438,53 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
     let active = true
     const timer = setTimeout(async () => {
-      setStatus('מסנכרן איכות לפי התאריך והמתקנים שנבחרו...')
+      // iPhone keeps only one QUALITY month in memory.
+      // The month follows the selected end-date; if it is empty, use from/current month.
+      const anchorDateText = to || from || iso(new Date())
+      const anchorDate = new Date(`${anchorDateText}T12:00:00`)
+      const monthStart = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1)
+      const monthEnd = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 1)
+      const mobileQualityMonth = `${anchorDate.getFullYear()}-${String(anchorDate.getMonth() + 1).padStart(2, '0')}`
+
+      setStatus(`מסנכרן איכות לחודש ${mobileQualityMonth}...`)
       try {
-        const selectedSet = new Set((selectedFacilities || []).map(value => normalize(value)))
-        const fromMs = from ? new Date(`${from}T00:00:00`).getTime() : -Infinity
-        const toMs = to ? new Date(`${to}T23:59:59.999`).getTime() : Infinity
-
         const dataset = await loadCloudDatasetMatching('quality', row => {
-          const rawDate = row?.date ?? row?.Date ?? row?.['Sampling Date'] ?? row?.['Actual Finish Date'] ?? row?.['תאריך']
+          // Cloud QUALITY rows are compact and normally expose `date`.
+          // Keep aliases for older datasets/backward compatibility.
+          const rawDate =
+            row?.date ??
+            row?.Date ??
+            row?.['Sample Date'] ??
+            row?.['Sampling Date'] ??
+            row?.['Date of Sample'] ??
+            row?.['Date of Sampling'] ??
+            row?.['תאריך דגימה']
+
+          if (!rawDate) return false
           const parsedDate = rawDate instanceof Date ? rawDate : new Date(rawDate)
-          const rowMs = Number.isFinite(parsedDate?.getTime?.()) ? parsedDate.getTime() : NaN
-          if (Number.isFinite(rowMs) && (rowMs < fromMs || rowMs > toMs)) return false
-
-          if (selectedSet.size) {
-            const facilityCandidates = [
-              row?.facility,
-              row?.station,
-              row?.storage,
-              row?.storageLocation,
-              row?.['Storage Location'],
-              row?.['תחנה'],
-              row?.['מתקן'],
-            ].map(value => normalize(value)).filter(Boolean)
-
-            if (!facilityCandidates.some(value => selectedSet.has(value))) return false
-          }
-          return true
+          const rowMs = parsedDate?.getTime?.()
+          if (!Number.isFinite(rowMs)) return false
+          return rowMs >= monthStart.getTime() && rowMs < monthEnd.getTime()
         })
 
         if (!active) return
         const rows = dataset?.rows || []
-        setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
-        setDataMeta(current => ({ ...current, quality:normalizeDatasetMeta('quality', dataset?.meta || null) }))
-        setStatus(`איכות מסונכרנת — ${rows.length.toLocaleString()} רשומות לטווח שנבחר`)
+        setQuality(dedupeRows(
+          rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row),
+          qualityRowKey
+        ))
+        setDataMeta(current => ({
+          ...current,
+          quality:{
+            ...normalizeDatasetMeta('quality', dataset?.meta || null),
+            mobileMonth:mobileQualityMonth,
+            visibleRows:rows.length,
+          }
+        }))
+        setStatus(`איכות ${mobileQualityMonth} מסונכרנת — ${rows.length.toLocaleString()} רשומות`)
       } catch (error) {
-        console.warn('Mobile filtered quality sync failed', error)
-        if (active) setStatus('נתוני הכמות מחוברים; סנכרון האיכות נכשל')
+        console.warn('Mobile monthly quality sync failed', error)
+        if (active) setStatus('נתוני הכמות מחוברים; סנכרון האיכות החודשי נכשל')
       }
     }, 450)
 
@@ -1481,7 +1492,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       active = false
       clearTimeout(timer)
     }
-  }, [from, to, selectedFacilities])
+  }, [from, to])
 
   useEffect(() => {
     if (IS_MOBILE_DEVICE) return
@@ -3339,7 +3350,7 @@ material: normalize(getField(r, [
       <article className={`mobile-kpi-card quality ${openDeviations.length ? 'warning' : 'good'}`}>
         <div><FlaskConical size={18}/><span>איכות</span></div>
         <strong>{quality.length.toLocaleString()}</strong>
-        <small>{openDeviations.length ? `${openDeviations.length} חריגות פתוחות` : 'אין חריגות פתוחות בטווח'}</small>
+        <small>{dataMeta?.quality?.mobileMonth ? `חודש ${dataMeta.quality.mobileMonth}` : (openDeviations.length ? `${openDeviations.length} חריגות פתוחות` : 'מסנכרן חודש נבחר')}</small>
       </article>
     </section>
 
@@ -3354,7 +3365,7 @@ material: normalize(getField(r, [
           <b>{normalize(row.status) || 'חריגה פתוחה'}</b>
         </button>)}
       </div> : <div className="mobile-ok-state"><CheckCircle2 size={18}/> אין חריגות איכות פתוחות בטווח ובמתקנים שנבחרו.</div>}
-      <p className="mobile-quality-note">נתוני האיכות מסונכרנים לפי התאריך והמתקנים שנבחרו. לחיצה על מנה מציגה את תוצאות האיכות המפורטות שלה.</p>
+      <p className="mobile-quality-note">באייפון נשמר בזיכרון חודש אחד של נתוני איכות לפי התאריך הנבחר. לחיצה על מנה מציגה את תוצאות המעבדה שלה.</p>
     </section>
 
     <section className="mobile-production-card">
