@@ -1197,7 +1197,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   useEffect(() => {
     let active = true
     const startedAt = performance.now()
-    const kinds = IS_MOBILE_DEVICE ? ['production', 'targets', 'deviations'] : ['production', 'quality', 'deviations', 'targets']
+    const kinds = IS_MOBILE_DEVICE ? ['production', 'quality', 'deviations'] : ['production', 'quality', 'deviations', 'targets']
 
     const applyDataset = (kind, dataset) => {
       const rows = dataset?.rows || []
@@ -1280,12 +1280,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         }
 
         if (IS_MOBILE_DEVICE) {
-          for (const kind of ['targets', 'deviations']) {
-            if (!active) return
-            if (!changed(kind)) continue
-            setStatus(kind === 'targets' ? 'טוען יעדים לחישוב סיכון כמותי...' : 'טוען נתוני איכות מעודכנים...')
-            loadedRows += applyDataset(kind, await loadCloudDatasetOnce(kind))
-            setPerformance(current => ({ ...current, queries:current.queries + 1, phase:kind === 'targets' ? 'חושב סיכון כמותי' : 'איכות מעודכנת' }))
+          if (changed('deviations')) {
+            setStatus('טוען חריגות איכות מעודכנות...')
+            loadedRows += applyDataset('deviations', await loadCloudDatasetOnce('deviations'))
+            setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'חריגות איכות מעודכנות' }))
             await new Promise(resolve => setTimeout(resolve, 0))
           }
         } else {
@@ -1333,7 +1331,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         if (!active) return
         const elapsed = Math.round(performance.now() - startedAt)
         const lastSync = Object.values(remoteMeta).map(x => x?.loaded_at || x?.updated_at).filter(Boolean).sort().at(-1) || new Date().toISOString()
-        setCloudState({ mode:'cloud', lastSync, message:IS_MOBILE_DEVICE ? 'מחובר לענן — כמות, איכות וסיכון כמותי מעודכנים' : 'מחובר לענן — טעינה חכמה של 7 ימים כברירת מחדל', latencyMs:health?.latencyMs ?? null, live:true })
+        setCloudState({ mode:'cloud', lastSync, message:IS_MOBILE_DEVICE ? 'מחובר לענן — כמות ואיכות מעודכנות' : 'מחובר לענן — טעינה חכמה של 7 ימים כברירת מחדל', latencyMs:health?.latencyMs ?? null, live:true })
         setStatus(cached && loadedRows === 0 ? 'הנתונים במטמון מעודכנים — לא נדרשה הורדה מחדש' : 'הנתונים המעודכנים נטענו בהצלחה')
         setPerformance(current => ({ ...current, loadMs:elapsed, rows:current.rows + loadedRows, phase:'הושלם' }))
       } catch (cloudError) {
@@ -1419,6 +1417,56 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       })
     return () => { clearTimeout(refreshTimer); supabase.removeChannel(channel) }
   }, [])
+
+  useEffect(() => {
+    if (!IS_MOBILE_DEVICE || !supabase) return
+
+    let active = true
+    const timer = setTimeout(async () => {
+      setStatus('מסנכרן איכות לפי התאריך והמתקנים שנבחרו...')
+      try {
+        const selectedSet = new Set((selectedFacilities || []).map(value => normalize(value)))
+        const fromMs = from ? new Date(`${from}T00:00:00`).getTime() : -Infinity
+        const toMs = to ? new Date(`${to}T23:59:59.999`).getTime() : Infinity
+
+        const dataset = await loadCloudDatasetMatching('quality', row => {
+          const rawDate = row?.date ?? row?.Date ?? row?.['Sampling Date'] ?? row?.['Actual Finish Date'] ?? row?.['תאריך']
+          const parsedDate = rawDate instanceof Date ? rawDate : new Date(rawDate)
+          const rowMs = Number.isFinite(parsedDate?.getTime?.()) ? parsedDate.getTime() : NaN
+          if (Number.isFinite(rowMs) && (rowMs < fromMs || rowMs > toMs)) return false
+
+          if (selectedSet.size) {
+            const facilityCandidates = [
+              row?.facility,
+              row?.station,
+              row?.storage,
+              row?.storageLocation,
+              row?.['Storage Location'],
+              row?.['תחנה'],
+              row?.['מתקן'],
+            ].map(value => normalize(value)).filter(Boolean)
+
+            if (!facilityCandidates.some(value => selectedSet.has(value))) return false
+          }
+          return true
+        })
+
+        if (!active) return
+        const rows = dataset?.rows || []
+        setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
+        setDataMeta(current => ({ ...current, quality:normalizeDatasetMeta('quality', dataset?.meta || null) }))
+        setStatus(`איכות מסונכרנת — ${rows.length.toLocaleString()} רשומות לטווח שנבחר`)
+      } catch (error) {
+        console.warn('Mobile filtered quality sync failed', error)
+        if (active) setStatus('נתוני הכמות מחוברים; סנכרון האיכות נכשל')
+      }
+    }, 450)
+
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [from, to, selectedFacilities])
 
   useEffect(() => {
     if (IS_MOBILE_DEVICE) return
@@ -1988,10 +2036,12 @@ material: normalize(getField(r, [
     const normalizedMaterial = normalize(material)
 
     if (IS_MOBILE_DEVICE) {
-      setMobileQualityLoading(true)
-      setStatus(`טוען תוצאות איכות למנה ${normalizedBatch}...`)
-      try {
-        const dataset = await loadCloudDatasetMatching('quality', row => {
+      const existingBatchQuality = quality.filter(row => normalize(row?.batch || row?.Batch || row?.['Batch']) === normalizedBatch)
+      if (!existingBatchQuality.length) {
+        setMobileQualityLoading(true)
+        setStatus(`טוען תוצאות איכות למנה ${normalizedBatch}...`)
+        try {
+          const dataset = await loadCloudDatasetMatching('quality', row => {
           const rowBatch = normalize(row?.batch || row?.Batch || row?.['Batch'])
           const rowMaterial = normalize(row?.material || row?.Material || row?.['Material'])
           if (rowBatch !== normalizedBatch) return false
@@ -2000,12 +2050,13 @@ material: normalize(getField(r, [
         const rows = dataset?.rows || []
         setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
         setDataMeta(current => ({ ...current, quality:normalizeDatasetMeta('quality', dataset?.meta || null) }))
-        setStatus(rows.length ? `נטענו ${rows.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}` : `לא נמצאו תוצאות איכות למנה ${normalizedBatch}`)
-      } catch (error) {
-        console.warn('Mobile batch quality load failed', error)
-        setStatus(`טעינת האיכות למנה ${normalizedBatch} נכשלה`)
-      } finally {
-        setMobileQualityLoading(false)
+          setStatus(rows.length ? `נטענו ${rows.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}` : `לא נמצאו תוצאות איכות למנה ${normalizedBatch}`)
+        } catch (error) {
+          console.warn('Mobile batch quality load failed', error)
+          setStatus(`טעינת האיכות למנה ${normalizedBatch} נכשלה`)
+        } finally {
+          setMobileQualityLoading(false)
+        }
       }
     }
 
@@ -3212,15 +3263,11 @@ material: normalize(getField(r, [
   </div> : null
 
   const mobileQuantityTotal = IS_MOBILE_DEVICE ? filtered.reduce((sum, row) => sum + Number(row.qty || 0), 0) : 0
-  const mobileRiskRows = IS_MOBILE_DEVICE ? scopedPlanningRows.filter(row => ['risk', 'warning'].includes(row.state)) : []
-  const mobileHardRiskRows = IS_MOBILE_DEVICE ? mobileRiskRows.filter(row => row.state === 'risk') : []
-  const mobileRequiredDaily = IS_MOBILE_DEVICE ? mobileRiskRows.reduce((sum, row) => sum + Number(row.requiredDaily || 0), 0) : 0
-  const mobileForecastGap = IS_MOBILE_DEVICE ? scopedPlanningRows.reduce((sum, row) => sum + Math.max(0, Number(row.target || 0) - Number(row.forecast || 0)), 0) : 0
-  const mobileQualityUpdatedAt = dataMeta?.deviations?.loadedAt || dataMeta?.deviations?.updatedAt || cloudState.lastSync || null
+  const mobileQualityUpdatedAt = dataMeta?.quality?.loadedAt || dataMeta?.quality?.updatedAt || dataMeta?.deviations?.loadedAt || cloudState.lastSync || null
 
   if (IS_MOBILE_DEVICE) return <div className="mobile-lite-app" dir="rtl">
     <header className="mobile-lite-header">
-      <div><img src="/icons/adama-mark-64.png" alt="IML"/><span><strong>IML CONTROL</strong><small>כמות · איכות · סיכון כמותי</small></span></div>
+      <div><img src="/icons/adama-mark-64.png" alt="IML"/><span><strong>IML CONTROL</strong><small>כמות · איכות</small></span></div>
       <span className={`mobile-cloud-badge ${cloudState.mode}`}>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר...' : 'לא מחובר'}</span>
     </header>
 
@@ -3234,7 +3281,7 @@ material: normalize(getField(r, [
       <div className="mobile-quick-row"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(7)}>7 ימים</button></div>
     </section>
 
-    <section className="mobile-kpi-grid">
+    <section className="mobile-kpi-grid mobile-kpi-grid-two">
       <article className="mobile-kpi-card quantity">
         <div><Database size={18}/><span>כמות</span></div>
         <strong>{fmt(mobileQuantityTotal)}</strong>
@@ -3242,36 +3289,9 @@ material: normalize(getField(r, [
       </article>
       <article className={`mobile-kpi-card quality ${openDeviations.length ? 'warning' : 'good'}`}>
         <div><FlaskConical size={18}/><span>איכות</span></div>
-        <strong>{openDeviations.length}</strong>
-        <small>{openDeviations.length ? 'מנות/חריגות פתוחות' : 'אין חריגות פתוחות בטווח'}</small>
+        <strong>{quality.length.toLocaleString()}</strong>
+        <small>{openDeviations.length ? `${openDeviations.length} חריגות פתוחות` : 'אין חריגות פתוחות בטווח'}</small>
       </article>
-      <article className={`mobile-kpi-card risk ${mobileHardRiskRows.length ? 'danger' : mobileRiskRows.length ? 'warning' : 'good'}`}>
-        <div><AlertTriangle size={18}/><span>סיכון כמותי</span></div>
-        <strong>{mobileHardRiskRows.length || mobileRiskRows.length}</strong>
-        <small>{mobileRiskRows.length ? `פער תחזית ${fmt(mobileForecastGap)}` : 'אין סיכון כמותי במתקנים שנבחרו'}</small>
-      </article>
-    </section>
-
-    <section className="mobile-risk-card">
-      <div className="mobile-section-head">
-        <div><Target size={18}/><strong>סיכון כמותי — מתקנים נבחרים</strong></div>
-        <span>{mobileRiskRows.length ? `${mobileRiskRows.length} מוקדים` : 'תקין'}</span>
-      </div>
-      {mobileRiskRows.length ? <div className="mobile-risk-list">
-        {mobileRiskRows.map(row => <article key={`${row.resource || row.facility}-${row.label || ''}`} className={`mobile-risk-row ${row.state}`}>
-          <div className="mobile-risk-title">
-            <strong>{planningName(row)}</strong>
-            <span>{row.state === 'risk' ? 'בסיכון' : 'דורש תשומת לב'}</span>
-          </div>
-          <div className="mobile-risk-metrics">
-            <div><small>יעד</small><b>{fmt(row.target)}</b></div>
-            <div><small>בפועל</small><b>{fmt(row.actual)}</b></div>
-            <div><small>תחזית</small><b>{fmt(row.forecast)}</b></div>
-            <div><small>נדרש ליום</small><b>{fmt(row.requiredDaily)}</b></div>
-          </div>
-        </article>)}
-      </div> : <div className="mobile-ok-state"><CheckCircle2 size={18}/> אין כרגע סיכון כמותי במתקנים שנבחרו.</div>}
-      {!!mobileRequiredDaily && <div className="mobile-risk-total"><span>סה״כ קצב יומי נדרש במוקדים</span><strong>{fmt(mobileRequiredDaily)}</strong></div>}
     </section>
 
     <section className="mobile-quality-summary">
@@ -3285,7 +3305,7 @@ material: normalize(getField(r, [
           <b>{normalize(row.status) || 'חריגה פתוחה'}</b>
         </button>)}
       </div> : <div className="mobile-ok-state"><CheckCircle2 size={18}/> אין חריגות איכות פתוחות בטווח ובמתקנים שנבחרו.</div>}
-      <p className="mobile-quality-note">לחיצה על מנה טוענת מהענן את תוצאות האיכות המפורטות של אותה מנה בלבד.</p>
+      <p className="mobile-quality-note">נתוני האיכות מסונכרנים לפי התאריך והמתקנים שנבחרו. לחיצה על מנה מציגה את תוצאות האיכות המפורטות שלה.</p>
     </section>
 
     <section className="mobile-production-card">

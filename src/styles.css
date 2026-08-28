@@ -946,3 +946,11 @@ button,input,select,textarea{font:inherit}
   .mobile-risk-card,.mobile-quality-summary{margin:9px}
   .mobile-risk-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+
+
+/* Mobile V3: quantity + quality only */
+.mobile-kpi-grid-two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.mobile-risk-card{display:none!important}
+@media(max-width:420px){
+  .mobile-kpi-grid-two{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
