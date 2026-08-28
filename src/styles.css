@@ -954,3 +954,65 @@ button,input,select,textarea{font:inherit}
 @media(max-width:420px){
   .mobile-kpi-grid-two{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+
+
+/* ===== Mobile V10: station quantity summary + filtered Excel export ===== */
+.mobile-excel-button{
+  width:100%;
+  margin-top:10px;
+  border:0;
+  border-radius:12px;
+  padding:11px 13px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  background:#0d7d6e;
+  color:#fff;
+  font-weight:900;
+  box-shadow:0 6px 16px rgba(13,125,110,.16);
+}
+.mobile-excel-button:disabled{
+  opacity:.45;
+  box-shadow:none;
+}
+.mobile-station-summary{
+  margin:12px;
+  background:#fff;
+  border:1px solid rgba(16,73,99,.11);
+  border-radius:18px;
+  box-shadow:0 7px 24px rgba(15,55,76,.07);
+  overflow:hidden;
+}
+.mobile-station-summary-list{padding:7px 12px}
+.mobile-station-summary-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 2px;
+  border-bottom:1px solid #e8eef1;
+}
+.mobile-station-summary-row:last-child{border-bottom:0}
+.mobile-station-summary-row>div{display:flex;flex-direction:column;gap:3px}
+.mobile-station-summary-row strong{font-size:13px;color:#173f58}
+.mobile-station-summary-row small{font-size:10px;color:#71838f}
+.mobile-station-summary-row>b{
+  font-size:16px;
+  color:#0d7d6e;
+  white-space:nowrap;
+}
+.mobile-station-summary-total{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:11px 14px;
+  border-top:1px solid #dfe9ed;
+  background:#f3f8fa;
+}
+.mobile-station-summary-total span{font-size:11px;font-weight:800;color:#5f7583}
+.mobile-station-summary-total strong{font-size:18px;color:#123f58}
+@media(max-width:420px){
+  .mobile-station-summary{margin:9px}
+}

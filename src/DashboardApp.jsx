@@ -3325,6 +3325,69 @@ material: normalize(getField(r, [
   const mobileQuantityTotal = IS_MOBILE_DEVICE ? filtered.reduce((sum, row) => sum + Number(row.qty || 0), 0) : 0
   const mobileQualityUpdatedAt = dataMeta?.quality?.loadedAt || dataMeta?.quality?.updatedAt || dataMeta?.deviations?.loadedAt || cloudState.lastSync || null
 
+  const mobileFacilitySummary = IS_MOBILE_DEVICE
+    ? [...filtered.reduce((map, row) => {
+        const facility = String(row.facility || '—')
+        const current = map.get(facility) || { facility, records:0, quantity:0 }
+        current.records += 1
+        current.quantity += Number(row.qty || 0)
+        map.set(facility, current)
+        return map
+      }, new Map()).values()].sort((a,b) => String(a.facility).localeCompare(String(b.facility),'he',{numeric:true}))
+    : []
+
+  const exportMobileProductionExcel = () => {
+    const productionRows = [...filtered].sort((a,b) => facilitySortDesc(a,b) || String(a.date || '').localeCompare(String(b.date || '')))
+    const summaryRows = mobileFacilitySummary.map(item => ({
+      __facility:item.facility,
+      Facility:item.facility,
+      Records:item.records,
+      TotalQuantity:item.quantity,
+      From:from || '',
+      To:to || '',
+    }))
+
+    exportStyledExcel([
+      {
+        name:'סיכום תחנות',
+        columns:[
+          {key:'Facility',label:'תחנה / מתקן'},
+          {key:'Records',label:'מספר רשומות'},
+          {key:'TotalQuantity',label:'סה"כ כמות'},
+          {key:'From',label:'מתאריך'},
+          {key:'To',label:'עד תאריך'},
+        ],
+        rows:summaryRows,
+      },
+      {
+        name:'ייצור ואריזה',
+        columns:[
+          {key:'Date',label:'תאריך'},
+          {key:'Facility',label:'תחנה / מתקן'},
+          {key:'ProdLine',label:'קו ייצור'},
+          {key:'Order',label:'הזמנה'},
+          {key:'Batch',label:'מספר מנה'},
+          {key:'Material',label:'מק"ט'},
+          {key:'Description',label:'תיאור חומר'},
+          {key:'Quantity',label:'כמות'},
+        ],
+        rows:productionRows.map(row => ({
+          __facility:String(row.facility || '—'),
+          Date:iso(row.date),
+          Facility:row.facility || '',
+          ProdLine:row.prodLineTool || row.prodLine || row.routingGroup || '',
+          Order:row.order || '',
+          Batch:row.batch || '',
+          Material:row.material || '',
+          Description:row.desc || '',
+          Quantity:Number(row.qty || 0),
+        })),
+      },
+    ], `IML_Mobile_Production_${from && to ? (from === to ? from : `${from}_to_${to}`) : (to || from || iso(new Date()))}.xlsx`, productionRows)
+
+    setStatus(`יוצא Excel עבור ${productionRows.length.toLocaleString()} רשומות ייצור/אריזה`)
+  }
+
   if (IS_MOBILE_DEVICE) return <div className="mobile-lite-app" dir="rtl">
     <header className="mobile-lite-header">
       <div><img src="/icons/adama-mark-64.png" alt="IML"/><span><strong>IML CONTROL</strong><small>כמות · איכות</small></span></div>
@@ -3339,6 +3402,11 @@ material: normalize(getField(r, [
       <div className="mobile-facility-title"><Factory size={17}/><strong>בחירת מתקנים</strong><button type="button" onClick={() => setSelectedFacilities([])}>נקה</button></div>
       <div className="mobile-facility-chips">{facilities.map(id => <button type="button" key={id} className={selectedFacilities.includes(id) ? 'active' : ''} onClick={() => toggleFacility(id)}>{id}</button>)}</div>
       <div className="mobile-quick-row"><button onClick={() => setQuickRange(1)}>יום</button><button onClick={() => setQuickRange(2)}>יומיים</button><button onClick={() => setQuickRange(7)}>7 ימים</button></div>
+      <button type="button" className="mobile-excel-button" onClick={exportMobileProductionExcel} disabled={!filtered.length}>
+        <FileSpreadsheet size={18}/>
+        <span>ייצוא Excel לפי הבחירה</span>
+        <Download size={17}/>
+      </button>
     </section>
 
     <section className="mobile-kpi-grid mobile-kpi-grid-two">
@@ -3352,6 +3420,27 @@ material: normalize(getField(r, [
         <strong>{quality.length.toLocaleString()}</strong>
         <small>{dataMeta?.quality?.mobileMonth ? `חודש ${dataMeta.quality.mobileMonth}` : (openDeviations.length ? `${openDeviations.length} חריגות פתוחות` : 'מסנכרן חודש נבחר')}</small>
       </article>
+    </section>
+
+    <section className="mobile-station-summary">
+      <div className="mobile-section-head">
+        <div><Factory size={18}/><strong>סיכום כמות לפי תחנה</strong></div>
+        <span>{mobileFacilitySummary.length} תחנות</span>
+      </div>
+      <div className="mobile-station-summary-list">
+        {mobileFacilitySummary.map(item => <article key={item.facility} className="mobile-station-summary-row">
+          <div>
+            <strong>{item.facility}</strong>
+            <small>{item.records.toLocaleString()} רשומות</small>
+          </div>
+          <b>{fmt(item.quantity)}</b>
+        </article>)}
+        {!mobileFacilitySummary.length && <div className="mobile-empty">לא נמצאו נתוני כמות לבחירה הנוכחית.</div>}
+      </div>
+      <div className="mobile-station-summary-total">
+        <span>סה״כ לבחירה</span>
+        <strong>{fmt(mobileQuantityTotal)}</strong>
+      </div>
     </section>
 
     <section className="mobile-quality-summary">
