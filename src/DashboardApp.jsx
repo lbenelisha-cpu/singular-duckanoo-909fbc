@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import * as XLSX from 'xlsx-js-style'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
@@ -11,6 +10,10 @@ import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
 import './styles.css'
+
+// xlsx-js-style is loaded as a browser script in index.html.
+// This keeps Excel styling support without adding a Netlify/npm dependency.
+const XLSX = window.XLSX
 
 const LEGACY_DAILY_TARGETS = {
   '1519': 80000, '1521': 60000, '1523': 40000, '1524': 6000,
