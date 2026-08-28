@@ -1,16 +1,12 @@
-IML CONTROL – תיקון עיצוב Excel
+IML CONTROL - Excel style root fix
 
-להחליף בשורש הפרויקט:
-1. src/DashboardApp.jsx
-2. package.json
+IMPORTANT:
+1. Replace package.json in the PROJECT ROOT (same folder as netlify.toml), NOT src/package.json.
+2. Replace src/DashboardApp.jsx.
+3. Do NOT replace netlify.toml.
 
-התיקון מחזיר מנוע XLSX עם תמיכה אמיתית בעיצוב תאים:
-- גבולות לכל תאי הטבלה
-- צבע רקע כהה לכותרות
-- כתב לבן ומודגש בכותרות
-- עיצוב שורת אירועים
-- הדגשת מתקן וסה"כ תפוקה
-- RTL נשמר
+Verification in Netlify log:
+Before vite build you MUST see:
+IML_STYLE_PATCH_ACTIVE
 
-חשוב: יש להעלות את שני הקבצים יחד. package.json כולל xlsx-js-style 1.2.0.
-Netlify יתקין את החבילה בזמן ה-Deploy לפני npm run build.
+If that line does not appear, the root package.json was not replaced.
