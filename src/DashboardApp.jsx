@@ -2707,6 +2707,17 @@ material: normalize(getField(r, [
     // adding any npm/CDN dependency (important for stable Netlify builds).
     const esc = value => String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
     const colName = n => { let s=''; for (let x=n+1; x>0; x=Math.floor((x-1)/26)) s=String.fromCharCode(65+((x-1)%26))+s; return s }
+    const excelTextLength = value => Math.max(...String(value ?? '').split(/\r?\n/).map(line => [...line].length), 0)
+    const autoWidth = (values, { min=9, max=55, pad=3 } = {}) => Math.min(max, Math.max(min, ...values.map(v => excelTextLength(v) + pad)))
+    const autoRowHeight = (values, widths, { min=20, max=72 } = {}) => {
+      let lines = 1
+      values.forEach((value,index) => {
+        const width = Math.max(6, widths[index] || 12)
+        const wrapped = String(value ?? '').split(/\r?\n/).reduce((sum,line) => sum + Math.max(1, Math.ceil([...line].length / Math.max(5, width - 2))), 0)
+        lines = Math.max(lines, wrapped)
+      })
+      return Math.min(max, Math.max(min, 18 * lines))
+    }
     const cellXml = (r,c,value,style=5) => {
       if (value === null || value === undefined || value === '') return ''
       const ref = `${colName(c)}${r+1}`
@@ -2748,12 +2759,18 @@ material: normalize(getField(r, [
     rows.forEach(row=>{const f=String(row.facility||'—'); const arr=grouped.get(f)||[]; arr.push(row); grouped.set(f,arr)})
     const displayDate=from&&to&&from===to?new Date(`${from}T12:00:00`).toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'}):(from||to||new Date().toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'}))
     const eventText=savedDailyEventsForSelection.length?savedDailyEventsForSelection.map(event=>`אירוע ${event.type} · מתקן ${event.facility} · חומרה ${event.severity} - ${event.description}`).join(' | '):'לא נשמרו אירועים לתאריך הדוח שנבחר.'
+    const dailyHeaders=['מקט',displayDate,'קו יצור','חומר','מספר אצווה','סטטוס מכונה','תפוקה','סה"כ תפוקה','הערות']
+    const dailyColumnValues = dailyHeaders.map((header,index) => [header, ...rows.map(row => {
+      const facility=String(row.facility||'—')
+      const total=(grouped.get(facility)||[]).reduce((sum,item)=>sum+num(item.qty),0)
+      return [row.material||'',facility,row.prodLineTool||row.prodLine||row.routingGroup||'',row.desc||'',row.batch||'','',num(row.qty),total,''][index]
+    })])
+    const dailyWidths = dailyColumnValues.map((values,index) => autoWidth(values, index===3 ? {min:18,max:48,pad:3} : index===8 ? {min:12,max:34,pad:3} : {min:10,max:24,pad:3}))
     const dailyRows=[]
     dailyRows.push(`<row r="2" ht="28" customHeight="1">${cellXml(1,1,'דוח יומי – מתקנים נבחרים',1)}</row>`)
     dailyRows.push(`<row r="3" ht="22" customHeight="1">${cellXml(2,1,`מספר מתקנים בדוח: ${grouped.size}`,2)}</row>`)
     dailyRows.push(`<row r="5" ht="30" customHeight="1">${cellXml(4,1,eventText,3)}</row>`)
-    const headers=['מקט',displayDate,'קו יצור','חומר','מספר אצווה','סטטוס מכונה','תפוקה','סה"כ תפוקה','הערות']
-    dailyRows.push(`<row r="7" ht="26" customHeight="1">${headers.map((h,i)=>cellXml(6,i+1,h,4)).join('')}</row>`)
+    dailyRows.push(`<row r="7" ht="${autoRowHeight(dailyHeaders,dailyWidths,{min:24,max:42})}" customHeight="1">${dailyHeaders.map((h,i)=>cellXml(6,i+1,h,4)).join('')}</row>`)
     const merges=['B2:J2','B3:J3','B5:J5']
     let rr=7
     grouped.forEach((groupRows,facility)=>{
@@ -2770,20 +2787,23 @@ material: normalize(getField(r, [
           index===0?cellXml(rr,8,total,7):'',
           ''  // הערות — intentionally blank for manual edit
         ]
-        dailyRows.push(`<row r="${rr+1}" ht="22" customHeight="1">${cells.join('')}</row>`); rr++
+        const rowValues=[row.material||'',facility,row.prodLineTool||row.prodLine||row.routingGroup||'',row.desc||'',row.batch||'','',num(row.qty),total,'']
+        const rowHeight=autoRowHeight(rowValues,dailyWidths,{min:20,max:72})
+        dailyRows.push(`<row r="${rr+1}" ht="${rowHeight}" customHeight="1">${cells.join('')}</row>`); rr++
       })
       if(groupRows.length>1){merges.push(`C${start+1}:C${rr}`); merges.push(`I${start+1}:I${rr}`)}
     })
     if(!rows.length) dailyRows.push(`<row r="8" ht="22" customHeight="1">${cellXml(7,1,'אין נתוני תפוקה בטווח שנבחר',5)}</row>`)
-    const dailySheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="7" topLeftCell="A8" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="1" width="3" customWidth="1"/><col min="2" max="2" width="16" customWidth="1"/><col min="3" max="3" width="18" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="5" width="42" customWidth="1"/><col min="6" max="6" width="18" customWidth="1"/><col min="7" max="7" width="24" customWidth="1"/><col min="8" max="8" width="14" customWidth="1"/><col min="9" max="9" width="16" customWidth="1"/><col min="10" max="10" width="36" customWidth="1"/></cols><sheetData>${dailyRows.join('')}</sheetData><mergeCells count="${merges.length}">${merges.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`
+    const dailySheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="7" topLeftCell="A8" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${dailyWidths.map((width,index)=>`<col min="${index+2}" max="${index+2}" width="${width}" customWidth="1" bestFit="1"/>`).join('')}</cols><sheetData>${dailyRows.join('')}</sheetData><mergeCells count="${merges.length}">${merges.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`
     xmlSheets.push({name:safeSheetName('דיווח יומי פורמולציות',usedNames),xml:dailySheet})
 
     sheets.forEach(sh=>{
       const cols=sh.columns||[], body=sh.rows||[]
       const sheetRows=[]
       sheetRows.push(`<row r="1" ht="24" customHeight="1">${cols.map((c,i)=>cellXml(0,i,c.label,4)).join('')}</row>`)
-      body.forEach((r,ri)=>sheetRows.push(`<row r="${ri+2}" ht="21" customHeight="1">${cols.map((c,ci)=>cellXml(ri+1,ci,r[c.key]??'',typeof r[c.key]==='number'?7:5)).join('')}</row>`))
-      const widths=cols.map((c,i)=>{const vals=[c.label,...body.map(r=>r[c.key])]; const w=Math.min(55,Math.max(10,...vals.map(v=>Math.ceil(String(v??'').length*1.1+2)))); return `<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`}).join('')
+      const genericWidths=cols.map(c=>autoWidth([c.label,...body.map(r=>r[c.key])],{min:10,max:55,pad:3}))
+      body.forEach((r,ri)=>{ const vals=cols.map(c=>r[c.key]??''); const h=autoRowHeight(vals,genericWidths,{min:20,max:72}); sheetRows.push(`<row r="${ri+2}" ht="${h}" customHeight="1">${cols.map((c,ci)=>cellXml(ri+1,ci,r[c.key]??'',typeof r[c.key]==='number'?7:5)).join('')}</row>`) })
+      const widths=genericWidths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1" bestFit="1"/>`).join('')
       const ref=cols.length?`A1:${colName(cols.length-1)}${Math.max(1,body.length+1)}`:'A1:A1'
       const xml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"/></sheetViews><cols>${widths}</cols><sheetData>${sheetRows.join('')}</sheetData>${cols.length?`<autoFilter ref="${ref}"/>`:''}<pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`
       xmlSheets.push({name:safeSheetName(sh.name,usedNames),xml})
@@ -2928,7 +2948,7 @@ material: normalize(getField(r, [
       { name:'פירוט 23-28', columns:[{key:'Facility',label:'מתקן'},{key:'Tool',label:'כלי / אזור'},{key:'ProdLine',label:'PROD LINE'},{key:'Records',label:'מספר רשומות'},{key:'TotalQuantity',label:'סה״כ כמות'}], rows:facilityToolRows },
       { name:'Planning', columns:[{key:'Month',label:'Month'},{key:'Facility',label:'Facility'},{key:'Station',label:'Station'},{key:'MonthlyTarget',label:'Monthly Target'},{key:'Actual',label:'Actual'},{key:'Remaining',label:'Remaining'},{key:'Forecast',label:'Forecast'},{key:'Status',label:'Status'}], rows:planningRows.map(r=>({__facility:String(r.facility||'—'),Month:planningMonth,Facility:r.facility,Station:r.station,MonthlyTarget:r.target,Actual:r.actual,Remaining:r.remaining,Forecast:r.forecast,Status:r.label})) },
       { name:'Quality', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'InspectionLot',label:'Inspection Lot'},{key:'Order',label:'Order'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'}], rows:qualityBad.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,InspectionLot:r.inspectionLot,Order:r.order,Batch:r.batch,Material:r.material,Status:r.status})) },
-      { name:'Deviations', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'},{key:'Remarks',label:'Remarks'}], rows:openDeviations.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,Batch:r.batch,Material:r.material,Status:r.status,Remarks:r.remarks})) }
+      { name:'חריגות איכות', columns:[{key:'Date',label:'Date'},{key:'Facility',label:'Facility'},{key:'Batch',label:'Batch'},{key:'Material',label:'Material'},{key:'Status',label:'Status'},{key:'Remarks',label:'Remarks'}], rows:openDeviations.map(r=>({__facility:String(r.facility||'—'),Date:iso(r.date),Facility:r.facility,Batch:r.batch,Material:r.material,Status:r.status,Remarks:r.remarks})) }
     ], `IML_Facility_Report_${from && to ? (from === to ? from : `${from}_to_${to}`) : (from || to || new Date().toISOString().slice(0,10))}.xlsx`, productionRows)
   }
 
@@ -3614,7 +3634,7 @@ function BatchControlCard({ data, onClose }) {
     const wb = XLSX.utils.book_new()
     appendAutoFitJsonSheet(wb, productionRows.map(r=>({Date:iso(r.date),Facility:r.facility,RoutingGroup:r.routingGroup,Order:r.order,Batch:r.batch,Material:r.material,Description:r.desc,Quantity:r.qty})), 'Production')
     appendAutoFitJsonSheet(wb, allQuality.map(r=>({Date:iso(r.date),InspectionLot:r.inspectionLot,Material:r.material||materials.join(', '),Characteristic:r.characteristic,Result:r.value||r.qualitative,Lower:r.lower,Upper:r.upper,Unit:r.unit,Status:r.rejected?'חריג':'תקין',Remarks:r.remarks})), 'Quality')
-    appendAutoFitJsonSheet(wb, deviationRows.map(r=>({Date:iso(r.date),Facility:r.facility,Material:r.material||materials.join(', '),Status:r.status,UDCode:r.udCode,Remarks:r.remarks})), 'Deviations')
+    appendAutoFitJsonSheet(wb, deviationRows.map(r=>({Date:iso(r.date),Facility:r.facility,Material:r.material||materials.join(', '),Status:r.status,UDCode:r.udCode,Remarks:r.remarks})), 'חריגות איכות')
     XLSX.writeFile(wb, `Batch_${data.batch}.xlsx`)
   }
   return <div className="batch-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget) onClose()}}>
