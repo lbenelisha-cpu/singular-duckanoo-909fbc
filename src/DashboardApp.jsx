@@ -3390,7 +3390,7 @@ material: normalize(getField(r, [
 
   if (IS_MOBILE_DEVICE) return <div className="mobile-lite-app" dir="rtl">
     <header className="mobile-lite-header">
-      <div><img src="/iml-logo.png" alt="IML"/><span><strong>IML CONTROL</strong><small>כמות · איכות</small></span></div>
+      <div><img src="/iml-logo.png" alt="IML" onError={(e)=>{e.currentTarget.style.display="none"}}/><span><strong>IML CONTROL</strong><small>כמות · איכות</small></span></div>
       <span className={`mobile-cloud-badge ${cloudState.mode}`}>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר...' : 'לא מחובר'}</span>
     </header>
 
@@ -3475,7 +3475,7 @@ material: normalize(getField(r, [
 
   if (showHome) return <div className="command-home" dir="rtl">
     <header className="command-home-header">
-      <div className="command-home-brand"><img src="/iml-logo.png" alt="IML"/><div><strong>חדר בקרה — מתקני אריזה</strong><span>COMMAND CENTER</span></div></div>
+      <div className="command-home-brand"><img src="/iml-logo.png" alt="IML" onError={(e)=>{e.currentTarget.style.display="none"}}/><div><strong>חדר בקרה — מתקני אריזה</strong><span>COMMAND CENTER</span></div></div>
       <button type="button" className="command-home-sound-toggle" data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילים' : 'הפעלת צלילים'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}</button><div className="command-home-user"><Home size={19}/><b>דף ראשי</b><span></span><div><strong>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</strong><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></div></div>
     </header>
     {updateBanner}
@@ -3506,7 +3506,7 @@ material: normalize(getField(r, [
   return <div className={`dashboard ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${managementMode ? 'management-mode' : ''}`} dir="rtl">
     <aside className="side filter-side">
       <button type="button" className="side-collapse-button" onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'פתיחת מסננים' : 'כיווץ מסננים'}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}</button>
-      <div className="brand branded"><img src="/iml-logo.png" alt="IML"/><div>IML<span>CONTROL</span></div></div>
+      <div className="brand branded"><img src="/iml-logo.png" alt="IML" onError={(e)=>{e.currentTarget.style.display="none"}}/><div>IML<span>CONTROL</span></div></div>
       <div className="side-filter-title"><Search size={18}/><strong>חיפוש וסינון</strong></div>
       <label className="side-field"><span>Quick Search</span><div><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Order, Batch, חומר..."/></div></label>
       <label className="side-field"><span>חודש תכנון</span><select value={planningMonth} onChange={e => setPlanningMonth(e.target.value)}>{!availableMonths.length && <option value="">אין נתונים</option>}{availableMonths.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
@@ -3528,7 +3528,7 @@ material: normalize(getField(r, [
             <button type="button" className="action ui-control" onClick={() => setSidebarCollapsed(v => !v)}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}<span>{sidebarCollapsed ? 'פתח מסננים' : 'כווץ מסננים'}</span></button>
             <button type="button" className={`action ui-control ${managementMode ? 'active' : ''}`} onClick={() => setManagementMode(v => !v)}>{managementMode ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}<span>{managementMode ? 'יציאה ממצב ניהולי' : 'מצב ניהולי'}</span></button>
           </div>
-          <button type="button" className={`action ui-control ${uiSoundsEnabled ? 'active' : ''}`} data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילי ממשק' : 'הפעלת צלילי ממשק'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}<span>{uiSoundsEnabled ? 'צלילים פעילים' : 'צלילים כבויים'}</span></button><div className="user-session"><img className="user-brand-avatar" src="/iml-logo.png" alt="IML"/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
+          <button type="button" className={`action ui-control ${uiSoundsEnabled ? 'active' : ''}`} data-no-ui-sound="1" onClick={() => { setUiSoundsEnabled(v => !v); playUiTone(uiSoundsEnabled ? 'close' : 'success') }} title={uiSoundsEnabled ? 'כיבוי צלילי ממשק' : 'הפעלת צלילי ממשק'}>{uiSoundsEnabled ? <Volume2 size={18}/> : <VolumeX size={18}/>}<span>{uiSoundsEnabled ? 'צלילים פעילים' : 'צלילים כבויים'}</span></button><div className="user-session"><img className="user-brand-avatar" src="/iml-logo.png" alt="IML" onError={(e)=>{e.currentTarget.style.display="none"}}/><span><b>{isGuest ? 'אורח' : (currentUser?.email || 'משתמש')}</b><small>{isGuest ? 'צפייה בלבד' : userRole === 'admin' ? 'מנהל מערכת' : userRole === 'manager' ? 'מנהל מתקן' : 'צפייה בלבד'}</small></span></div>
           <button className="action secondary" onClick={printMonthlyTargets} disabled={!targets.length}><Printer size={18}/> הדפסת יעדים</button>
           <button className="action secondary" onClick={downloadTargetWorkbook}><FileSpreadsheet size={18}/> הורדת תבנית יעדים</button>
           <div className="daily-event-export-controls">
