@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.44'
-const BUILD_LABEL = 'Sprint 11.9.44 — iPhone Server-side Quality Month'
+const APP_VERSION = '11.9.45'
+const BUILD_LABEL = 'Sprint 11.9.45 — iPhone Server-side Quality Month'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -2129,7 +2129,11 @@ material: normalize(getField(r, [
     const normalizedMaterial = normalize(material)
 
     if (IS_MOBILE_DEVICE) {
-      const matchBatchQuality = rows => rows.filter(row => {
+      // Sprint 11.9.45:
+      // The iPhone already receives the selected month's QUALITY dataset during
+      // the normal mobile sync. Opening a batch must NEVER start another scan
+      // of the full cloud QUALITY dataset.
+      const existingBatchQuality = quality.filter(row => {
         const rowBatch = normalize(
           row?.batch ??
           row?.Batch ??
@@ -2155,55 +2159,11 @@ material: normalize(getField(r, [
         return !normalizedMaterial || !rowMaterial || rowMaterial === normalizedMaterial
       })
 
-      // First use QUALITY already downloaded for the selected month.
-      let existingBatchQuality = matchBatchQuality(quality)
-
-      if (!existingBatchQuality.length) {
-        const prodRow = production.find(row =>
-          normalize(row?.batch) === normalizedBatch &&
-          (!normalizedMaterial || normalize(row?.material) === normalizedMaterial)
-        )
-        const rawDate = prodRow?.finishDate || prodRow?.date
-        const prodDate = rawDate ? new Date(rawDate) : null
-        const batchMonth = prodDate && Number.isFinite(prodDate.getTime())
-          ? `${prodDate.getFullYear()}-${String(prodDate.getMonth() + 1).padStart(2, '0')}`
-          : (dataMeta?.quality?.mobileMonth || '')
-
-        if (batchMonth && batchMonth !== dataMeta?.quality?.mobileMonth) {
-          setMobileQualityLoading(true)
-          setStatus(`טוען איכות ${batchMonth} למנה ${normalizedBatch}...`)
-          try {
-            const dataset = await loadMobileQualityMonth(batchMonth, progress => {
-              const downloaded = Number(progress?.downloadedRows || 0)
-              if (downloaded > 0) setStatus(`טוען איכות ${batchMonth}... ${downloaded.toLocaleString()} רשומות`)
-            })
-            const monthRows = dedupeRows(
-              (dataset?.rows || []).map(row => row?.date ? { ...row, date:new Date(row.date) } : row),
-              qualityRowKey
-            )
-            existingBatchQuality = matchBatchQuality(monthRows)
-
-            // Merge the extra month instead of replacing the month already in memory.
-            if (monthRows.length) {
-              setQuality(current => dedupeRows([...current, ...monthRows], qualityRowKey))
-            }
-            setStatus(
-              existingBatchQuality.length
-                ? `נטענו ${existingBatchQuality.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}`
-                : `לא נמצאו תוצאות איכות למנה ${normalizedBatch}`
-            )
-          } catch (error) {
-            console.warn('Mobile batch quality cache load failed', error)
-            setStatus(`טעינת האיכות למנה ${normalizedBatch} נכשלה: ${error?.message || error}`)
-          } finally {
-            setMobileQualityLoading(false)
-          }
-        } else {
-          setStatus(`לא נמצאו תוצאות איכות למנה ${normalizedBatch} בחודש שנטען`)
-        }
-      } else {
-        setStatus(`נמצאו ${existingBatchQuality.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}`)
-      }
+      setStatus(
+        existingBatchQuality.length
+          ? `נמצאו ${existingBatchQuality.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}`
+          : `לא נמצאו תוצאות איכות למנה ${normalizedBatch} בנתוני החודש שירדו`
+      )
     }
 
     setSelectedBatch(normalizedBatch)
