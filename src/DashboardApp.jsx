@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.45'
-const BUILD_LABEL = 'Sprint 11.9.45 — iPhone Server-side Quality Month'
+const APP_VERSION = '11.9.46'
+const BUILD_LABEL = 'Sprint 11.9.46 — iPhone Server-side Quality Month'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1497,13 +1497,38 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       setStatus(`מוריד איכות ${mobileQualityMonth} מהענן...`)
 
       try {
-        const dataset = await loadMobileQualityMonth(mobileQualityMonth, progress => {
+        let dataset = null
+        let rows = []
+        let availableMonths = []
+        const maxAttempts = 6
+
+        for (let attempt = 1; attempt <= maxAttempts && active; attempt += 1) {
+          setStatus(
+            attempt === 1
+              ? `מוריד איכות ${mobileQualityMonth} מהענן...`
+              : `מנסה שוב איכות ${mobileQualityMonth} — ניסיון ${attempt}/${maxAttempts}`
+          )
+
+          dataset = await loadMobileQualityMonth(mobileQualityMonth, progress => {
+            if (!active) return
+            setStatus(progress?.message || `מוריד איכות ${mobileQualityMonth}...`)
+          })
           if (!active) return
-          setStatus(progress?.message || `מוריד איכות ${mobileQualityMonth}...`)
-        })
+
+          rows = dataset?.rows || []
+          availableMonths = dataset?.meta?.availableMonths || []
+
+          if (rows.length > 0) break
+
+          // A zero-row response can happen when the iPhone asks before the
+          // desktop has finished publishing the monthly QUALITY cache.
+          if (attempt < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 1500))
+          }
+        }
+
         if (!active) return
 
-        const rows = dataset?.rows || []
         setQuality(dedupeRows(
           rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row),
           qualityRowKey
@@ -1518,9 +1543,13 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             visibleRows:rows.length,
           }
         }))
-        setStatus(rows.length > 0
-          ? `איכות ${mobileQualityMonth} ירדה — ${rows.length.toLocaleString()} רשומות`
-          : `הכמות ירדה, אך לא נמצאו רשומות איכות ב-${mobileQualityMonth}`)
+
+        if (rows.length > 0) {
+          setStatus(`איכות ${mobileQualityMonth} ירדה — ${rows.length.toLocaleString()} רשומות`)
+        } else {
+          const availableText = availableMonths.length ? availableMonths.join(', ') : 'אין חודשים זמינים'
+          setStatus(`אין איכות ל-${mobileQualityMonth} · חודשים במטמון: ${availableText}`)
+        }
       } catch (error) {
         console.warn('Mobile server-side quality month sync failed', error)
         if (active) {
@@ -2129,7 +2158,7 @@ material: normalize(getField(r, [
     const normalizedMaterial = normalize(material)
 
     if (IS_MOBILE_DEVICE) {
-      // Sprint 11.9.45:
+      // Sprint 11.9.46:
       // The iPhone already receives the selected month's QUALITY dataset during
       // the normal mobile sync. Opening a batch must NEVER start another scan
       // of the full cloud QUALITY dataset.
