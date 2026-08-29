@@ -4,7 +4,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, Archive, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
-import { loadCloudDatasetOnce, loadCloudDatasetMatching, loadCloudQualityMonth, getMobileQualityCacheMeta, rebuildMobileQualityCache, loadMobileQualityMonth, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
+import { loadCloudDatasetOnce, loadCloudDatasetMatching, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.46'
-const BUILD_LABEL = 'Sprint 11.9.46 — iPhone Server-side Quality Month'
+const APP_VERSION = '11.9.47'
+const BUILD_LABEL = 'Sprint 11.9.47 — Active Facilities Unified Mobile Load'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1300,6 +1300,35 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         }
 
         if (IS_MOBILE_DEVICE) {
+          if (changed('quality')) {
+            setMobileQualityLoading(true)
+            setMobileQualityReady(false)
+            setMobileQualityRows(0)
+            setStatus('טוען נתוני איכות ל-45 ימים האחרונים...')
+            try {
+              const cutoff = new Date()
+              cutoff.setHours(0, 0, 0, 0)
+              cutoff.setDate(cutoff.getDate() - 45)
+              const qualityDataset = await loadCloudDatasetMatching('quality', row => {
+                const rawDate = row?.date ?? row?.sampleDate ?? row?.Date
+                if (!rawDate) return false
+                const parsed = rawDate instanceof Date ? rawDate : new Date(rawDate)
+                const ms = parsed?.getTime?.()
+                return Number.isFinite(ms) && ms >= cutoff.getTime()
+              })
+              const qualityCount = applyDataset('quality', qualityDataset)
+              loadedRows += qualityCount
+              setMobileQualityRows(qualityCount)
+              setMobileQualityReady(qualityCount > 0)
+              setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'איכות מעודכנת' }))
+              setStatus(qualityCount > 0
+                ? `נתוני איכות ירדו — ${qualityCount.toLocaleString()} רשומות`
+                : 'נתוני האיכות ירדו אך לא נמצאו רשומות ב-45 הימים האחרונים')
+            } finally {
+              setMobileQualityLoading(false)
+            }
+            await new Promise(resolve => setTimeout(resolve, 0))
+          }
           if (changed('deviations')) {
             setStatus('טוען חריגות איכות מעודכנות...')
             loadedRows += applyDataset('deviations', await loadCloudDatasetOnce('deviations'))
@@ -1449,126 +1478,6 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   }, [])
 
   useEffect(() => {
-    if (IS_MOBILE_DEVICE || !supabase || !quality.length) return
-    const versionId = dataMeta?.quality?.versionId
-    if (!versionId) return
-
-    let active = true
-    const timer = setTimeout(async () => {
-      try {
-        const cacheMeta = await getMobileQualityCacheMeta().catch(() => null)
-        if (String(cacheMeta?.version_id || '') === String(versionId)) return
-
-        // Only an admin is allowed to build the shared iPhone cache.
-        const { data: isAdmin, error: adminError } = await supabase.rpc('iml_is_admin')
-        if (adminError || !isAdmin || !active) return
-
-        setStatus('מכין נתוני איכות מהירים לאייפון...')
-        const result = await rebuildMobileQualityCache(quality, versionId, progress => {
-          if (!active) return
-          const pct = Number(progress?.percent || 0)
-          setStatus(`מכין איכות לאייפון... ${pct}%`)
-        })
-        if (active) setStatus(`איכות לאייפון מוכנה — ${Number(result?.rows || 0).toLocaleString()} רשומות · ${result?.months?.join(', ') || ''}`)
-      } catch (error) {
-        console.warn('Mobile QUALITY cache build failed', error)
-        if (active) setStatus(`הכנת איכות לאייפון נכשלה: ${error?.message || error}`)
-      }
-    }, 1800)
-
-    return () => {
-      active = false
-      clearTimeout(timer)
-    }
-  }, [quality, dataMeta?.quality?.versionId])
-
-  useEffect(() => {
-    if (!IS_MOBILE_DEVICE || !supabase) return
-
-    let active = true
-    const timer = setTimeout(async () => {
-      const anchorDateText = to || from || iso(new Date())
-      const anchorDate = new Date(`${anchorDateText}T12:00:00`)
-      const mobileQualityMonth = `${anchorDate.getFullYear()}-${String(anchorDate.getMonth() + 1).padStart(2, '0')}`
-
-      setMobileQualityReady(false)
-      setMobileQualityRows(0)
-      setMobileQualityLoading(true)
-      setStatus(`מוריד איכות ${mobileQualityMonth} מהענן...`)
-
-      try {
-        let dataset = null
-        let rows = []
-        let availableMonths = []
-        const maxAttempts = 6
-
-        for (let attempt = 1; attempt <= maxAttempts && active; attempt += 1) {
-          setStatus(
-            attempt === 1
-              ? `מוריד איכות ${mobileQualityMonth} מהענן...`
-              : `מנסה שוב איכות ${mobileQualityMonth} — ניסיון ${attempt}/${maxAttempts}`
-          )
-
-          dataset = await loadMobileQualityMonth(mobileQualityMonth, progress => {
-            if (!active) return
-            setStatus(progress?.message || `מוריד איכות ${mobileQualityMonth}...`)
-          })
-          if (!active) return
-
-          rows = dataset?.rows || []
-          availableMonths = dataset?.meta?.availableMonths || []
-
-          if (rows.length > 0) break
-
-          // A zero-row response can happen when the iPhone asks before the
-          // desktop has finished publishing the monthly QUALITY cache.
-          if (attempt < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 1500))
-          }
-        }
-
-        if (!active) return
-
-        setQuality(dedupeRows(
-          rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row),
-          qualityRowKey
-        ))
-        setMobileQualityRows(rows.length)
-        setMobileQualityReady(rows.length > 0)
-        setDataMeta(current => ({
-          ...current,
-          quality:{
-            ...normalizeDatasetMeta('quality', dataset?.meta || null),
-            mobileMonth:mobileQualityMonth,
-            visibleRows:rows.length,
-          }
-        }))
-
-        if (rows.length > 0) {
-          setStatus(`איכות ${mobileQualityMonth} ירדה — ${rows.length.toLocaleString()} רשומות`)
-        } else {
-          const availableText = availableMonths.length ? availableMonths.join(', ') : 'אין חודשים זמינים'
-          setStatus(`אין איכות ל-${mobileQualityMonth} · חודשים במטמון: ${availableText}`)
-        }
-      } catch (error) {
-        console.warn('Mobile server-side quality month sync failed', error)
-        if (active) {
-          setMobileQualityReady(false)
-          setMobileQualityRows(0)
-          setStatus(String(error?.message || 'נתוני הכמות ירדו, אבל סנכרון האיכות נכשל'))
-        }
-      } finally {
-        if (active) setMobileQualityLoading(false)
-      }
-    }, 350)
-
-    return () => {
-      active = false
-      clearTimeout(timer)
-    }
-  }, [from, to])
-
-  useEffect(() => {
     if (IS_MOBILE_DEVICE) return
     if (!production.length && !quality.length && !deviations.length && !targets.length) return
     const timer = setTimeout(() => {
@@ -1660,7 +1569,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             orderType: normalize(getField(r, ['Order Type'])),
             routingGroup,
             routingDescription,
-          }}).filter(r => r.facility && (r.qty || r.order || r.batch)), productionRowKey)
+          }}).filter(r =>
+              r.facility &&
+              selectableFacilitySet.has(String(r.facility)) &&
+              (r.qty || r.order || r.batch)
+            ), productionRowKey)
           storedCount = compact.length
           rowsForCloud = compact
           lastFileUniqueRows = compact.length
@@ -1694,20 +1607,17 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             line: normalize(getField(r, ['Production Line'])), remarks: normalize(getField(r, ['Charactristic Remarks', 'Characteristic Remarks', 'Batch Remarks'])),
             qualitative: normalize(getField(r, ['Qualitative'])),
             udCode: normalize(getField(r, ['UD Code', 'Usage Decision', 'Usage decision', 'החלטת שימוש'])),
-          })).filter(r => r.batch || r.inspectionLot), qualityRowKey)
+          })).filter(r =>
+            selectableFacilitySet.has(String(r.facility || '')) &&
+            (r.batch || r.inspectionLot)
+          ), qualityRowKey)
+          // 11.9.47: QUALITY is rebuilt from the uploaded source file after
+          // filtering to selectable facilities. Do not append to the historical
+          // unfiltered cloud dataset, otherwise inactive facilities remain forever.
           lastFileUniqueRows = compact.length
-          setStatus(`בודק אילו רשומות איכות חדשות קיימות ב-${displayDatasetName('quality')}...`)
-          setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent:0, message:'משווה מול נתוני האיכות הקיימים' })
-          const fresh = await filterNewQualityRows(quality, compact, (completed,total) => {
-            const percent = total ? Math.round(completed / total * 100) : 100
-            setUploadProgress({ fileName:displayDatasetName('quality'), kind, phase:'dedupe', percent, message:'מסנן רשומות שכבר קיימות' })
-          })
-          storedCount = fresh.length; rowsForCloud = fresh
-          if (!fresh.length) {
-            loaded.push(`${displayDatasetName('quality')}: לא נמצאו רשומות איכות חדשות`)
-            setStatus(`${displayDatasetName('quality')}: כל ${fmt(compact.length)} הרשומות כבר קיימות — לא בוצעה העלאה`)
-            continue
-          }
+          storedCount = compact.length
+          rowsForCloud = compact
+          setStatus(`${displayDatasetName('quality')}: נשמרות ${fmt(compact.length)} רשומות ממתקנים פעילים בלבד`)
         } else if (kind === 'deviations') {
           rowsForCloud = dedupeRows(rows, deviationRawRowKey)
           storedCount = rowsForCloud.length
@@ -1807,11 +1717,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           setUploadProgress({ fileName:displayName, kind, ...progress })
           setStatus(`${displayName}: ${progress.message} (${progress.percent}%)`)
         }
-        const savedMeta = kind === 'quality'
-          ? await uploadCloudDatasetIncremental(kind, rowsForCloud, { ...nextMeta, existingRows:quality.length }, currentUser, progressHandler)
-          : await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progressHandler)
+        const savedMeta = await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progressHandler)
         if (kind === 'production') setProduction(rowsForCloud)
-        else if (kind === 'quality') setQuality(current => dedupeRows([...current, ...rowsForCloud], qualityRowKey))
+        else if (kind === 'quality') setQuality(rowsForCloud)
         else if (kind === 'deviations') setDeviations(rowsForCloud)
         else if (kind === 'targets') {
           const targetMonth = rowsForCloud?.[0]?.month || planningMonth
@@ -2158,7 +2066,7 @@ material: normalize(getField(r, [
     const normalizedMaterial = normalize(material)
 
     if (IS_MOBILE_DEVICE) {
-      // Sprint 11.9.46:
+      // Sprint 11.9.47:
       // The iPhone already receives the selected month's QUALITY dataset during
       // the normal mobile sync. Opening a batch must NEVER start another scan
       // of the full cloud QUALITY dataset.
