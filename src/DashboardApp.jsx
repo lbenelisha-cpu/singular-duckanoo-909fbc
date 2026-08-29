@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
-  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
+  Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, Archive, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
 import { loadCloudDatasetOnce, loadCloudDatasetMatching, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
@@ -2179,22 +2179,22 @@ material: normalize(getField(r, [
       if (/(^|\s)LQ-P-5(\s|$)/.test(route) || route.includes('42-P-03') || route.includes('LIQUID 5 LITER')) return '5L'
       return '10/20L'
     }
-    // Residues are reported to 1542 as ZSEM and explicitly carry a 200L/1000L
-    // packaging description. They are output from the bulk and must therefore
-    // be deducted from the balance, but must NOT be counted as line packaging.
-    const residuePattern = /(^|\\D)(200|1000)\\s*(L|LT|LTR|LITER|LITRE)(\\D|$)/i
+    // Facility 42 packaging residues: every production row reported to station 1542
+    // whose material number starts with 2. This rule is intentionally independent
+    // of order type / routing so all returned packaging residues are captured.
     const residueRows = inRange.filter(r =>
       normalize(r.facility) === '1542' &&
-      normalize(r.orderType).toUpperCase() === 'ZSEM' &&
-      residuePattern.test(normalize(`${r.desc || ''} ${r.routingDescription || ''}`))
+      normalize(r.material).startsWith('2')
     )
     const bulk = bulkRows.reduce((sum,r)=>sum+num(r.qty),0)
     const byLine = {'1L':0,'5L':0,'10/20L':0}
     packedRows.forEach(r => { byLine[routeBucket(r)] += num(r.qty) })
     const packed = Object.values(byLine).reduce((a,b)=>a+b,0)
     const residues = residueRows.reduce((sum,r)=>sum+num(r.qty),0)
-    const balance = bulk - packed - residues
-    const utilization = bulk > 0 ? (packed + residues) / bulk * 100 : 0
+    // Raw-material loss vs finished product: bulk tank + returned residues - packed product.
+    const balance = bulk + residues - packed
+    const availableInput = bulk + residues
+    const utilization = availableInput > 0 ? packed / availableInput * 100 : 0
     return { bulkRows, packedRows, residueRows, bulk, byLine, packed, residues, balance, utilization }
   }, [prod, from, to])
 
@@ -3742,28 +3742,38 @@ material: normalize(getField(r, [
         <button className={activeTab === 'production' ? 'active' : ''} onClick={() => setActiveTab('production')}><BarChart3 size={16}/> תפוקה</button>
         <button className={activeTab === 'shifts' ? 'active' : ''} onClick={() => setActiveTab('shifts')}><Clock3 size={16}/> ניתוח משמרות</button>
         <button className={activeTab === 'bulk-balance' ? 'active' : ''} onClick={() => setActiveTab('bulk-balance')}><Activity size={16}/> מאזן מתקן 42</button>
+        <button className={activeTab === 'facility42-residues' ? 'active' : ''} onClick={() => setActiveTab('facility42-residues')}><Archive size={16}/> שאריות מתקן 42 ({facility42Balance.residueRows.length})</button>
         <button className={activeTab === 'bulk-balance-19' ? 'active' : ''} onClick={() => setActiveTab('bulk-balance-19')}><Activity size={16}/> מאזן מתקן 19</button>
         <button className={activeTab === 'quality' ? 'active' : ''} onClick={() => setActiveTab('quality')}><FlaskConical size={16}/> איכות ({qualityBad.length})</button>
         <button className={activeTab === 'deviations' ? 'active' : ''} onClick={() => setActiveTab('deviations')}><AlertTriangle size={16}/> מנות חריגות ({openDeviations.length})</button>
         <button className={activeTab === 'mapping-simulator' ? 'active' : ''} onClick={() => canManageData ? setActiveTab('mapping-simulator') : onRequestAdminLogin()}><ClipboardList size={16}/> סימולטור שיוך ({mappingSimulation.summary.actionable})</button>
         <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => canManageData ? setActiveTab('mapping-center') : onRequestAdminLogin()}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>
       </section>
+      {activeTab === 'facility42-residues' && <section className="details facility42-balance">
+        <div className="details-title-row"><div><h2>שאריות מתקן 42</h2><p className="details-note">כל הדיווחים לתחנה 1542 שבהם המק״ט מתחיל בספרה 2. הכמות נכללת כתוספת תשומה בחישוב מאזן מתקן 42.</p></div><span className="production-record-count">{facility42Balance.residueRows.length} רשומות</span></div>
+        <div className="balance-kpi-grid"><article className="balance-total"><span>סה״כ שאריות</span><b>{fmt(facility42Balance.residues)}</b><small>ליטר</small></article></div>
+        <div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מק״ט</th><th>תיאור חומר</th><th>אצווה</th><th>הזמנה</th><th>כמות</th></tr></thead><tbody>
+          {facility42Balance.residueRows.map((r,i) => <tr key={`${r.order || ''}-${r.batch || ''}-${r.material || ''}-${i}`}><td>{r.productionDay || iso(r.date) || '—'}</td><td><b>{r.material || '—'}</b></td><td>{r.desc || '—'}</td><td>{r.batch || '—'}</td><td>{r.order || '—'}</td><td><b>{fmt(r.qty)}</b></td></tr>)}
+          {!facility42Balance.residueRows.length && <tr><td colSpan="6" className="empty">אין שאריות מתקן 42 בטווח הנבחר</td></tr>}
+        </tbody></table></div>
+      </section>}
       {activeTab === 'bulk-balance' && <section className="details facility42-balance">
-        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 42</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: תחנה 1142 ותיאור המכיל 999. תפוקה: כל האריזות 1, 5, 10/20 ליטר במתקן 42. שאריות: דיווחי 200/1000 ליטר בתחנה 1542.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
+        <div className="details-title-row"><div><h2>מאזן תשומות מול תפוקות — מתקן 42</h2><p className="details-note">כרטיסיה עצמאית ללא יעד. תשומה: תחנה 1142 ותיאור המכיל 999. תפוקה: כל האריזות 1, 5, 10/20 ליטר במתקן 42. שאריות: כל דיווח בתחנה 1542 עם מק״ט שמתחיל ב־2.</p></div><span className="production-record-count">{from || 'תחילת נתונים'} — {to || 'היום'}</span></div>
         <div className="balance-kpi-grid">
           <article><span>באלק שיוצר</span><b>{fmt(facility42Balance.bulk)}</b><small>ליטר · {facility42Balance.bulkRows.length} רשומות</small></article>
           <article><span>אריזה 1 ליטר</span><b>{fmt(facility42Balance.byLine['1L'])}</b><small>ליטר</small></article>
           <article><span>אריזה 5 ליטר</span><b>{fmt(facility42Balance.byLine['5L'])}</b><small>ליטר</small></article>
           <article><span>אריזה 10/20 ליטר</span><b>{fmt(facility42Balance.byLine['10/20L'])}</b><small>ליטר</small></article>
           <article className="balance-total"><span>סה״כ נארז</span><b>{fmt(facility42Balance.packed)}</b><small>ליטר</small></article>
-          <article><span>שאריות 200/1000 ליטר</span><b>{fmt(facility42Balance.residues)}</b><small>ליטר · {facility42Balance.residueRows.length} רשומות</small></article>
-          <article className={facility42Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>יתרה: באלק − אריזה − שאריות</span><b>{fmt(facility42Balance.balance)}</b><small>ליטר</small></article>
-          <article><span>% ניצול באלק</span><b>{facility42Balance.bulk ? pctFmt(facility42Balance.utilization) : '—'}</b><small>(אריזה + שאריות) ÷ באלק</small></article>
+          <article><span>שאריות מתקן 42</span><b>{fmt(facility42Balance.residues)}</b><small>ליטר · {facility42Balance.residueRows.length} רשומות</small></article>
+          <article className={facility42Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>פחת: באלק + שאריות − תוצרת</span><b>{fmt(facility42Balance.balance)}</b><small>ליטר</small></article>
+          <article><span>% ניצול באלק</span><b>{facility42Balance.bulk ? pctFmt(facility42Balance.utilization) : '—'}</b><small>תוצרת ÷ (באלק + שאריות)</small></article>
         </div>
         <div className="balance-note"><AlertTriangle size={18}/><span>בהשוואה יומית ייתכן פער תזמון: באלק שיוצר ביום מסוים יכול להיארז ביום אחר. לכן המאזן החודשי מייצג טוב יותר את התהליך.</span></div>
         <h3 className="shift-subtitle">פירוט לפי סוג דיווח</h3>
         <div className="table-wrap"><table><thead><tr><th>סוג</th><th>מקור</th><th>כמות</th><th>רשומות</th><th>Batch</th><th>Orders</th></tr></thead><tbody>
           <tr><td><b>באלק</b></td><td>1142 + תיאור 999</td><td><b>{fmt(facility42Balance.bulk)}</b></td><td>{facility42Balance.bulkRows.length}</td><td>{new Set(facility42Balance.bulkRows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(facility42Balance.bulkRows.map(r=>r.order).filter(Boolean)).size}</td></tr>
+          <tr><td><b>שאריות מתקן 42</b></td><td>1542 + מק״ט מתחיל ב־2</td><td><b>{fmt(facility42Balance.residues)}</b></td><td>{facility42Balance.residueRows.length}</td><td>{new Set(facility42Balance.residueRows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(facility42Balance.residueRows.map(r=>r.order).filter(Boolean)).size}</td></tr>
           {['1L','5L','10/20L'].map(line => { const rows=facility42Balance.packedRows.filter(r => { const route=normalize(`${r.routingGroup||''} ${r.routingDescription||''}`).toUpperCase(); return line==='1L' ? (/(^|\s)LQ-P-1(\s|$)/.test(route)||route.includes('42-P-02')||route.includes('LIQUID 1 LITER')) : line==='5L' ? (/(^|\s)LQ-P-5(\s|$)/.test(route)||route.includes('42-P-03')||route.includes('LIQUID 5 LITER')) : !(/(^|\s)LQ-P-(1|5)(\s|$)/.test(route)||route.includes('42-P-02')||route.includes('42-P-03')||route.includes('LIQUID 1 LITER')||route.includes('LIQUID 5 LITER')); }); return <tr key={line}><td><b>אריזה {line}</b></td><td>1542 + ZFIN + Routing</td><td><b>{fmt(facility42Balance.byLine[line])}</b></td><td>{rows.length}</td><td>{new Set(rows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(rows.map(r=>r.order).filter(Boolean)).size}</td></tr> })}
         </tbody></table></div>
       </section>}
