@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.36'
-const BUILD_LABEL = 'Sprint 11.9.36 — PROD LINE Fast Mapping'
+const APP_VERSION = '11.9.37'
+const BUILD_LABEL = 'Sprint 11.9.37 — iPhone Stable Cloud Download'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1279,7 +1279,20 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         let loadedRows = 0
         if (changed('production')) {
           setStatus('טוען נתוני ייצור מעודכנים...')
-          loadedRows += applyDataset('production', await loadCloudDatasetOnce('production'))
+          if (IS_IOS_DEVICE) {
+            const cutoff = new Date()
+            cutoff.setHours(0, 0, 0, 0)
+            cutoff.setDate(cutoff.getDate() - 45)
+            loadedRows += applyDataset('production', await loadCloudDatasetMatching('production', row => {
+              const rawDate = row?.finishDate ?? row?.date ?? row?.Date
+              if (!rawDate) return false
+              const parsed = rawDate instanceof Date ? rawDate : new Date(rawDate)
+              const ms = parsed?.getTime?.()
+              return Number.isFinite(ms) && ms >= cutoff.getTime()
+            }))
+          } else {
+            loadedRows += applyDataset('production', await loadCloudDatasetOnce('production'))
+          }
           setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'הדשבורד זמין' }))
           await new Promise(resolve => setTimeout(resolve, 0))
         }

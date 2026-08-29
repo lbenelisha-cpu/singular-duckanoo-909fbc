@@ -15,6 +15,14 @@ const CHUNKS_PER_UPLOAD_REQUEST = 2
 const UPLOAD_CONCURRENCY = 4
 const CHUNKS_PER_SERVER_COPY_REQUEST = 200
 const CHUNKS_PER_DOWNLOAD_PAGE = 100
+const IS_IOS_DOWNLOAD_CLIENT = (() => {
+  if (typeof navigator === 'undefined') return false
+  const ua = String(navigator.userAgent || '')
+  const touchMac = /Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1
+  return /iPad|iPhone|iPod/i.test(ua) || touchMac
+})()
+const DOWNLOAD_PAGE_SIZE = IS_IOS_DOWNLOAD_CLIENT ? 12 : CHUNKS_PER_DOWNLOAD_PAGE
+const DOWNLOAD_PAGE_PAUSE_MS = IS_IOS_DOWNLOAD_CLIENT ? 25 : 0
 const MAX_RETRIES = 4
 const RETRY_BASE_MS = 700
 
@@ -122,7 +130,7 @@ async function readChunkPages({ table, filterColumn, filterValue, expectedChunks
   let from = 0
 
   while (true) {
-    const to = from + CHUNKS_PER_DOWNLOAD_PAGE - 1
+    const to = from + DOWNLOAD_PAGE_SIZE - 1
     const page = await withRetry(async attempt => {
       const { data, error } = await supabase
         .from(table)
@@ -148,11 +156,11 @@ async function readChunkPages({ table, filterColumn, filterValue, expectedChunks
       { downloadedRows: rows.length }
     )
 
-    if (page.length < CHUNKS_PER_DOWNLOAD_PAGE) break
-    from += CHUNKS_PER_DOWNLOAD_PAGE
+    if (page.length < DOWNLOAD_PAGE_SIZE) break
+    from += DOWNLOAD_PAGE_SIZE
 
     // Yield to the browser between pages so the UI remains responsive.
-    await sleep(0)
+    await sleep(DOWNLOAD_PAGE_PAUSE_MS)
   }
 
   return rows
@@ -270,7 +278,7 @@ async function readChunkPagesMatching({ table, filterColumn, filterValue, expect
   let from = 0
 
   while (true) {
-    const to = from + CHUNKS_PER_DOWNLOAD_PAGE - 1
+    const to = from + DOWNLOAD_PAGE_SIZE - 1
     const page = await withRetry(async () => {
       const { data, error } = await supabase
         .from(table)
@@ -299,9 +307,9 @@ async function readChunkPagesMatching({ table, filterColumn, filterValue, expect
       { matchedRows: matches.length }
     )
 
-    if (page.length < CHUNKS_PER_DOWNLOAD_PAGE) break
-    from += CHUNKS_PER_DOWNLOAD_PAGE
-    await sleep(0)
+    if (page.length < DOWNLOAD_PAGE_SIZE) break
+    from += DOWNLOAD_PAGE_SIZE
+    await sleep(DOWNLOAD_PAGE_PAUSE_MS)
   }
 
   return matches
@@ -461,7 +469,7 @@ export async function uploadCloudDataset(kind, rows, meta, user, onProgress) {
         uploadedChunks += batch.length
         emit(onProgress, 'upload', Math.min(uploadedChunks, chunks.length), chunks.length || 1, 'מעלה נתונים במקביל ל־Supabase')
       }))
-      await sleep(0)
+      await sleep(DOWNLOAD_PAGE_PAUSE_MS)
     }
 
     emit(onProgress, 'verify', 0, 1, 'Supabase מאמת את הגרסה בצד השרת')
@@ -596,7 +604,7 @@ export async function uploadCloudDatasetIncremental(kind, newRows, meta, user, o
           if (error) throw error
         }, `העתקת איכות קיימת ${fromIndex + 1}-${toIndex + 1}`)
         emit(onProgress, 'copy', toIndex + 1, baseChunkIndex, 'מעתיק את נתוני האיכות הקיימים במנות קטנות')
-        await sleep(0)
+        await sleep(DOWNLOAD_PAGE_PAUSE_MS)
       }
     }
 
@@ -623,7 +631,7 @@ export async function uploadCloudDatasetIncremental(kind, newRows, meta, user, o
         uploadedChunks += batch.length
         emit(onProgress, 'upload', Math.min(uploadedChunks, chunks.length), chunks.length || 1, 'מעלה רשומות איכות חדשות במקביל')
       }))
-      await sleep(0)
+      await sleep(DOWNLOAD_PAGE_PAUSE_MS)
     }
 
     emit(onProgress, 'verify', 0, 1, 'מאמת ומפעיל את גרסת האיכות המצטברת')
