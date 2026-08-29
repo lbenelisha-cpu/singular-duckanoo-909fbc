@@ -4076,7 +4076,7 @@ function Facility42BalanceOverviewCard({ balance, onClick }) {
     <div className="tower-facility-head"><div><i></i><strong>מאזן מתקן 42</strong></div><span>ללא יעד</span></div>
     <div className="facility42-overview-main"><div><span>באלק 1142 + 999</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ ארוז ZFIN</span><b>{fmt(balance.packed)}</b></div></div>
     <div className="facility42-overview-lines"><span>1L <b>{fmt(balance.byLine['1L'])}</b></span><span>5L <b>{fmt(balance.byLine['5L'])}</b></span><span>10/20L <b>{fmt(balance.byLine['10/20L'])}</b></span></div>
-    <dl><div><dt>יתרת באלק</dt><dd className={balance.balance >= 0 ? 'positive' : 'negative'}>{balance.balance >= 0 ? '+' : ''}{fmt(balance.balance)}</dd></div><div><dt>ניצול באלק</dt><dd>{balance.bulk ? pctFmt(balance.utilization) : '—'}</dd></div></dl>
+    <dl><div><dt>שאריות 1542</dt><dd>{fmt(balance.residues)}</dd></div><div><dt>פחת מתקן 42</dt><dd className={balance.balance >= 0 ? 'positive' : 'negative'}>{balance.balance >= 0 ? '+' : ''}{fmt(balance.balance)}</dd></div><div><dt>ניצול באלק</dt><dd>{balance.bulk ? pctFmt(balance.utilization) : '—'}</dd></div></dl>
     <span className="tower-enter">לפירוט המאזן <ArrowLeft size={16}/></span>
   </button>
 }
@@ -4087,8 +4087,8 @@ function Facility42BalanceCard({ balance }) {
     <div className="forecast-head"><div><small>מאזן תשומות / תפוקות</small><h3>מאזן מתקן 42</h3><div className="forecast-resource"><b>1142 + 999</b><span>מול אריזה 1L / 5L / 10–20L</span></div></div><span className="status-badge no-target">ללא יעד</span></div>
     <div className="balance-card-main"><div><span>באלק שיוצר</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ נארז</span><b>{fmt(balance.packed)}</b></div></div>
     <div className="balance-card-lines"><span>1L<strong>{fmt(balance.byLine['1L'])}</strong></span><span>5L<strong>{fmt(balance.byLine['5L'])}</strong></span><span>10/20L<strong>{fmt(balance.byLine['10/20L'])}</strong></span></div>
-    <div className="balance-card-footer"><div><span>יתרה</span><b>{balance.balance > 0 ? '+' : ''}{fmt(balance.balance)}</b></div><div><span>ניצול באלק</span><b>{pctFmt(balance.utilization)}</b></div></div>
-    <small className="balance-card-note">המאזן מחושב לפי טווח התאריכים שנבחר. פער יומי יכול לנבוע מאריזה ביום שונה מיום ייצור הבאלק.</small>
+    <div className="balance-card-footer"><div><span>שאריות 1542</span><b>{fmt(balance.residues)}</b></div><div><span>פחת מתקן 42</span><b>{balance.balance > 0 ? '+' : ''}{fmt(balance.balance)}</b></div><div><span>ניצול באלק</span><b>{pctFmt(balance.utilization)}</b></div></div>
+    <small className="balance-card-note">פחת מתקן 42 = באלק + שאריות 1542 − תוצרת ארוזה. המאזן מחושב לפי טווח התאריכים שנבחר.</small>
   </article>
 }
 function Facility19BalanceOverviewCard({ balance, onClick }) {
