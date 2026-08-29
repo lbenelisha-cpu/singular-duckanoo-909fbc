@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.38'
-const BUILD_LABEL = 'Sprint 11.9.38 — iPhone Load Status'
+const APP_VERSION = '11.9.39'
+const BUILD_LABEL = 'Sprint 11.9.39 — iPhone Quantity + Quality Load Status'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -971,6 +971,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [selectedBatch, setSelectedBatch] = useState('')
   const [selectedBatchMaterial, setSelectedBatchMaterial] = useState('')
   const [mobileQualityLoading, setMobileQualityLoading] = useState(false)
+  const [mobileQualityReady, setMobileQualityReady] = useState(false)
   const [selectedResource, setSelectedResource] = useState(null)
   const [cloudState, setCloudState] = useState({ mode:'connecting', lastSync:null, message:'מתחבר למסד המשותף...', latencyMs:null, live:false })
   const [uploadProgress, setUploadProgress] = useState(null)
@@ -1459,6 +1460,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       const monthEnd = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 1)
       const mobileQualityMonth = `${anchorDate.getFullYear()}-${String(anchorDate.getMonth() + 1).padStart(2, '0')}`
 
+      setMobileQualityReady(false)
       setStatus(`מסנכרן איכות לחודש ${mobileQualityMonth}...`)
       try {
         const dataset = await loadCloudDatasetMatching('quality', row => {
@@ -1494,10 +1496,14 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             visibleRows:rows.length,
           }
         }))
+        setMobileQualityReady(true)
         setStatus(`איכות ${mobileQualityMonth} מסונכרנת — ${rows.length.toLocaleString()} רשומות`)
       } catch (error) {
         console.warn('Mobile monthly quality sync failed', error)
-        if (active) setStatus('נתוני הכמות מחוברים; סנכרון האיכות החודשי נכשל')
+        if (active) {
+          setMobileQualityReady(false)
+          setStatus('נתוני הכמות ירדו, אבל סנכרון האיכות נכשל')
+        }
       }
     }, 450)
 
@@ -3414,9 +3420,9 @@ material: normalize(getField(r, [
       <span className={`mobile-cloud-badge ${cloudState.mode}`}>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר...' : 'לא מחובר'}</span>
     </header>
 
-    <section className={`mobile-load-status ${cloudState.mode === 'cloud' && !mobileQualityLoading ? 'ready' : 'loading'}`}>
-      <strong>{cloudState.mode === 'cloud' && !mobileQualityLoading ? '✓ הנתונים ירדו — אפשר לעבוד' : '⏳ הנתונים בטעינה — נא להמתין'}</strong>
-      <span>{status || (cloudState.mode === 'cloud' ? 'הטעינה הושלמה' : 'ממתין לנתונים מהענן')}</span>
+    <section className={`mobile-load-status ${cloudState.mode === 'cloud' && mobileQualityReady && !mobileQualityLoading ? 'ready' : 'loading'}`}>
+      <strong>{cloudState.mode === 'cloud' && mobileQualityReady && !mobileQualityLoading ? '✓ כמות ואיכות ירדו — אפשר לעבוד' : '⏳ כמות ואיכות בטעינה — נא להמתין'}</strong>
+      <span>{status || (cloudState.mode === 'cloud' ? (mobileQualityReady ? 'כמות ואיכות מעודכנות' : 'הכמות ירדה — ממתין לנתוני איכות') : 'ממתין לנתונים מהענן')}</span>
     </section>
 
     <section className="mobile-filter-card">
