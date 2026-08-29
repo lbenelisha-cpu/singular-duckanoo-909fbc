@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.37'
-const BUILD_LABEL = 'Sprint 11.9.37 — iPhone Stable Cloud Download'
+const APP_VERSION = '11.9.38'
+const BUILD_LABEL = 'Sprint 11.9.38 — iPhone Load Status'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -3413,6 +3413,11 @@ material: normalize(getField(r, [
       <div><img src="/iml-logo.png" alt="IML" onError={(e)=>{e.currentTarget.style.display="none"}}/><span><strong>IML CONTROL</strong><small>כמות · איכות</small></span></div>
       <span className={`mobile-cloud-badge ${cloudState.mode}`}>{cloudState.mode === 'cloud' ? 'מחובר' : cloudState.mode === 'connecting' ? 'מתחבר...' : 'לא מחובר'}</span>
     </header>
+
+    <section className={`mobile-load-status ${cloudState.mode === 'cloud' && !mobileQualityLoading ? 'ready' : 'loading'}`}>
+      <strong>{cloudState.mode === 'cloud' && !mobileQualityLoading ? '✓ הנתונים ירדו — אפשר לעבוד' : '⏳ הנתונים בטעינה — נא להמתין'}</strong>
+      <span>{status || (cloudState.mode === 'cloud' ? 'הטעינה הושלמה' : 'ממתין לנתונים מהענן')}</span>
+    </section>
 
     <section className="mobile-filter-card">
       <div className="mobile-date-row">
