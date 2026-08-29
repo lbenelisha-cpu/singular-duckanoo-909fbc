@@ -1924,7 +1924,14 @@ material: normalize(getField(r, [
   // Normalized rows that are allowed to enter the dashboard. Raw uploaded rows
   // remain in the cloud dataset, but unrelated facilities are excluded from all
   // regular user-facing calculations until they are explicitly added to the picker.
-  const dashboardProd = useMemo(() => prod.filter(row => selectableFacilitySet.has(String(row.facility || ''))), [prod, selectableFacilitySet])
+  const dashboardProd = useMemo(() => prod.filter(row => {
+    if (!selectableFacilitySet.has(String(row.facility || ''))) return false
+    // Facility 42 residue rule: rows reported to 1542 with a material beginning in 2
+    // belong only to the dedicated residue/balance view and must not be counted or
+    // displayed as normal 1542 production. All other Facility 42 logic is unchanged.
+    if (normalize(row.facility) === '1542' && normalize(row.material).startsWith('2')) return false
+    return true
+  }), [prod, selectableFacilitySet])
   const dashboardProdQualityKeys = useMemo(() => {
     const keys = new Set()
     dashboardProd.forEach(row => {
