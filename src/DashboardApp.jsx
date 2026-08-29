@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.40'
-const BUILD_LABEL = 'Sprint 11.9.40 — iPhone Verified Quality Load Status'
+const APP_VERSION = '11.9.41'
+const BUILD_LABEL = 'Sprint 11.9.41 — iPhone Quality Date Parser Fix'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1463,22 +1463,53 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
       setMobileQualityReady(false)
       setMobileQualityRows(0)
+      setMobileQualityLoading(true)
       setStatus(`מסנכרן איכות לחודש ${mobileQualityMonth}...`)
       try {
         const dataset = await loadCloudDatasetMatching('quality', row => {
-          // Cloud QUALITY rows are compact and normally expose `date`.
-          // Keep aliases for older datasets/backward compatibility.
-          const rawDate =
-            row?.date ??
-            row?.Date ??
-            row?.['Sample Date'] ??
-            row?.['Sampling Date'] ??
-            row?.['Date of Sample'] ??
-            row?.['Date of Sampling'] ??
-            row?.['תאריך דגימה']
+          // iPhone must support both the new compact QUALITY rows and older/raw
+          // Excel-shaped rows already stored in the cloud. `new Date()` alone
+          // cannot reliably parse Excel serials or DD/MM/YYYY values.
+          let parsedDate = null
 
-          if (!rawDate) return false
-          const parsedDate = rawDate instanceof Date ? rawDate : new Date(rawDate)
+          if (row?.__compactQuality && row?.date) {
+            parsedDate = row.date instanceof Date ? row.date : new Date(row.date)
+          } else {
+            parsedDate = combineExcelDateTime(
+              row?.date ?? getField(row, [
+                'Date',
+                'Sample Date',
+                'Sampling Date',
+                'Date of Sample',
+                'Date of Sampling',
+                'תאריך דגימה',
+                'Start Date of Inspection',
+                'Date of Lot Creation',
+                'Process Order Confirmed Release Date',
+                'End Date of Inspection',
+                'Inspection Lot UD Date',
+                'Process Order Delivered Date'
+              ]),
+              getField(row, [
+                'Sample Time',
+                'Sampling Time',
+                'Time of Sample',
+                'Time of Sampling',
+                'שעת דגימה',
+                'Inspection Time',
+                'Start Time of Inspection',
+                'Time'
+              ]),
+              getField(row, [
+                'Sample Date Time',
+                'Sampling Date Time',
+                'Sample Datetime',
+                'Sampling Datetime',
+                'תאריך ושעת דגימה'
+              ])
+            )
+          }
+
           const rowMs = parsedDate?.getTime?.()
           if (!Number.isFinite(rowMs)) return false
           return rowMs >= monthStart.getTime() && rowMs < monthEnd.getTime()
@@ -1512,6 +1543,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           setMobileQualityRows(0)
           setStatus('נתוני הכמות ירדו, אבל סנכרון האיכות נכשל')
         }
+      } finally {
+        if (active) setMobileQualityLoading(false)
       }
     }, 450)
 
