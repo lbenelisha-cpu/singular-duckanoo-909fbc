@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.48'
-const BUILD_LABEL = 'Sprint 11.9.48 — Active Facilities Unified Mobile Load'
+const APP_VERSION = '11.9.49'
+const BUILD_LABEL = 'Sprint 11.9.49 — Active Facilities Unified Mobile Load'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -939,51 +939,6 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [to, setTo] = useState(initialToDate)
   const [selectedFacilities, setSelectedFacilities] = useState([])
   const [activeTab, setActiveTab] = useState('production')
-  // iPhone: the Quality workspace benefits from a wide table. Ask the device
-  // for landscape only while this tab is open, then release the lock on exit.
-  // iOS may ignore Screen Orientation lock when the browser/shortcut does not
-  // grant it; in that case the rest of the UI remains unchanged.
-  useEffect(() => {
-    if (!IS_MOBILE_DEVICE) return
-
-    const orientation = window.screen?.orientation
-    let disposed = false
-
-    const enterQualityLandscape = async () => {
-      if (activeTab !== 'quality') return
-      document.documentElement.classList.add('iml-quality-landscape')
-      try {
-        if (orientation?.lock) {
-          await orientation.lock('landscape')
-        }
-      } catch (error) {
-        console.info('iPhone quality landscape lock unavailable', error)
-      }
-    }
-
-    const leaveQualityLandscape = () => {
-      document.documentElement.classList.remove('iml-quality-landscape')
-      try {
-        orientation?.unlock?.()
-      } catch (error) {
-        console.info('iPhone orientation unlock unavailable', error)
-      }
-    }
-
-    if (activeTab === 'quality') {
-      window.setTimeout(() => {
-        if (!disposed) enterQualityLandscape()
-      }, 60)
-    } else {
-      leaveQualityLandscape()
-    }
-
-    return () => {
-      disposed = true
-      leaveQualityLandscape()
-    }
-  }, [activeTab])
-
   const [productionSort, setProductionSort] = useState({ key:'date', direction:'desc' })
   const [quantityVarianceRow, setQuantityVarianceRow] = useState(null)
   const [facilityViewMode, setFacilityViewMode] = useState('relevant')
@@ -2111,7 +2066,7 @@ material: normalize(getField(r, [
     const normalizedMaterial = normalize(material)
 
     if (IS_MOBILE_DEVICE) {
-      // Sprint 11.9.48:
+      // Sprint 11.9.49:
       // The iPhone already receives the selected month's QUALITY dataset during
       // the normal mobile sync. Opening a batch must NEVER start another scan
       // of the full cloud QUALITY dataset.
@@ -3542,7 +3497,7 @@ material: normalize(getField(r, [
     <footer className="command-home-footer"><span>IML CONTROL © 2026</span><b>{BUILD_LABEL}</b><span className={cloudState.mode === 'cloud' ? 'online' : ''}>● {cloudState.mode === 'cloud' ? 'ONLINE' : 'OFFLINE'}</span></footer>
   </div>
 
-  return <div className={`dashboard ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${managementMode ? 'management-mode' : ''}`} dir="rtl">
+  return <div className={`dashboard ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${managementMode ? 'management-mode' : ''} ${IS_MOBILE_DEVICE && activeTab === 'quality' ? 'mobile-quality-landscape' : ''}`} dir="rtl">
     <aside className="side filter-side">
       <button type="button" className="side-collapse-button" onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'פתיחת מסננים' : 'כיווץ מסננים'}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}</button>
       <div className="brand branded"><img src="/iml-logo.png" alt="IML" onError={(e)=>{e.currentTarget.style.display="none"}}/><div>IML<span>CONTROL</span></div></div>

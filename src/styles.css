@@ -1024,3 +1024,42 @@ button,input,select,textarea{font:inherit}
 .mobile-load-status span{opacity:.78;font-size:12px}
 .mobile-load-status.loading{background:rgba(255,193,7,.14);border:1px solid rgba(255,193,7,.34)}
 .mobile-load-status.ready{background:rgba(40,167,69,.12);border:1px solid rgba(40,167,69,.28)}
+
+
+/* Sprint 11.9.49 — iPhone QUALITY virtual landscape.
+   Safari/iOS does not reliably allow web apps to lock screen orientation,
+   so while the physical phone is portrait we rotate only the dashboard
+   viewport. When the phone is already landscape, no transform is applied. */
+@media (max-width: 900px) and (orientation: portrait) {
+  .dashboard.mobile-quality-landscape {
+    position: fixed !important;
+    z-index: 2147483000 !important;
+    left: 0 !important;
+    top: 100vh !important;
+    width: 100vh !important;
+    height: 100vw !important;
+    min-width: 100vh !important;
+    max-width: none !important;
+    min-height: 100vw !important;
+    overflow: auto !important;
+    transform: rotate(-90deg) !important;
+    transform-origin: 0 0 !important;
+    background: var(--bg, #f4f8fb);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dashboard.mobile-quality-landscape .main,
+  .dashboard.mobile-quality-landscape main {
+    min-height: 100vw !important;
+    width: auto !important;
+  }
+
+  .dashboard.mobile-quality-landscape .details {
+    min-width: 0 !important;
+  }
+
+  .dashboard.mobile-quality-landscape .table-wrap {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+}
