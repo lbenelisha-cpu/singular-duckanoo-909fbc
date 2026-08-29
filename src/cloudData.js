@@ -383,6 +383,39 @@ export async function loadCloudDatasetMatching(kind, matcher, onProgress) {
   return { rows, meta: { fileName: source.file_name, loadedAt: source.loaded_at || source.updated_at, source:'cloud-filtered', valid:true } }
 }
 
+/**
+ * iPhone fast path: QUALITY is filtered inside PostgreSQL, before any rows are
+ * transferred to Safari. Requires SPRINT_11_9_42_IPHONE_QUALITY_MONTH_RPC.sql.
+ */
+export async function loadCloudQualityMonth(month, onProgress) {
+  requireClient()
+  if (!/^\d{4}-\d{2}$/.test(String(month || ''))) throw new Error('Invalid quality month')
+
+  const [yearText, monthText] = String(month).split('-')
+  const year = Number(yearText), monthNumber = Number(monthText)
+  const nextYear = monthNumber === 12 ? year + 1 : year
+  const nextMonth = monthNumber === 12 ? 1 : monthNumber + 1
+  const fromDate = `${yearText}-${monthText}-01`
+  const toDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`
+
+  emit(onProgress, 'quality-month', 0, 1, `מבקש מהענן רק את איכות ${month}`)
+  const { data, error } = await supabase.rpc('iml_get_quality_month', {
+    p_from_date: fromDate,
+    p_to_date: toDate,
+  })
+  if (error) {
+    const message = String(error.message || error.details || error.hint || '')
+    if (/iml_get_quality_month|function.*does not exist|schema cache|PGRST202/i.test(message)) {
+      throw new Error('מסלול איכות מהיר לאייפון עדיין לא מותקן ב-Supabase. יש להריץ פעם אחת את SPRINT_11_9_42_IPHONE_QUALITY_MONTH_RPC.sql')
+    }
+    throw error
+  }
+
+  const rows = (data || []).map(item => item?.payload ?? item).filter(Boolean)
+  emit(onProgress, 'quality-month', 1, 1, `איכות ${month} ירדה מהענן — ${rows.length.toLocaleString()} רשומות`, { downloadedRows:rows.length })
+  return { rows, meta:{ source:'cloud-quality-month', valid:true, mobileMonth:month, visibleRows:rows.length } }
+}
+
 export async function loadAllCloudDatasets(onProgress) {
   const result = {}
   for (let index = 0; index < CLOUD_KINDS.length; index += 1) {

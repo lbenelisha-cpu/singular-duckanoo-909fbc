@@ -1017,7 +1017,8 @@ button,input,select,textarea{font:inherit}
   .mobile-station-summary{margin:9px}
 }
 
-/* Sprint 11.9.38 — iPhone cloud loading state */
+
+/* Sprint 11.9.42 — iPhone cloud loading state */
 .mobile-load-status{margin:10px 12px;padding:11px 13px;border-radius:14px;display:flex;flex-direction:column;gap:3px;text-align:right;font-size:13px}
 .mobile-load-status strong{font-size:14px}
 .mobile-load-status span{opacity:.78;font-size:12px}

@@ -4,7 +4,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, Archive, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
-import { loadCloudDatasetOnce, loadCloudDatasetMatching, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
+import { loadCloudDatasetOnce, loadCloudDatasetMatching, loadCloudQualityMonth, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.41'
-const BUILD_LABEL = 'Sprint 11.9.41 — iPhone Quality Date Parser Fix'
+const APP_VERSION = '11.9.42'
+const BUILD_LABEL = 'Sprint 11.9.42 — iPhone Server-side Quality Month'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1453,74 +1453,29 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
     let active = true
     const timer = setTimeout(async () => {
-      // iPhone keeps only one QUALITY month in memory.
-      // The month follows the selected end-date; if it is empty, use from/current month.
       const anchorDateText = to || from || iso(new Date())
       const anchorDate = new Date(`${anchorDateText}T12:00:00`)
-      const monthStart = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1)
-      const monthEnd = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 1)
       const mobileQualityMonth = `${anchorDate.getFullYear()}-${String(anchorDate.getMonth() + 1).padStart(2, '0')}`
 
       setMobileQualityReady(false)
       setMobileQualityRows(0)
       setMobileQualityLoading(true)
-      setStatus(`מסנכרן איכות לחודש ${mobileQualityMonth}...`)
+      setStatus(`מוריד איכות ${mobileQualityMonth} מהענן...`)
+
       try {
-        const dataset = await loadCloudDatasetMatching('quality', row => {
-          // iPhone must support both the new compact QUALITY rows and older/raw
-          // Excel-shaped rows already stored in the cloud. `new Date()` alone
-          // cannot reliably parse Excel serials or DD/MM/YYYY values.
-          let parsedDate = null
-
-          if (row?.__compactQuality && row?.date) {
-            parsedDate = row.date instanceof Date ? row.date : new Date(row.date)
-          } else {
-            parsedDate = combineExcelDateTime(
-              row?.date ?? getField(row, [
-                'Date',
-                'Sample Date',
-                'Sampling Date',
-                'Date of Sample',
-                'Date of Sampling',
-                'תאריך דגימה',
-                'Start Date of Inspection',
-                'Date of Lot Creation',
-                'Process Order Confirmed Release Date',
-                'End Date of Inspection',
-                'Inspection Lot UD Date',
-                'Process Order Delivered Date'
-              ]),
-              getField(row, [
-                'Sample Time',
-                'Sampling Time',
-                'Time of Sample',
-                'Time of Sampling',
-                'שעת דגימה',
-                'Inspection Time',
-                'Start Time of Inspection',
-                'Time'
-              ]),
-              getField(row, [
-                'Sample Date Time',
-                'Sampling Date Time',
-                'Sample Datetime',
-                'Sampling Datetime',
-                'תאריך ושעת דגימה'
-              ])
-            )
-          }
-
-          const rowMs = parsedDate?.getTime?.()
-          if (!Number.isFinite(rowMs)) return false
-          return rowMs >= monthStart.getTime() && rowMs < monthEnd.getTime()
+        const dataset = await loadCloudQualityMonth(mobileQualityMonth, progress => {
+          if (!active) return
+          setStatus(progress?.message || `מוריד איכות ${mobileQualityMonth}...`)
         })
-
         if (!active) return
+
         const rows = dataset?.rows || []
         setQuality(dedupeRows(
           rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row),
           qualityRowKey
         ))
+        setMobileQualityRows(rows.length)
+        setMobileQualityReady(rows.length > 0)
         setDataMeta(current => ({
           ...current,
           quality:{
@@ -1529,24 +1484,20 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             visibleRows:rows.length,
           }
         }))
-        setMobileQualityRows(rows.length)
-        setMobileQualityReady(rows.length > 0)
-        setStatus(
-          rows.length > 0
-            ? `איכות ${mobileQualityMonth} מסונכרנת — ${rows.length.toLocaleString()} רשומות`
-            : `הכמות נטענה, אך לא התקבלו רשומות איכות לחודש ${mobileQualityMonth}`
-        )
+        setStatus(rows.length > 0
+          ? `איכות ${mobileQualityMonth} ירדה — ${rows.length.toLocaleString()} רשומות`
+          : `הכמות ירדה, אך לא נמצאו רשומות איכות ב-${mobileQualityMonth}`)
       } catch (error) {
-        console.warn('Mobile monthly quality sync failed', error)
+        console.warn('Mobile server-side quality month sync failed', error)
         if (active) {
           setMobileQualityReady(false)
           setMobileQualityRows(0)
-          setStatus('נתוני הכמות ירדו, אבל סנכרון האיכות נכשל')
+          setStatus(String(error?.message || 'נתוני הכמות ירדו, אבל סנכרון האיכות נכשל'))
         }
       } finally {
         if (active) setMobileQualityLoading(false)
       }
-    }, 450)
+    }, 350)
 
     return () => {
       active = false
