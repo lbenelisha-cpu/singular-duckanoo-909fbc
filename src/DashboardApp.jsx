@@ -4,7 +4,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, Archive, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
-import { loadCloudDatasetOnce, loadCloudDatasetMatching, loadCloudQualityMonth, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
+import { loadCloudDatasetOnce, loadCloudDatasetMatching, loadCloudQualityMonth, getMobileQualityCacheMeta, rebuildMobileQualityCache, loadMobileQualityMonth, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
@@ -48,8 +48,8 @@ const DB_NAME = 'iml-control-center-db'
 const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
-const APP_VERSION = '11.9.42'
-const BUILD_LABEL = 'Sprint 11.9.42 — iPhone Server-side Quality Month'
+const APP_VERSION = '11.9.44'
+const BUILD_LABEL = 'Sprint 11.9.44 — iPhone Server-side Quality Month'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1449,6 +1449,40 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   }, [])
 
   useEffect(() => {
+    if (IS_MOBILE_DEVICE || !supabase || !quality.length) return
+    const versionId = dataMeta?.quality?.versionId
+    if (!versionId) return
+
+    let active = true
+    const timer = setTimeout(async () => {
+      try {
+        const cacheMeta = await getMobileQualityCacheMeta().catch(() => null)
+        if (String(cacheMeta?.version_id || '') === String(versionId)) return
+
+        // Only an admin is allowed to build the shared iPhone cache.
+        const { data: isAdmin, error: adminError } = await supabase.rpc('iml_is_admin')
+        if (adminError || !isAdmin || !active) return
+
+        setStatus('מכין נתוני איכות מהירים לאייפון...')
+        const result = await rebuildMobileQualityCache(quality, versionId, progress => {
+          if (!active) return
+          const pct = Number(progress?.percent || 0)
+          setStatus(`מכין איכות לאייפון... ${pct}%`)
+        })
+        if (active) setStatus(`איכות לאייפון מוכנה — ${Number(result?.rows || 0).toLocaleString()} רשומות · ${result?.months?.join(', ') || ''}`)
+      } catch (error) {
+        console.warn('Mobile QUALITY cache build failed', error)
+        if (active) setStatus(`הכנת איכות לאייפון נכשלה: ${error?.message || error}`)
+      }
+    }, 1800)
+
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [quality, dataMeta?.quality?.versionId])
+
+  useEffect(() => {
     if (!IS_MOBILE_DEVICE || !supabase) return
 
     let active = true
@@ -1463,7 +1497,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       setStatus(`מוריד איכות ${mobileQualityMonth} מהענן...`)
 
       try {
-        const dataset = await loadCloudQualityMonth(mobileQualityMonth, progress => {
+        const dataset = await loadMobileQualityMonth(mobileQualityMonth, progress => {
           if (!active) return
           setStatus(progress?.message || `מוריד איכות ${mobileQualityMonth}...`)
         })
@@ -2095,46 +2129,80 @@ material: normalize(getField(r, [
     const normalizedMaterial = normalize(material)
 
     if (IS_MOBILE_DEVICE) {
-      const existingBatchQuality = quality.filter(row => normalize(row?.batch || row?.Batch || row?.['Batch']) === normalizedBatch)
+      const matchBatchQuality = rows => rows.filter(row => {
+        const rowBatch = normalize(
+          row?.batch ??
+          row?.Batch ??
+          row?.['Batch'] ??
+          row?.['Batch Number'] ??
+          row?.['Batch No'] ??
+          row?.['מספר מנה'] ??
+          row?.['מנה'] ??
+          row?.['מספר אצווה']
+        )
+        const rowMaterial = normalize(
+          row?.material ??
+          row?.Material ??
+          row?.['Material'] ??
+          row?.['Material #'] ??
+          row?.['Material Number'] ??
+          row?.['Material No.'] ??
+          row?.['מקט'] ??
+          row?.['מק"ט'] ??
+          row?.['מק״ט']
+        )
+        if (rowBatch !== normalizedBatch) return false
+        return !normalizedMaterial || !rowMaterial || rowMaterial === normalizedMaterial
+      })
+
+      // First use QUALITY already downloaded for the selected month.
+      let existingBatchQuality = matchBatchQuality(quality)
+
       if (!existingBatchQuality.length) {
-        setMobileQualityLoading(true)
-        setStatus(`טוען תוצאות איכות למנה ${normalizedBatch}...`)
-        try {
-          const dataset = await loadCloudDatasetMatching('quality', row => {
-          const rowBatch = normalize(
-            row?.batch ??
-            row?.Batch ??
-            row?.['Batch'] ??
-            row?.['Batch Number'] ??
-            row?.['Batch No'] ??
-            row?.['מספר מנה'] ??
-            row?.['מנה'] ??
-            row?.['מספר אצווה']
-          )
-          const rowMaterial = normalize(
-            row?.material ??
-            row?.Material ??
-            row?.['Material'] ??
-            row?.['Material #'] ??
-            row?.['Material Number'] ??
-            row?.['Material No.'] ??
-            row?.['מקט'] ??
-            row?.['מק"ט'] ??
-            row?.['מק״ט']
-          )
-          if (rowBatch !== normalizedBatch) return false
-          return !normalizedMaterial || !rowMaterial || rowMaterial === normalizedMaterial
-        })
-        const rows = dataset?.rows || []
-        setQuality(dedupeRows(rows.map(row => row?.__compactQuality && row.date ? { ...row, date:new Date(row.date) } : row), qualityRowKey))
-        setDataMeta(current => ({ ...current, quality:normalizeDatasetMeta('quality', dataset?.meta || null) }))
-          setStatus(rows.length ? `נטענו ${rows.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}` : `לא נמצאו תוצאות איכות למנה ${normalizedBatch}`)
-        } catch (error) {
-          console.warn('Mobile batch quality load failed', error)
-          setStatus(`טעינת האיכות למנה ${normalizedBatch} נכשלה`)
-        } finally {
-          setMobileQualityLoading(false)
+        const prodRow = production.find(row =>
+          normalize(row?.batch) === normalizedBatch &&
+          (!normalizedMaterial || normalize(row?.material) === normalizedMaterial)
+        )
+        const rawDate = prodRow?.finishDate || prodRow?.date
+        const prodDate = rawDate ? new Date(rawDate) : null
+        const batchMonth = prodDate && Number.isFinite(prodDate.getTime())
+          ? `${prodDate.getFullYear()}-${String(prodDate.getMonth() + 1).padStart(2, '0')}`
+          : (dataMeta?.quality?.mobileMonth || '')
+
+        if (batchMonth && batchMonth !== dataMeta?.quality?.mobileMonth) {
+          setMobileQualityLoading(true)
+          setStatus(`טוען איכות ${batchMonth} למנה ${normalizedBatch}...`)
+          try {
+            const dataset = await loadMobileQualityMonth(batchMonth, progress => {
+              const downloaded = Number(progress?.downloadedRows || 0)
+              if (downloaded > 0) setStatus(`טוען איכות ${batchMonth}... ${downloaded.toLocaleString()} רשומות`)
+            })
+            const monthRows = dedupeRows(
+              (dataset?.rows || []).map(row => row?.date ? { ...row, date:new Date(row.date) } : row),
+              qualityRowKey
+            )
+            existingBatchQuality = matchBatchQuality(monthRows)
+
+            // Merge the extra month instead of replacing the month already in memory.
+            if (monthRows.length) {
+              setQuality(current => dedupeRows([...current, ...monthRows], qualityRowKey))
+            }
+            setStatus(
+              existingBatchQuality.length
+                ? `נטענו ${existingBatchQuality.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}`
+                : `לא נמצאו תוצאות איכות למנה ${normalizedBatch}`
+            )
+          } catch (error) {
+            console.warn('Mobile batch quality cache load failed', error)
+            setStatus(`טעינת האיכות למנה ${normalizedBatch} נכשלה: ${error?.message || error}`)
+          } finally {
+            setMobileQualityLoading(false)
+          }
+        } else {
+          setStatus(`לא נמצאו תוצאות איכות למנה ${normalizedBatch} בחודש שנטען`)
         }
+      } else {
+        setStatus(`נמצאו ${existingBatchQuality.length.toLocaleString()} תוצאות איכות למנה ${normalizedBatch}`)
       }
     }
 

@@ -416,6 +416,148 @@ export async function loadCloudQualityMonth(month, onProgress) {
   return { rows, meta:{ source:'cloud-quality-month', valid:true, mobileMonth:month, visibleRows:rows.length } }
 }
 
+
+// Sprint 11.9.43 — true monthly QUALITY cache for iPhone.
+// Unlike loadCloudDatasetMatching(), this table is already partitioned by month,
+// so iPhone never scans the full QUALITY dataset.
+const MOBILE_QUALITY_ROWS_PER_CHUNK = 750
+
+export async function getMobileQualityCacheMeta() {
+  requireClient()
+  const { data, error } = await supabase
+    .from('iml_mobile_quality_cache_meta')
+    .select('version_id,months,row_count,updated_at')
+    .eq('id', 1)
+    .maybeSingle()
+  if (error) throw error
+  return data || null
+}
+
+export async function rebuildMobileQualityCache(rows, versionId, onProgress) {
+  requireClient()
+  if (!Array.isArray(rows) || !rows.length || !versionId) return { rows:0, months:[] }
+
+  const dated = []
+  let maxMs = 0
+  for (const row of rows) {
+    const raw = row?.date
+    const d = raw instanceof Date ? raw : new Date(raw)
+    const ms = d?.getTime?.()
+    if (!Number.isFinite(ms)) continue
+    if (ms > maxMs) maxMs = ms
+    dated.push({ row, d, ms })
+  }
+  if (!dated.length || !maxMs) return { rows:0, months:[] }
+
+  // iPhone is intentionally a lightweight view. Keep the latest 3 QUALITY months
+  // available in the dedicated cache; older history stays available on desktop.
+  const latest = new Date(maxMs)
+  const wantedMonths = []
+  for (let offset = 0; offset < 3; offset += 1) {
+    const d = new Date(latest.getFullYear(), latest.getMonth() - offset, 1)
+    wantedMonths.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`)
+  }
+  const wanted = new Set(wantedMonths)
+
+  const byMonth = new Map(wantedMonths.map(month => [month, []]))
+  for (const { row, d } of dated) {
+    const month = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
+    if (!wanted.has(month)) continue
+    const serialized = { ...row, date: d.toISOString() }
+    byMonth.get(month).push(serialized)
+  }
+
+  const { error: resetError } = await supabase.rpc('iml_reset_mobile_quality_cache', {
+    p_version_id: versionId,
+    p_months: wantedMonths,
+  })
+  if (resetError) throw resetError
+
+  const chunks = []
+  for (const month of wantedMonths) {
+    const monthRows = byMonth.get(month) || []
+    for (let i = 0; i < monthRows.length; i += MOBILE_QUALITY_ROWS_PER_CHUNK) {
+      chunks.push({
+        month_key: month,
+        cache_version_id: versionId,
+        chunk_index: Math.floor(i / MOBILE_QUALITY_ROWS_PER_CHUNK),
+        payload: monthRows.slice(i, i + MOBILE_QUALITY_ROWS_PER_CHUNK),
+        row_count: Math.min(MOBILE_QUALITY_ROWS_PER_CHUNK, monthRows.length - i),
+      })
+    }
+  }
+
+  let done = 0
+  for (let i = 0; i < chunks.length; i += 3) {
+    const batch = chunks.slice(i, i + 3)
+    const { error } = await supabase
+      .from('iml_mobile_quality_chunks')
+      .upsert(batch, { onConflict:'month_key,cache_version_id,chunk_index' })
+    if (error) throw error
+    done += batch.length
+    emit(onProgress, 'mobile-quality-cache', done, chunks.length || 1, 'מכין איכות מהירה לאייפון')
+    await sleep(20)
+  }
+
+  const totalRows = wantedMonths.reduce((sum, month) => sum + (byMonth.get(month)?.length || 0), 0)
+  const { error: completeError } = await supabase.rpc('iml_complete_mobile_quality_cache', {
+    p_version_id: versionId,
+    p_months: wantedMonths,
+    p_row_count: totalRows,
+  })
+  if (completeError) throw completeError
+
+  return { rows:totalRows, months:wantedMonths }
+}
+
+export async function loadMobileQualityMonth(month, onProgress) {
+  requireClient()
+  const meta = await getMobileQualityCacheMeta()
+  if (!meta?.version_id) {
+    throw new Error('מטמון האיכות לאייפון עדיין לא הוכן. יש לפתוח את IML CONTROL פעם אחת במחשב מנהל לאחר התקנת עדכון 11.9.43.')
+  }
+  const available = Array.isArray(meta.months) ? meta.months : []
+  if (!available.includes(month)) {
+    return { rows:[], meta:{ source:'mobile-quality-cache', valid:true, mobileMonth:month, availableMonths:available, cacheVersionId:meta.version_id } }
+  }
+
+  const rows = []
+  let from = 0
+  const pageSize = 20
+  while (true) {
+    const { data, error } = await supabase
+      .from('iml_mobile_quality_chunks')
+      .select('chunk_index,payload,row_count')
+      .eq('cache_version_id', meta.version_id)
+      .eq('month_key', month)
+      .order('chunk_index', { ascending:true })
+      .range(from, from + pageSize - 1)
+    if (error) throw error
+    const page = data || []
+    for (const chunk of page) {
+      if (Array.isArray(chunk.payload)) rows.push(...chunk.payload)
+    }
+    emit(onProgress, 'mobile-quality-month', rows.length, Math.max(Number(meta.row_count || rows.length), 1), `מוריד איכות ${month} לאייפון`, { downloadedRows:rows.length })
+    if (page.length < pageSize) break
+    from += pageSize
+    await sleep(25)
+  }
+
+  return {
+    rows,
+    meta:{
+      source:'mobile-quality-cache',
+      valid:true,
+      mobileMonth:month,
+      visibleRows:rows.length,
+      availableMonths:available,
+      cacheVersionId:meta.version_id,
+      loadedAt:meta.updated_at,
+    }
+  }
+}
+
+
 export async function loadAllCloudDatasets(onProgress) {
   const result = {}
   for (let index = 0; index < CLOUD_KINDS.length; index += 1) {
