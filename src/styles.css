@@ -1124,3 +1124,71 @@ button,input,select,textarea{font:inherit}
   .batch-quality-mobile-landscape .batch-quality-table th:nth-child(8),
   .batch-quality-mobile-landscape .batch-quality-table td:nth-child(8) { white-space: normal !important; min-width: 150px !important; }
 }
+
+/* Sprint 11.9.5 — Facility 42 overview balance: prevent value clipping in dense/monthly view */
+.facility42-overview-balance{
+  padding-left:12px!important;
+  padding-right:12px!important;
+}
+.facility42-overview-balance .tower-facility-head{
+  gap:5px;
+}
+.facility42-overview-balance .tower-facility-head>div{
+  min-width:0;
+  gap:6px;
+}
+.facility42-overview-balance .tower-facility-head strong{
+  font-size:clamp(19px,1.15vw,25px)!important;
+  white-space:normal;
+  line-height:1.08;
+}
+.facility42-overview-main{
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:6px;
+}
+.facility42-overview-main>div{
+  min-width:0;
+  padding:9px 4px;
+}
+.facility42-overview-main span{
+  font-size:11px;
+  white-space:normal;
+  line-height:1.2;
+}
+.facility42-overview-main b{
+  font-size:clamp(17px,1.1vw,21px)!important;
+  white-space:nowrap;
+  line-height:1.1;
+  letter-spacing:-.01em!important;
+}
+.facility42-overview-lines{
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:5px;
+}
+.facility42-overview-lines span{
+  min-width:0;
+  padding:7px 2px;
+}
+.facility42-overview-lines b{
+  font-size:clamp(13px,.82vw,15px)!important;
+  white-space:nowrap;
+  letter-spacing:-.01em!important;
+}
+.facility42-overview-balance dl div{
+  gap:8px;
+  align-items:center;
+}
+.facility42-overview-balance dt{
+  min-width:0;
+  line-height:1.15;
+}
+.facility42-overview-balance dd{
+  flex:0 0 auto;
+  font-size:clamp(14px,.95vw,16px)!important;
+  white-space:nowrap;
+}
+@media(max-width:1200px){
+  .facility42-overview-balance{padding-left:10px!important;padding-right:10px!important}
+  .facility42-overview-main b{font-size:17px!important}
+  .facility42-overview-lines b{font-size:13px!important}
+}
