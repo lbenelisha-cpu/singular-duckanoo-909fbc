@@ -2819,6 +2819,19 @@ material: normalize(getField(r, [
       const actual=num(current?.actual)
       return {key,month:mm,current:actual,previous:prev,delta:actual-prev,pct:prev?(actual-prev)/prev*100:0,previousPlan:prevPlan}
     })
+    const annualRows=[2024,2025,2026].map(year=>{
+      const months=selectedMonthNums.length?selectedMonthNums:Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0'))
+      let plan=0, historicalActual=0
+      months.forEach(mm=>uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(`${year}-${mm}`,facility); plan+=num(rec.plan); historicalActual+=num(rec.actual)}))
+      const liveActual=dashboardProd.filter(row=>{
+        const day=row.productionDay||iso(row.date); if(!day||Number(day.slice(0,4))!==year||!months.includes(day.slice(5,7))) return false
+        const logical=managementFacilityId(row.facility); return !uniqueLogical.length||uniqueLogical.includes(logical)
+      }).reduce((sum,row)=>sum+num(row.qty),0)
+      const actual=liveActual>0?liveActual:historicalActual
+      const costRows=uniqueLogical.length===1&&uniqueLogical[0]==='42'?months.map(mm=>MANAGEMENT_HISTORY.contractor42?.[`${year}-${mm}`]).filter(Boolean):[]
+      const cost=costRows.reduce((sum,row)=>sum+num(row.cost),0), packaged=costRows.reduce((sum,row)=>sum+num(row.packaged),0)
+      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:packaged?cost/packaged:0,source:liveActual>0?'IML':'Historical'}
+    })
     const facilityRows=[...facilityMap.values()].sort((a,b)=>b.qty-a.qty)
     const topMaterials=[...materialMap.values()].sort((a,b)=>b.qty-a.qty).slice(0,8)
     // RFT is calculated at Inspection-Lot level from the decision/deviation dataset,
@@ -2851,7 +2864,7 @@ material: normalize(getField(r, [
     if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`₪${fmt(contractorCost)} על ${fmt(contractorPackaged)} ליטר/יחידות מדווחות. מקור: חשבונות קבלן מתקן 42.`})
     else if (uniqueLogical.includes('42')) insights.push({state:'warning',title:'אין עלות קבלן בתקופה',text:`נתוני הקבלן שהועלו זמינים עד ${MANAGEMENT_HISTORY.meta?.contractor2026Through || 'החודש האחרון בקובץ'}.`})
     if (!hasReliableRft && qualityLots.size) insights.push({state:'warning',title:'RFT ממתין למקור מאומת',text:`קיימים ${qualityLots.size.toLocaleString()} לוטים/רשומות איכות עם החלטות או חריגות, אך אין מכנה מלא ואמין לחישוב RFT.`})
-    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
+    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
   }, [filtered, dashboardProd, filteredQualityRows, filteredDeviationRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast])
 
   const setManagementPeriodPreset = preset => {
@@ -4069,6 +4082,7 @@ material: normalize(getField(r, [
             <article className="management-panel"><h3>תפוקה לפי מתקן ניהולי</h3>{managementSummary.facilityRows.slice(0,10).map(row=><div className="management-rank-row" key={row.facility}><span><b>מתקן {row.facility}</b><small>{row.records.toLocaleString()} רשומות</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.facilityRows.length&&<p className="empty">אין נתוני תפוקה בטווח.</p>}</article>
             <article className="management-panel"><h3>מוצרים מובילים</h3>{managementSummary.topMaterials.map((row,i)=><div className="management-rank-row management-material-row" key={`${row.material}-${i}`}><span><b>#{i+1} · {row.desc || row.material}</b><small>{row.material}</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}</article>
           </div>
+          <article className="management-panel management-wide-panel management-annual-panel"><h3>מגמה רב־שנתית 2024–2026</h3><p className="management-explain">אותם חודשי בחירה מושווים בין שלוש השנים. ביצוע חי מ-IML מקבל עדיפות; כשאינו טעון נעשה שימוש בהיסטוריה.</p><div className="management-annual-grid">{managementSummary.annualRows.map(row=><div className="management-annual-card" key={row.year}><div><strong>{row.year}</strong><small>{row.source==='IML'?'ביצוע IML':'היסטוריה'}</small></div><b>{fmt(row.actual)}</b><span>תכנון {fmt(row.plan)}</span><em className={row.pct>=100?'good':row.pct>=90?'warning':'risk'}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</em>{row.costPerUnit>0&&<small>עלות/ליטר ₪{row.costPerUnit.toFixed(3)}</small>}</div>)}</div></article>
           <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע של השנה הנוכחית והקודמת נלקח מנתוני IML כאשר הם טעונים; אחרת נעשה שימוש ב-Plan Vs Actual ההיסטורי.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{fmt(row.previous)}</td><td className={row.delta>=0?'positive-text':'negative-text'}>{row.delta>=0?'+':''}{fmt(row.delta)}</td><td><span className={`management-pct-chip ${row.pct>=0?'good':'warning'}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
         </>}
         {managementView==='plan' && <>

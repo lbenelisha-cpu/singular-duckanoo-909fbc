@@ -1221,3 +1221,9 @@ button,input,select,textarea{font:inherit}
 @media(max-width:900px){.management-kpi-grid-six{grid-template-columns:repeat(2,minmax(0,1fr))}.management-cost-strip{grid-template-columns:1fr}.management-view-tabs{width:100%}.management-view-tabs button{flex:1}}
 @media(max-width:620px){.management-kpi-grid-six{grid-template-columns:1fr}.management-month-col{min-width:50px}.management-summary-badge{font-size:12px}}
 .management-line-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:14px}.management-line-card{display:grid;gap:6px;padding:16px;border:1px solid #dbe7ed;border-radius:16px;background:#f7fafb}.management-line-card b{font-size:17px}.management-line-card span{color:#6b7d8f}.management-line-card strong{font-size:22px;color:#0f7f76}
+
+/* Sprint 11.17.0 — management multi-year comparison */
+.management-annual-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:18px}
+.management-annual-card{border:1px solid #d8e5ec;border-radius:22px;padding:20px;background:linear-gradient(145deg,#fff,#f6fbfd);display:grid;gap:9px;box-shadow:0 10px 28px rgba(20,62,84,.06)}
+.management-annual-card>div{display:flex;align-items:center;justify-content:space-between;gap:12px}.management-annual-card>div strong{font-size:24px;color:#15344b}.management-annual-card>div small,.management-annual-card>span,.management-annual-card>small{color:#71869a}.management-annual-card>b{font-size:31px;color:#0d7c78}.management-annual-card>em{font-style:normal;font-weight:800;width:max-content;padding:5px 11px;border-radius:999px}.management-annual-card>em.good{background:#e7f7f1;color:#087b65}.management-annual-card>em.warning{background:#fff5dc;color:#a46b00}.management-annual-card>em.risk{background:#fde9e7;color:#bd3e35}
+@media(max-width:900px){.management-annual-grid{grid-template-columns:1fr}.management-annual-card{padding:16px}}

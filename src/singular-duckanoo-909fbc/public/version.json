@@ -1,5 +1,6 @@
 {
-  "version": "11.16.0",
-  "build": "management-card-standard-style-last-period-presets",
-  "date": "2026-08-30"
+  "version": "11.17.0",
+  "build": "management-annual-trend",
+  "date": "2026-08-30",
+  "updated": "2026-08-30T23:33:00+03:00"
 }
