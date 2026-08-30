@@ -50,7 +50,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.11.0 — Historical Management BI'
+const BUILD_LABEL = 'Sprint 11.16.0 — Management Summary Navigation + Period Presets'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -2854,6 +2854,25 @@ material: normalize(getField(r, [
     return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
   }, [filtered, dashboardProd, filteredQualityRows, filteredDeviationRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast])
 
+  const setManagementPeriodPreset = preset => {
+    const anchorText = to || dateBounds.max || iso(new Date())
+    const anchor = new Date(`${anchorText}T12:00:00`)
+    if (Number.isNaN(anchor.getTime())) return
+    let start = new Date(anchor)
+    let end = new Date(anchor)
+    if (preset === 'month') {
+      start = new Date(anchor.getFullYear(), anchor.getMonth(), 1, 12)
+    } else if (preset === 'previous-month') {
+      start = new Date(anchor.getFullYear(), anchor.getMonth()-1, 1, 12)
+      end = new Date(anchor.getFullYear(), anchor.getMonth(), 0, 12)
+    } else if (preset === 'two-months') {
+      start = new Date(anchor.getFullYear(), anchor.getMonth()-1, 1, 12)
+    } else if (preset === 'ytd') {
+      start = new Date(anchor.getFullYear(), 0, 1, 12)
+    }
+    setFrom(iso(start)); setTo(iso(end)); setPeriodYear(''); setPeriodQuarter('')
+  }
+
   const managerInsights = useMemo(() => {
     const insights = []
     const highestRisk = planningRows.filter(r => r.state === 'risk').sort((a,b) => (b.requiredDaily - b.provenMax) - (a.requiredDaily - a.provenMax))[0]
@@ -3719,9 +3738,9 @@ material: normalize(getField(r, [
         <button className="home-nav-card teal" onClick={()=>openHomeArea('production')}><div className="home-nav-icon"><BarChart3/></div><h2>סקירת מתקנים</h2><p>סקירה כוללת של כל המתקנים, ביצועים מול יעדים ותחזית חודשית</p><span>כניסה לאזור <ChevronLeft/></span></button>
         <button className="home-nav-card green" onClick={()=>openHomeArea('daily')}><div className="home-nav-icon"><ClipboardList/></div><h2>ניהול יומי</h2><p>ניהול ותפעול יומי של מתקנים, קווים, תקלות והערות</p><span>כניסה לאזור <ChevronLeft/></span></button>
         <button className="home-nav-card purple" onClick={()=>openHomeArea('planning')}><div className="home-nav-icon"><Factory/></div><h2>תחזית חודשית לפי מתקן</h2><p>תחזית ביצועים חודשית לפי מתקן עם ניתוח קצבים ועמידה ביעדים</p><span>כניסה לאזור <ChevronLeft/></span></button>
-        <button className="home-nav-card management-summary-card" onClick={()=>openHomeArea('management-summary')}><div className="home-nav-icon"><TrendingUp/></div><h2>תקציר מנהלים</h2><p>תפוקה, תכנון מול ביצוע, איכות, מגמות ותובנות לתקופה שנבחרה</p><span>כניסה לתקציר <ChevronLeft/></span></button>
         <button className="home-nav-card orange" onClick={()=>openHomeArea('quality')}><div className="home-nav-icon"><FlaskConical/></div><h2>איכות</h2><p>סקירת איכות, מנות חריגות, תוצאות מעבדה וכרטיסי מנה</p><span>כניסה לאזור <ChevronLeft/></span></button>
         <button className="home-nav-card blue" onClick={()=>openHomeArea('recent')}><div className="home-nav-icon"><ClipboardList/></div><h2>רשומות תפוקה אחרונות</h2><p>רשומות התפוקה האחרונות ומעקב אחר המנות והחומרים שיוצרו</p><span>כניסה לאזור <ChevronLeft/></span></button>
+        <button className="home-nav-card management-summary-card" onClick={()=>openHomeArea('management-summary')}><div className="home-nav-icon"><TrendingUp/></div><h2>תקציר מנהלים</h2><p>תפוקה, תכנון מול ביצוע, איכות, מגמות ותובנות לתקופה שנבחרה</p><span>כניסה לאזור <ChevronLeft/></span></button>
       </section>
       <section className="command-home-bottom">
         <article className="home-attention"><div className="home-bottom-title"><BellRing/><h3>דורש תשומת לב</h3></div>{openDeviations.length ? <div className="home-alert-row"><AlertTriangle/><b>{openDeviations.length} מנות חריגות פתוחות</b><span>מומלץ לעבור למסך האיכות לבדיקה</span><button onClick={()=>openHomeArea('quality')}>לצפייה <ChevronLeft/></button></div> : <div className="home-ok"><CheckCircle2/> אין כרגע חריגות פתוחות בטווח שנבחר</div>}</article>
@@ -4031,6 +4050,7 @@ material: normalize(getField(r, [
           <button className={managementView==='costs'?'active':''} onClick={()=>setManagementView('costs')}>עלויות ויעילות</button>
           <button className={managementView==='quality'?'active':''} onClick={()=>setManagementView('quality')}>איכות ומגמות</button>
         </div>
+        <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
         <div className="management-kpi-grid management-kpi-grid-six">
           <article><span>תפוקה בפועל IML</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
           <article><span>ממוצע ליום</span><b>{fmt(managementSummary.avgDaily)}</b><small>שיא {fmt(managementSummary.peakDaily)}</small></article>
