@@ -5,6 +5,34 @@ const monthDate = value => { const key=monthKey(value); return key ? `${key}-01`
 const normalizePlanRow = row => ({ month:monthKey(row.month), facility:String(row.facility||''), plan:Number(row.plan||0), source_actual:Number(row.source_actual||0), groups:row.groups||{}, source_label:row.source_label||'' })
 const normalizeCostRow = row => ({ month:monthKey(row.month), facility:String(row.facility||'42'), packaged:Number(row.packaged||0), cost:Number(row.cost||0), cost_per_unit:Number(row.cost_per_unit||0), lines:row.lines||{}, shift_qty:Array.isArray(row.shift_qty)?row.shift_qty:[], shift_cost:Array.isArray(row.shift_cost)?row.shift_cost:[], source_label:row.source_label||'' })
 
+const uniquePayload = rows => {
+  const seen=new Map()
+  ;(rows||[]).forEach(r=>{
+    const key=`${monthKey(r.month)}|${String(r.facility||'')}`
+    if(!monthKey(r.month)||!String(r.facility||'')) return
+    seen.set(key,r)
+  })
+  return [...seen.values()]
+}
+
+async function classifyExisting(table, rows){
+  const normalized=uniquePayload(rows)
+  const months=[...new Set(normalized.map(r=>monthDate(r.month)).filter(Boolean))]
+  if(!months.length) return {created:normalized.length,updated:0,existingKeys:new Set()}
+  const {data,error}=await supabase.from(table).select('month,facility').in('month',months)
+  if(error) throw error
+  const existingKeys=new Set((data||[]).map(r=>`${monthKey(r.month)}|${String(r.facility||'')}`))
+  let created=0,updated=0
+  normalized.forEach(r=>{ const k=`${monthKey(r.month)}|${String(r.facility||'')}`; existingKeys.has(k)?updated++:created++ })
+  return {created,updated,existingKeys}
+}
+
+export async function inspectManagementRows(kind, rows){
+  if(!supabase) throw new Error('Supabase אינו מחובר')
+  const table=kind==='contractor'?'iml_management_contractor_costs':'iml_management_plan_actual'
+  return classifyExisting(table,rows)
+}
+
 export async function loadManagementHistoryFromCloud(fallbackHistory) {
   if (!supabase) return { history:fallbackHistory, source:'embedded', error:null }
   try {
@@ -36,18 +64,25 @@ export async function getManagementCloudStatus(){
 
 export async function upsertManagementPlanRows(rows){
   if(!supabase) throw new Error('Supabase אינו מחובר')
-  const payload=(rows||[]).map(normalizePlanRow).filter(r=>r.month&&r.facility).map(r=>({...r,month:monthDate(r.month)}))
+  const normalized=uniquePayload((rows||[]).map(normalizePlanRow).filter(r=>r.month&&r.facility))
+  const payload=normalized.map(r=>({...r,month:monthDate(r.month)}))
   if(!payload.length) throw new Error('לא נמצאו רשומות Plan Vs Actual תקינות')
+  const stats=await classifyExisting('iml_management_plan_actual',normalized)
   const {error}=await supabase.from('iml_management_plan_actual').upsert(payload,{onConflict:'month,facility'})
-  if(error)throw error; return payload.length
+  if(error)throw error
+  return {written:payload.length,created:stats.created,updated:stats.updated}
 }
 export async function upsertManagementContractorRows(rows){
   if(!supabase) throw new Error('Supabase אינו מחובר')
-  const payload=(rows||[]).map(normalizeCostRow).filter(r=>r.month&&r.facility).map(r=>({...r,month:monthDate(r.month)}))
+  const normalized=uniquePayload((rows||[]).map(normalizeCostRow).filter(r=>r.month&&r.facility))
+  const payload=normalized.map(r=>({...r,month:monthDate(r.month)}))
   if(!payload.length) throw new Error('לא נמצאו רשומות עלות קבלן תקינות')
+  const stats=await classifyExisting('iml_management_contractor_costs',normalized)
   const {error}=await supabase.from('iml_management_contractor_costs').upsert(payload,{onConflict:'month,facility'})
-  if(error)throw error; return payload.length
+  if(error)throw error
+  return {written:payload.length,created:stats.created,updated:stats.updated}
 }
+
 
 
 export async function getManagementUploadHistory(limit=30){

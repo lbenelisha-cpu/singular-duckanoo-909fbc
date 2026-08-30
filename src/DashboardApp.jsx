@@ -10,7 +10,7 @@ import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
-import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
+import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, inspectManagementRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
 import * as XLSXCore from 'xlsx'
 import './styles.css'
 
@@ -2929,13 +2929,21 @@ material: normalize(getField(r, [
           const rows=await parseManagementWorkbook(file,kind)
           if(!rows.length) throw new Error('לא זוהו רשומות חודש/מתקן תקינות')
           const periods=[...new Set(rows.map(r=>`${r.month}|${r.facility}`))]
-          const count=kind==='plan'?await upsertManagementPlanRows(rows):await upsertManagementContractorRows(rows)
-          totalRows+=count; ok++; updated+=count
-          try{await logManagementUpload({file_name:file.name,data_kind:kind,status:'success',rows_written:count,periods})}catch{}
+          const preview=await inspectManagementRows(kind,rows)
+          if(preview.updated>0){
+            const proceed=window.confirm(`${file.name}\n\nזוהו ${preview.updated} רשומות קיימות שיעודכנו ו-${preview.created} רשומות חדשות.\nהעדכון יחליף את הרשומה הקיימת לפי חודש + מתקן ולא ייצור כפילות.\n\nלהמשיך?`)
+            if(!proceed){
+              try{await logManagementUpload({file_name:file.name,data_kind:kind,status:'cancelled',rows_written:0,periods,error_message:'בוטל על ידי המשתמש לאחר בדיקת כפילויות'})}catch{}
+              continue
+            }
+          }
+          const result=kind==='plan'?await upsertManagementPlanRows(rows):await upsertManagementContractorRows(rows)
+          totalRows+=result.written; ok++; updated+=result.updated; created+=result.created
+          try{await logManagementUpload({file_name:file.name,data_kind:kind,status:'success',rows_written:result.written,periods})}catch{}
         }catch(error){failed++; errors.push(`${file.name}: ${error?.message||error}`); try{await logManagementUpload({file_name:file.name,data_kind:kind,status:'error',rows_written:0,periods:[],error_message:error?.message||String(error)})}catch{}}
       }
       await refreshManagementHistory()
-      setManagementUploadMessage(`הטעינה הסתיימה · ${ok} קבצים נקלטו · ${failed} נכשלו · ${totalRows} רשומות נשמרו${errors.length?` · ${errors.slice(0,2).join(' | ')}`:''}`)
+      setManagementUploadMessage(`הטעינה הסתיימה · ${ok} קבצים נקלטו · ${failed} נכשלו · ${totalRows} רשומות נשמרו · ${updated} עודכנו · ${created} חדשות${errors.length?` · ${errors.slice(0,2).join(' | ')}`:''}`)
     } finally { setManagementUploadBusy(false); setManagementUploadProgress(null) }
   }
 
