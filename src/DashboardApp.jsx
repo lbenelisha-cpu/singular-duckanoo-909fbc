@@ -10,7 +10,7 @@ import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
-import { loadManagementHistoryFromCloud } from './data/managementHistoryCloud'
+import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows } from './data/managementHistoryCloud'
 import * as XLSXCore from 'xlsx'
 import './styles.css'
 
@@ -51,7 +51,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.16.0 — Management Summary Navigation + Period Presets'
+const BUILD_LABEL = 'Sprint 11.19.0 — Management Cloud Data Center'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1027,6 +1027,16 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [managementHistory, setManagementHistory] = useState(EMBEDDED_MANAGEMENT_HISTORY)
   const [managementHistorySource, setManagementHistorySource] = useState('embedded')
   const [managementHistoryError, setManagementHistoryError] = useState('')
+  const [managementCloudStatus, setManagementCloudStatus] = useState({planRows:0,contractorRows:0,lastUpdated:'',error:''})
+  const [managementUploadBusy, setManagementUploadBusy] = useState(false)
+  const [managementUploadMessage, setManagementUploadMessage] = useState('')
+  const refreshManagementHistory = async () => {
+    const result = await loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY)
+    setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
+    setManagementHistorySource(result.source || 'embedded')
+    setManagementHistoryError(result.error || '')
+    setManagementCloudStatus(await getManagementCloudStatus())
+  }
   useEffect(() => {
     let cancelled = false
     loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY).then(result => {
@@ -1034,6 +1044,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
       setManagementHistorySource(result.source || 'embedded')
       setManagementHistoryError(result.error || '')
+      getManagementCloudStatus().then(setManagementCloudStatus)
     })
     return () => { cancelled = true }
   }, [])
@@ -2881,6 +2892,40 @@ material: normalize(getField(r, [
     return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
   }, [filtered, dashboardProd, filteredQualityRows, filteredDeviationRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast, managementHistory])
 
+  const parseManagementWorkbook = async (file, kind) => {
+    const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type:'array', cellDates:true })
+    const rows=[]
+    const keyOf=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ')
+    const val=(obj,names)=>{const entries=Object.entries(obj||{});for(const name of names){const hit=entries.find(([k])=>keyOf(k).includes(keyOf(name)));if(hit&&hit[1]!==''&&hit[1]!=null)return hit[1]}return ''}
+    const toMonth=v=>{if(v instanceof Date&&!Number.isNaN(v.getTime()))return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}`;const t=String(v||'');const m=t.match(/(20\d{2})[-/.](\d{1,2})/);return m?`${m[1]}-${String(m[2]).padStart(2,'0')}`:''}
+    wb.SheetNames.forEach(sheetName=>{
+      const dataRows=XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{defval:''})
+      dataRows.forEach(r=>{
+        const month=toMonth(val(r,['month','חודש','תאריך'])) || toMonth(sheetName)
+        if(kind==='plan'){
+          const facility=String(val(r,['facility','מתקן','תחנה'])||'').replace(/[^0-9]/g,'').replace(/^15(?=\d{2}$)/,'').replace(/^11(?=\d{2}$)/,'')
+          const plan=num(val(r,['plan','fms','תכנון'])); const actual=num(val(r,['actual','ביצוע']))
+          if(month&&facility&&(plan||actual)) rows.push({month,facility,plan,source_actual:actual,groups:{},source_label:file.name})
+        } else {
+          const packaged=num(val(r,['packaged','תוצרת','כמות','ליטר'])); const cost=num(val(r,['cost','תשלום','עלות','סהכ']))
+          if(month&&(packaged||cost)) rows.push({month,facility:'42',packaged,cost,cost_per_unit:packaged?cost/packaged:0,lines:{},shift_qty:[],shift_cost:[],source_label:file.name})
+        }
+      })
+    })
+    const merged=new Map(); rows.forEach(r=>{const k=`${r.month}|${r.facility}`;const prev=merged.get(k);if(!prev)merged.set(k,r);else if(kind==='plan'){prev.plan+=r.plan;prev.source_actual+=r.source_actual}else{prev.packaged+=r.packaged;prev.cost+=r.cost;prev.cost_per_unit=prev.packaged?prev.cost/prev.packaged:0}})
+    return [...merged.values()]
+  }
+  const handleManagementUpload = async (files, kind) => {
+    const file=files?.[0]; if(!file)return
+    setManagementUploadBusy(true); setManagementUploadMessage(`בודק ${file.name}...`)
+    try{
+      const rows=await parseManagementWorkbook(file,kind)
+      if(!rows.length) throw new Error('לא זוהו שורות חודש/מתקן עם נתוני תכנון או עלות. בדוק כותרות בקובץ.')
+      const count=kind==='plan'?await upsertManagementPlanRows(rows):await upsertManagementContractorRows(rows)
+      await refreshManagementHistory(); setManagementUploadMessage(`נשמרו ${count} רשומות ב-Supabase · ${file.name}`)
+    }catch(error){setManagementUploadMessage(`שגיאה: ${error?.message||error}`)}finally{setManagementUploadBusy(false)}
+  }
+
   const setManagementPeriodPreset = preset => {
     const anchorText = to || dateBounds.max || iso(new Date())
     const anchor = new Date(`${anchorText}T12:00:00`)
@@ -4078,6 +4123,7 @@ material: normalize(getField(r, [
           <button className={managementView==='quality'?'active':''} onClick={()=>setManagementView('quality')}>איכות ומגמות</button>
         </div>
         <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
+        {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>Excel חודשי / היסטורי</small></span><input type="file" accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>Excel תוצרת ועלויות מתקן 42</small></span><input type="file" accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
         <div className="management-kpi-grid management-kpi-grid-six">
           <article><span>תפוקה בפועל IML</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
           <article><span>ממוצע ליום</span><b>{fmt(managementSummary.avgDaily)}</b><small>שיא {fmt(managementSummary.peakDaily)}</small></article>
