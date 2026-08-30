@@ -1236,4 +1236,14 @@ button,input,select,textarea{font:inherit}
 @media(max-width:800px){.management-cloud-stats,.management-upload-actions{grid-template-columns:1fr}}
 
 
-.management-batch-progress{margin-top:12px;display:flex;gap:12px;align-items:center;padding:11px 14px;border-radius:12px;background:#eaf5fb;color:#173f55}.management-batch-progress b{min-width:52px}.management-upload-history{margin-top:18px}.management-upload-history h4{margin:0 0 10px}.management-upload-history table{width:100%;border-collapse:collapse;background:#fff}.management-upload-history th,.management-upload-history td{padding:10px 12px;border-bottom:1px solid #e5edf2;text-align:right}.upload-status{display:inline-block;padding:4px 9px;border-radius:999px;font-weight:800}.upload-status.success{background:#e7f7f0;color:#11745f}.upload-status.error{background:#fff0f0;color:#a13a3a}
+/* Sprint 11.21.0 — management trends */
+.management-trend-highlights{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:16px 0}
+.management-trend-highlights article{background:linear-gradient(145deg,#0f5361,#147b73);color:#fff;border-radius:20px;padding:18px 20px;display:grid;gap:5px;box-shadow:0 10px 24px rgba(14,77,89,.12)}
+.management-trend-highlights span{opacity:.78}.management-trend-highlights b{font-size:22px}.management-trend-highlights small{opacity:.9}
+.management-year-bars{height:190px;display:flex;align-items:flex-end;justify-content:center;gap:46px;margin-top:22px;padding:10px 20px 0;border-top:1px solid #e4edf2}
+.management-year-bar{height:100%;min-width:92px;display:grid;grid-template-rows:1fr auto auto;gap:4px;text-align:center;align-items:end}
+.management-year-track{height:100%;width:46px;margin:auto;border-radius:14px 14px 4px 4px;background:#edf3f6;display:flex;align-items:flex-end;overflow:hidden}
+.management-year-track i{display:block;width:100%;background:linear-gradient(180deg,#18a58e,#0b7c78);border-radius:14px 14px 0 0;min-height:4px}
+.management-year-bar b{color:#15344b}.management-year-bar small{color:#708599}
+.management-cost-year-grid{display:grid;gap:15px;margin-top:18px}.management-cost-year-grid>div{display:grid;grid-template-columns:70px 110px 1fr;align-items:center;gap:14px}.management-cost-year-grid span{font-weight:800}.management-cost-year-grid b{color:#0d7c78;font-size:19px}.management-cost-year-grid>div>div{height:13px;border-radius:999px;background:#edf3f6;overflow:hidden}.management-cost-year-grid i{display:block;height:100%;background:linear-gradient(90deg,#18a58e,#0b7c78);border-radius:999px}
+@media(max-width:760px){.management-trend-highlights{grid-template-columns:1fr}.management-year-bars{gap:18px}.management-year-bar{min-width:70px}.management-cost-year-grid>div{grid-template-columns:55px 90px 1fr}}
