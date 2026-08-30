@@ -2174,10 +2174,11 @@ material: normalize(getField(r, [
     packedRows.forEach(r => { byLine[routeBucket(r)] += num(r.qty) })
     const packed = Object.values(byLine).reduce((a,b)=>a+b,0)
     const residues = residueRows.reduce((sum,r)=>sum+num(r.qty),0)
-    // Raw-material loss vs finished product: bulk tank + returned residues - packed product.
-    const balance = bulk + residues - packed
-    const availableInput = bulk + residues
-    const utilization = availableInput > 0 ? packed / availableInput * 100 : 0
+    // Facility 42 input/output balance: packed output + returned residues - bulk tank input.
+    // A positive value means reported outputs/residues are above the bulk-tank input;
+    // a negative value means the bulk-tank input is above the reported outputs/residues.
+    const balance = packed + residues - bulk
+    const utilization = bulk > 0 ? (packed + residues) / bulk * 100 : 0
     return { bulkRows, packedRows, residueRows, bulk, byLine, packed, residues, balance, utilization }
   }, [prod, from, to])
 
@@ -3750,7 +3751,7 @@ material: normalize(getField(r, [
         <button className={activeTab === 'mapping-center' ? 'active' : ''} onClick={() => canManageData ? setActiveTab('mapping-center') : onRequestAdminLogin()}><ShieldCheck size={16}/> מרכז מיפויים ({manualMappings.filter(item => item.active !== false && item.status === 'pending').length})</button>
       </section>
       {activeTab === 'facility42-residues' && <section className="details facility42-balance">
-        <div className="details-title-row"><div><h2>שאריות מתקן 42</h2><p className="details-note">כל הדיווחים לתחנה 1542 שבהם המק״ט מתחיל בספרה 2. הכמות נכללת כתוספת תשומה בחישוב מאזן מתקן 42.</p></div><span className="production-record-count">{facility42Balance.residueRows.length} רשומות</span></div>
+        <div className="details-title-row"><div><h2>שאריות מתקן 42</h2><p className="details-note">כל הדיווחים לתחנה 1542 שבהם המק״ט מתחיל בספרה 2. הכמות נכללת בצד התפוקות בחישוב מאזן מתקן 42.</p></div><span className="production-record-count">{facility42Balance.residueRows.length} רשומות</span></div>
         <div className="balance-kpi-grid"><article className="balance-total"><span>סה״כ שאריות</span><b>{fmt(facility42Balance.residues)}</b><small>ליטר</small></article></div>
         <div className="table-wrap"><table><thead><tr><th>תאריך</th><th>מק״ט</th><th>תיאור חומר</th><th>אצווה</th><th>הזמנה</th><th>כמות</th></tr></thead><tbody>
           {facility42Balance.residueRows.map((r,i) => <tr key={`${r.order || ''}-${r.batch || ''}-${r.material || ''}-${i}`}><td>{r.productionDay || iso(r.date) || '—'}</td><td><b>{r.material || '—'}</b></td><td>{r.desc || '—'}</td><td>{r.batch || '—'}</td><td>{r.order || '—'}</td><td><b>{fmt(r.qty)}</b></td></tr>)}
@@ -3766,8 +3767,8 @@ material: normalize(getField(r, [
           <article><span>אריזה 10/20 ליטר</span><b>{fmt(facility42Balance.byLine['10/20L'])}</b><small>ליטר</small></article>
           <article className="balance-total"><span>סה״כ נארז</span><b>{fmt(facility42Balance.packed)}</b><small>ליטר</small></article>
           <article><span>שאריות מתקן 42</span><b>{fmt(facility42Balance.residues)}</b><small>ליטר · {facility42Balance.residueRows.length} רשומות</small></article>
-          <article className={facility42Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>פחת: באלק + שאריות − תוצרת</span><b>{fmt(facility42Balance.balance)}</b><small>ליטר</small></article>
-          <article><span>% ניצול באלק</span><b>{facility42Balance.bulk ? pctFmt(facility42Balance.utilization) : '—'}</b><small>תוצרת ÷ (באלק + שאריות)</small></article>
+          <article className={facility42Balance.balance < 0 ? 'balance-negative' : 'balance-positive'}><span>מאזן: תפוקות + שאריות − באלק טנק</span><b>{facility42Balance.balance > 0 ? '+' : ''}{fmt(facility42Balance.balance)}</b><small>ליטר</small></article>
+          <article><span>% ניצול באלק</span><b>{facility42Balance.bulk ? pctFmt(facility42Balance.utilization) : '—'}</b><small>(תפוקות + שאריות) ÷ באלק טנק</small></article>
         </div>
         <div className="balance-note"><AlertTriangle size={18}/><span>בהשוואה יומית ייתכן פער תזמון: באלק שיוצר ביום מסוים יכול להיארז ביום אחר. לכן המאזן החודשי מייצג טוב יותר את התהליך.</span></div>
         <h3 className="shift-subtitle">פירוט לפי סוג דיווח</h3>
@@ -4069,7 +4070,7 @@ function Facility42BalanceOverviewCard({ balance, onClick }) {
     <div className="tower-facility-head"><div><i></i><strong>מאזן מתקן 42</strong></div><span>ללא יעד</span></div>
     <div className="facility42-overview-main"><div><span>באלק 1142 + 999</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ ארוז ZFIN</span><b>{fmt(balance.packed)}</b></div></div>
     <div className="facility42-overview-lines"><span>1L <b>{fmt(balance.byLine['1L'])}</b></span><span>5L <b>{fmt(balance.byLine['5L'])}</b></span><span>10/20L <b>{fmt(balance.byLine['10/20L'])}</b></span></div>
-    <dl><div><dt>שאריות 1542</dt><dd>{fmt(balance.residues)}</dd></div><div><dt>פחת מתקן 42</dt><dd className={balance.balance >= 0 ? 'positive' : 'negative'}>{balance.balance >= 0 ? '+' : ''}{fmt(balance.balance)}</dd></div><div><dt>ניצול באלק</dt><dd>{balance.bulk ? pctFmt(balance.utilization) : '—'}</dd></div></dl>
+    <dl><div><dt>שאריות 1542</dt><dd>{fmt(balance.residues)}</dd></div><div><dt>מאזן תשומות מול תפוקות</dt><dd className={balance.balance >= 0 ? 'positive' : 'negative'}>{balance.balance >= 0 ? '+' : ''}{fmt(balance.balance)}</dd></div><div><dt>ניצול באלק</dt><dd>{balance.bulk ? pctFmt(balance.utilization) : '—'}</dd></div></dl>
     <span className="tower-enter">לפירוט המאזן <ArrowLeft size={16}/></span>
   </button>
 }
@@ -4080,8 +4081,8 @@ function Facility42BalanceCard({ balance }) {
     <div className="forecast-head"><div><small>מאזן תשומות / תפוקות</small><h3>מאזן מתקן 42</h3><div className="forecast-resource"><b>1142 + 999</b><span>מול אריזה 1L / 5L / 10–20L</span></div></div><span className="status-badge no-target">ללא יעד</span></div>
     <div className="balance-card-main"><div><span>באלק שיוצר</span><b>{fmt(balance.bulk)}</b></div><div><span>סה״כ נארז</span><b>{fmt(balance.packed)}</b></div></div>
     <div className="balance-card-lines"><span>1L<strong>{fmt(balance.byLine['1L'])}</strong></span><span>5L<strong>{fmt(balance.byLine['5L'])}</strong></span><span>10/20L<strong>{fmt(balance.byLine['10/20L'])}</strong></span></div>
-    <div className="balance-card-footer"><div><span>שאריות 1542</span><b>{fmt(balance.residues)}</b></div><div><span>פחת מתקן 42</span><b>{balance.balance > 0 ? '+' : ''}{fmt(balance.balance)}</b></div><div><span>ניצול באלק</span><b>{pctFmt(balance.utilization)}</b></div></div>
-    <small className="balance-card-note">פחת מתקן 42 = באלק + שאריות 1542 − תוצרת ארוזה. המאזן מחושב לפי טווח התאריכים שנבחר.</small>
+    <div className="balance-card-footer"><div><span>שאריות 1542</span><b>{fmt(balance.residues)}</b></div><div><span>מאזן תשומות מול תפוקות</span><b>{balance.balance > 0 ? '+' : ''}{fmt(balance.balance)}</b></div><div><span>ניצול באלק</span><b>{pctFmt(balance.utilization)}</b></div></div>
+    <small className="balance-card-note">מאזן תשומות מול תפוקות = תפוקות ארוזות + שאריות 1542 − באלק טנק. המאזן מחושב לפי טווח התאריכים שנבחר.</small>
   </article>
 }
 function Facility19BalanceOverviewCard({ balance, onClick }) {
