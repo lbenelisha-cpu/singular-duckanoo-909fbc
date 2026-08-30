@@ -2927,34 +2927,34 @@ material: normalize(getField(r, [
     })])
     const dailyWidths = dailyColumnValues.map((values,index) => autoWidth(values, index===4 ? {min:18,max:48,pad:3} : index===9 ? {min:12,max:34,pad:3} : {min:10,max:24,pad:3}))
     const dailyRows=[]
-    dailyRows.push(`<row r="2" ht="28" customHeight="1">${cellXml(1,1,'דוח יומי – מתקנים נבחרים',1)}</row>`)
-    dailyRows.push(`<row r="3" ht="22" customHeight="1">${cellXml(2,1,`מספר מתקנים בדוח: ${grouped.size}`,2)}</row>`)
-    dailyRows.push(`<row r="5" ht="30" customHeight="1">${cellXml(4,1,eventText,3)}</row>`)
-    dailyRows.push(`<row r="7" ht="${autoRowHeight(dailyHeaders,dailyWidths,{min:24,max:42})}" customHeight="1">${dailyHeaders.map((h,i)=>cellXml(6,i+1,h,4)).join('')}</row>`)
-    const merges=['B2:K2','B3:K3','B5:K5']
+    dailyRows.push(`<row r="2" ht="28" customHeight="1">${cellXml(1,0,'דוח יומי – מתקנים נבחרים',1)}</row>`)
+    dailyRows.push(`<row r="3" ht="22" customHeight="1">${cellXml(2,0,`מספר מתקנים בדוח: ${grouped.size}`,2)}</row>`)
+    dailyRows.push(`<row r="5" ht="30" customHeight="1">${cellXml(4,0,eventText,3)}</row>`)
+    dailyRows.push(`<row r="7" ht="${autoRowHeight(dailyHeaders,dailyWidths,{min:24,max:42})}" customHeight="1">${dailyHeaders.map((h,i)=>cellXml(6,i,h,4)).join('')}</row>`)
+    const merges=['A2:J2','A3:J3','A5:J5']
     let rr=7
     grouped.forEach((groupRows,facility)=>{
       const total=groupRows.reduce((sum,row)=>sum+num(row.qty),0), start=rr
       groupRows.forEach((row,index)=>{
         const cells=[
-          cellXml(rr,1,row.material||'',5),
-          cellXml(rr,2,dailyRowDate(row),5),
-          index===0?cellXml(rr,3,facility,6):'',
-          cellXml(rr,4,row.prodLineTool||row.prodLine||row.routingGroup||'',5),
-          cellXml(rr,5,row.desc||'',5),
-          cellXml(rr,6,row.batch||'',5),
+          cellXml(rr,0,row.material||'',5),
+          cellXml(rr,1,dailyRowDate(row),5),
+          index===0?cellXml(rr,2,facility,6):'',
+          cellXml(rr,3,row.prodLineTool||row.prodLine||row.routingGroup||'',5),
+          cellXml(rr,4,row.desc||'',5),
+          cellXml(rr,5,row.batch||'',5),
           '', // סטטוס מכונה — intentionally blank for manual edit
-          cellXml(rr,8,num(row.qty),7),
-          index===0?cellXml(rr,9,total,7):'',
+          cellXml(rr,7,num(row.qty),7),
+          index===0?cellXml(rr,8,total,7):'',
           ''  // הערות — intentionally blank for manual edit
         ]
         const rowValues=[row.material||'',dailyRowDate(row),facility,row.prodLineTool||row.prodLine||row.routingGroup||'',row.desc||'',row.batch||'','',num(row.qty),total,'']
         const rowHeight=autoRowHeight(rowValues,dailyWidths,{min:20,max:72})
         dailyRows.push(`<row r="${rr+1}" ht="${rowHeight}" customHeight="1">${cells.join('')}</row>`); rr++
       })
-      if(groupRows.length>1){merges.push(`D${start+1}:D${rr}`); merges.push(`J${start+1}:J${rr}`)}
+      if(groupRows.length>1){merges.push(`C${start+1}:C${rr}`); merges.push(`I${start+1}:I${rr}`)}
     })
-    if(!rows.length) dailyRows.push(`<row r="8" ht="22" customHeight="1">${cellXml(7,1,'אין נתוני תפוקה בטווח שנבחר',5)}</row>`)
+    if(!rows.length) dailyRows.push(`<row r="8" ht="22" customHeight="1">${cellXml(7,0,'אין נתוני תפוקה בטווח שנבחר',5)}</row>`)
     const dailySheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="7" topLeftCell="A8" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${dailyWidths.map((width,index)=>`<col min="${index+1}" max="${index+1}" width="${width}" customWidth="1" bestFit="1"/>`).join('')}</cols><sheetData>${dailyRows.join('')}</sheetData><mergeCells count="${merges.length}">${merges.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`
     xmlSheets.push({name:safeSheetName('דיווח יומי פורמולציות',usedNames),xml:dailySheet})
 
