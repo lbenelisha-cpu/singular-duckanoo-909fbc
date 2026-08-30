@@ -2914,39 +2914,45 @@ material: normalize(getField(r, [
     rows.forEach(row=>{const f=String(row.facility||'—'); const arr=grouped.get(f)||[]; arr.push(row); grouped.set(f,arr)})
     const displayDate=from&&to&&from===to?new Date(`${from}T12:00:00`).toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'}):(from||to||new Date().toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'}))
     const eventText=savedDailyEventsForSelection.length?savedDailyEventsForSelection.map(event=>`אירוע ${event.type} · מתקן ${event.facility} · חומרה ${event.severity} - ${event.description}`).join(' | '):'לא נשמרו אירועים לתאריך הדוח שנבחר.'
-    const dailyHeaders=['מקט',displayDate,'קו יצור','חומר','מספר אצווה','סטטוס מכונה','תפוקה','סה"כ תפוקה','הערות']
+    const dailyRowDate = row => {
+      const raw = row?.date || row?.productionDay
+      const d = raw instanceof Date ? raw : (raw ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(String(raw)) ? `${raw}T12:00:00` : raw) : null)
+      return d && Number.isFinite(d.getTime()) ? d.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'}) : String(row?.productionDay || '')
+    }
+    const dailyHeaders=['מקט','תאריך','מתקן','קו יצור','חומר','מספר אצווה','סטטוס מכונה','תפוקה','סה"כ תפוקה','הערות']
     const dailyColumnValues = dailyHeaders.map((header,index) => [header, ...rows.map(row => {
       const facility=String(row.facility||'—')
       const total=(grouped.get(facility)||[]).reduce((sum,item)=>sum+num(item.qty),0)
-      return [row.material||'',facility,row.prodLineTool||row.prodLine||row.routingGroup||'',row.desc||'',row.batch||'','',num(row.qty),total,''][index]
+      return [row.material||'',dailyRowDate(row),facility,row.prodLineTool||row.prodLine||row.routingGroup||'',row.desc||'',row.batch||'','',num(row.qty),total,''][index]
     })])
-    const dailyWidths = dailyColumnValues.map((values,index) => autoWidth(values, index===3 ? {min:18,max:48,pad:3} : index===8 ? {min:12,max:34,pad:3} : {min:10,max:24,pad:3}))
+    const dailyWidths = dailyColumnValues.map((values,index) => autoWidth(values, index===4 ? {min:18,max:48,pad:3} : index===9 ? {min:12,max:34,pad:3} : {min:10,max:24,pad:3}))
     const dailyRows=[]
     dailyRows.push(`<row r="2" ht="28" customHeight="1">${cellXml(1,1,'דוח יומי – מתקנים נבחרים',1)}</row>`)
     dailyRows.push(`<row r="3" ht="22" customHeight="1">${cellXml(2,1,`מספר מתקנים בדוח: ${grouped.size}`,2)}</row>`)
     dailyRows.push(`<row r="5" ht="30" customHeight="1">${cellXml(4,1,eventText,3)}</row>`)
     dailyRows.push(`<row r="7" ht="${autoRowHeight(dailyHeaders,dailyWidths,{min:24,max:42})}" customHeight="1">${dailyHeaders.map((h,i)=>cellXml(6,i+1,h,4)).join('')}</row>`)
-    const merges=['B2:J2','B3:J3','B5:J5']
+    const merges=['B2:K2','B3:K3','B5:K5']
     let rr=7
     grouped.forEach((groupRows,facility)=>{
       const total=groupRows.reduce((sum,row)=>sum+num(row.qty),0), start=rr
       groupRows.forEach((row,index)=>{
         const cells=[
           cellXml(rr,1,row.material||'',5),
-          index===0?cellXml(rr,2,facility,6):'',
-          cellXml(rr,3,row.prodLineTool||row.prodLine||row.routingGroup||'',5),
-          cellXml(rr,4,row.desc||'',5),
-          cellXml(rr,5,row.batch||'',5),
+          cellXml(rr,2,dailyRowDate(row),5),
+          index===0?cellXml(rr,3,facility,6):'',
+          cellXml(rr,4,row.prodLineTool||row.prodLine||row.routingGroup||'',5),
+          cellXml(rr,5,row.desc||'',5),
+          cellXml(rr,6,row.batch||'',5),
           '', // סטטוס מכונה — intentionally blank for manual edit
-          cellXml(rr,7,num(row.qty),7),
-          index===0?cellXml(rr,8,total,7):'',
+          cellXml(rr,8,num(row.qty),7),
+          index===0?cellXml(rr,9,total,7):'',
           ''  // הערות — intentionally blank for manual edit
         ]
-        const rowValues=[row.material||'',facility,row.prodLineTool||row.prodLine||row.routingGroup||'',row.desc||'',row.batch||'','',num(row.qty),total,'']
+        const rowValues=[row.material||'',dailyRowDate(row),facility,row.prodLineTool||row.prodLine||row.routingGroup||'',row.desc||'',row.batch||'','',num(row.qty),total,'']
         const rowHeight=autoRowHeight(rowValues,dailyWidths,{min:20,max:72})
         dailyRows.push(`<row r="${rr+1}" ht="${rowHeight}" customHeight="1">${cells.join('')}</row>`); rr++
       })
-      if(groupRows.length>1){merges.push(`C${start+1}:C${rr}`); merges.push(`I${start+1}:I${rr}`)}
+      if(groupRows.length>1){merges.push(`D${start+1}:D${rr}`); merges.push(`J${start+1}:J${rr}`)}
     })
     if(!rows.length) dailyRows.push(`<row r="8" ht="22" customHeight="1">${cellXml(7,1,'אין נתוני תפוקה בטווח שנבחר',5)}</row>`)
     const dailySheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="7" topLeftCell="A8" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${dailyWidths.map((width,index)=>`<col min="${index+2}" max="${index+2}" width="${width}" customWidth="1" bestFit="1"/>`).join('')}</cols><sheetData>${dailyRows.join('')}</sheetData><mergeCells count="${merges.length}">${merges.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells><pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`
@@ -3966,7 +3972,7 @@ function BatchControlCard({ data, onClose }) {
   }
   return <div className="batch-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget) onClose()}}>
     <style>{BATCH_MODAL_WIDE_STYLES}</style>
-    <section className="batch-control-card batch-control-card-wide" role="dialog" aria-modal="true" aria-label={`כרטיס מנה ${data.batch}`}>
+    <section className={`batch-control-card batch-control-card-wide ${activeBatchTab==='quality' ? 'batch-quality-mobile-landscape' : ''}`} role="dialog" aria-modal="true" aria-label={`כרטיס מנה ${data.batch}`}>
       <header className="batch-card-head"><div><span className="batch-eyebrow">BATCH CONTROL CENTER</span><h2>כרטיס מנה — {data.batch}</h2><p>{descriptions.join(' · ') || materials.join(', ') || 'ללא תיאור חומר'}</p></div><div className="batch-head-actions"><button type="button" className="batch-export" onClick={exportBatch}><Download size={17}/> ייצוא מנה</button><button type="button" className="batch-close" onClick={onClose} aria-label="סגירה"><X/></button></div></header>
       <div className="batch-summary-grid">
         <BatchMetric label="Batch" value={data.batch}/><BatchMetric label="Order" value={orders.join(', ') || '—'}/><BatchMetric label="מק״ט חומר" value={materials.join(', ') || '—'}/><BatchMetric label="מתקן" value={facilities.join(', ') || '—'}/><BatchMetric label="Routing group" value={routingGroups.join(', ') || '—'}/><BatchMetric label="כמות ארוזה" value={fmt(totalQty)}/><BatchMetric label="Inspection Lot" value={inspectionLots.join(', ') || '—'}/><BatchMetric label="QA" value={qaApprovals.join(', ') || 'טרם התקבלה החלטה'}/>
