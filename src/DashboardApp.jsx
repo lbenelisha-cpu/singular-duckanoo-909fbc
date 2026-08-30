@@ -12,13 +12,34 @@ import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLine
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
 import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, inspectManagementRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
 import * as XLSXCore from 'xlsx'
-import PptxGenJS from 'pptxgenjs'
 import './styles.css'
 
 // Use the styled browser build when available, but always fall back to the
 // project's existing xlsx dependency so the app can never white-screen if
 // the external script is blocked or slow to load.
 const XLSX = window.XLSX || XLSXCore
+
+let pptxGenLoaderPromise = null
+const ensurePptxGenJS = () => {
+  if (window.PptxGenJS) return Promise.resolve(window.PptxGenJS)
+  if (pptxGenLoaderPromise) return pptxGenLoaderPromise
+  pptxGenLoaderPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-iml-pptxgen]')
+    if (existing) {
+      existing.addEventListener('load', () => window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error('PptxGenJS לא נטען')))
+      existing.addEventListener('error', () => reject(new Error('טעינת מנוע PowerPoint נכשלה')))
+      return
+    }
+    const script = document.createElement('script')
+    script.src = '/pptxgen.bundle.js'
+    script.async = true
+    script.dataset.imlPptxgen = '1'
+    script.onload = () => window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error('PptxGenJS לא נטען'))
+    script.onerror = () => reject(new Error('טעינת מנוע PowerPoint נכשלה'))
+    document.head.appendChild(script)
+  })
+  return pptxGenLoaderPromise
+}
 
 const LEGACY_DAILY_TARGETS = {
   '1519': 80000, '1521': 60000, '1523': 40000, '1524': 6000,
@@ -2982,6 +3003,7 @@ material: normalize(getField(r, [
     setManagementPresentationMessage('מכין קובץ PowerPoint אמיתי (.pptx)...')
     try {
       const slides = buildManagementPresentationSlides()
+      const PptxGenJS = await ensurePptxGenJS()
       const pptx = new PptxGenJS()
       pptx.layout = 'LAYOUT_WIDE'
       pptx.author = 'IML CONTROL'

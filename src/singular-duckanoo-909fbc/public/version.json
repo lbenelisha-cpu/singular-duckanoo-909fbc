@@ -1,1 +1,5 @@
-{"version": "11.22.1", "label": "IML CONTROL 11.22.1", "updatedAt": "2026-08-31T00:58:00+03:00", "notes": "Real PPTX export via PptxGenJS; fixes invalid .ppt export"}
+{
+  "version": "11.22.2",
+  "build": "pptx-browser-bundle-fix",
+  "updated": "2026-08-31"
+}
