@@ -1032,6 +1032,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [managementUploadMessage, setManagementUploadMessage] = useState('')
   const [managementUploadHistory, setManagementUploadHistory] = useState([])
   const [managementUploadProgress, setManagementUploadProgress] = useState(null)
+  const [managementPresentationBusy, setManagementPresentationBusy] = useState(false)
+  const [managementPresentationMessage, setManagementPresentationMessage] = useState('')
   const refreshManagementHistory = async () => {
     const result = await loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY)
     setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
@@ -2953,6 +2955,81 @@ material: normalize(getField(r, [
     } finally { setManagementUploadBusy(false); setManagementUploadProgress(null) }
   }
 
+
+  const buildManagementPresentationSlides = () => {
+    const periodLabel = `${from || 'תחילת הנתונים'} עד ${to || 'סוף הנתונים'}`
+    const facilityLabel = managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים'
+    const fmsText = managementSummary.fmsPlan ? `${managementSummary.targetPct.toFixed(1)}% (${fmt(managementSummary.fmsActual)} / ${fmt(managementSummary.fmsPlan)})` : 'אין FMS לטווח'
+    const yoyText = managementSummary.previousActual ? `${managementSummary.yoyPct >= 0 ? '+' : ''}${managementSummary.yoyPct.toFixed(1)}% מול ${managementSummary.currentYear - 1}` : 'אין תקופת השוואה'
+    const costText = managementSummary.contractorCostPerUnit ? `₪${managementSummary.contractorCostPerUnit.toFixed(3)} לליטר` : 'אין נתוני קבלן בטווח'
+    const bestMonth = managementSummary.bestPlanMonth?.label ? `${managementSummary.bestPlanMonth.label} · ${managementSummary.bestPlanMonth.pct.toFixed(1)}%` : 'אין נתון'
+    const peakMonth = managementSummary.peakMonth?.label ? `${managementSummary.peakMonth.label} · ${fmt(managementSummary.peakMonth.actual)}` : 'אין נתון'
+    const weakMonth = managementSummary.weakMonth?.label ? `${managementSummary.weakMonth.label} · ${fmt(managementSummary.weakMonth.actual)}` : 'אין נתון'
+    return [
+      {title:'שער', bullets:[`תקציר מנהלים · ${facilityLabel}`, periodLabel, `תפוקה בפועל: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
+      {title:'תמונת מצב', bullets:[`ימי פעילות: ${managementSummary.days}`, `ממוצע ליום: ${fmt(managementSummary.avgDaily)}`, `שיא יומי: ${fmt(managementSummary.peakDaily)}`, `שנה מול שנה: ${yoyText}`]},
+      {title:'תכנון מול ביצוע', bullets:[`תכנון לתקופה: ${fmt(managementSummary.fmsPlan)}`, `ביצוע IML: ${fmt(managementSummary.fmsActual)}`, `פער: ${managementSummary.fmsPlan ? `${managementSummary.fmsActual - managementSummary.fmsPlan >= 0 ? '+' : ''}${fmt(managementSummary.fmsActual - managementSummary.fmsPlan)}` : '—'}`, `חודש עמידה טוב ביותר: ${bestMonth}`]},
+      {title:'מגמות 2024–2026', bullets:[`חודש שיא: ${peakMonth}`, `חודש חלש: ${weakMonth}`, `השוואה לאותה תקופה: ${yoyText}`, `מקור היסטורי: ${managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}`]},
+      {title:'עלויות ויעילות', bullets:[`עלות קבלן משוקללת: ${costText}`, `חודשי קבלן בטווח: ${managementSummary.contractorMonths || 0}`, `תוצרת בחשבונות קבלן: ${managementSummary.contractorPackaged ? fmt(managementSummary.contractorPackaged) : '—'}`, `תשלום לקבלן: ${managementSummary.contractorCost ? `₪${fmt(managementSummary.contractorCost)}` : '—'}`]},
+      {title:'איכות ומגמות', bullets:[`RFT: ${managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : 'ממתין למקור RFT מאומת'}`, `לוטים עם החלטה/חריגה: ${managementSummary.qualityLots || 0}`, `לוטים עם דחייה/Restricted: ${managementSummary.qualityBadLots || 0}`, `חריגות פתוחות: ${openDeviations.length}`]},
+      {title:'תובנות והמלצות', bullets:managementSummary.insights.slice(0,4).map(item => `${item.title}: ${item.text}`)}
+    ]
+  }
+
+  const downloadManagementPresentation = async () => {
+    setManagementPresentationBusy(true)
+    setManagementPresentationMessage('מכין מצגת PowerPoint...')
+    try {
+      const slides = buildManagementPresentationSlides()
+      const safeText = value => String(value ?? '').replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]))
+      const slideHtml = slides.map((slide, index) => `
+        <section class="slide ${index === 0 ? 'cover' : ''}">
+          <div class="brand">IML CONTROL</div>
+          <h1>${safeText(slide.title)}</h1>
+          <div class="period">${safeText(from || 'תחילת הנתונים')} עד ${safeText(to || 'סוף הנתונים')} · ${safeText(managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים')}</div>
+          <div class="bullets">
+            ${(slide.bullets || []).slice(0, 7).map((b, i) => `<div class="bullet"><b>${String(i + 1).padStart(2, '0')}</b><span>${safeText(b)}</span></div>`).join('')}
+          </div>
+          ${index === 2 && managementSummary.monthlyTrend?.length ? `<div class="mini-chart">${managementSummary.monthlyTrend.slice(-6).map(row => {
+            const max = Math.max(1, ...managementSummary.monthlyTrend.slice(-6).flatMap(x => [x.plan, x.actual]))
+            const planH = Math.max(8, row.plan / max * 145)
+            const actualH = Math.max(8, row.actual / max * 145)
+            return `<div class="bar-col"><div class="bars"><i class="plan" style="height:${planH}px"></i><i class="actual" style="height:${actualH}px"></i></div><em>${safeText(row.key.slice(5))}</em></div>`
+          }).join('')}</div>` : ''}
+          <footer>נוצר אוטומטית מתוך תקציר מנהלים · מקור היסטורי: ${safeText(managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי')}</footer>
+        </section>`).join('')
+      const html = `<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>תקציר מנהלים</title><style>
+        @page { size: 13.333in 7.5in; margin:0; }
+        body{margin:0;background:#f4f8fb;font-family:Arial, sans-serif;color:#10233a;direction:rtl;}
+        .slide{width:13.333in;height:7.5in;box-sizing:border-box;padding:.55in .72in;page-break-after:always;background:linear-gradient(135deg,#f8fbfc,#eef8f7);position:relative;overflow:hidden;}
+        .slide:before{content:"";position:absolute;top:0;right:0;left:0;height:.68in;background:#0b2239;}
+        .brand{position:absolute;top:.22in;left:.55in;color:white;font-size:12pt;font-weight:bold;letter-spacing:1px;z-index:2;}
+        h1{position:relative;margin:.68in 0 .12in 0;font-size:30pt;color:#0b2239;font-weight:900;text-align:right;}
+        .period{position:relative;color:#64748b;font-size:14pt;text-align:right;margin-bottom:.35in;}
+        .bullets{display:grid;grid-template-columns:1fr;gap:.12in;margin-top:.1in;}
+        .bullet{display:grid;grid-template-columns:.55in 1fr;gap:.16in;align-items:center;background:white;border:1px solid #d9e7ef;border-radius:.13in;padding:.12in .18in;min-height:.48in;box-shadow:0 8px 20px rgba(15,35,58,.06);}
+        .bullet b{color:#0f766e;font-size:16pt;text-align:center;}.bullet span{font-size:17pt;font-weight:700;line-height:1.25;text-align:right;}
+        .cover{background:linear-gradient(135deg,#0b2239,#0f766e);color:white;}.cover:before{display:none}.cover h1{color:white;font-size:34pt;margin-top:1.1in}.cover .period{color:#d6e8ee}.cover .bullet{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.24);box-shadow:none}.cover .bullet b,.cover .bullet span{color:white}.cover .brand{top:.45in;left:.65in;font-size:14pt;}
+        .mini-chart{position:absolute;left:.75in;right:.75in;bottom:.56in;height:1.65in;border-top:1px solid #d9e7ef;display:flex;gap:.35in;align-items:flex-end;justify-content:center;padding-top:.1in;}.bar-col{text-align:center;color:#64748b;font-size:9pt}.bars{height:1.35in;display:flex;align-items:flex-end;gap:.05in;justify-content:center}.bars i{display:inline-block;width:.14in;border-radius:.05in .05in 0 0}.bars .plan{background:#94a3b8}.bars .actual{background:#0f766e}.bar-col em{font-style:normal;display:block;margin-top:.05in;}
+        footer{position:absolute;left:.6in;bottom:.25in;color:#7890a6;font-size:9pt;}
+      </style></head><body>${slideHtml}</body></html>`
+      const blob = new Blob([html], { type: 'application/vnd.ms-powerpoint;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.ppt`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setManagementPresentationMessage('המצגת נוצרה בהצלחה והורדה למחשב. הקובץ נפתח ב-PowerPoint וניתן לשמור אותו כ-PPTX.')
+    } catch (error) {
+      setManagementPresentationMessage(`לא ניתן ליצור מצגת: ${error?.message || error}`)
+    } finally {
+      setManagementPresentationBusy(false)
+    }
+  }
+
   const setManagementPeriodPreset = preset => {
     const anchorText = to || dateBounds.max || iso(new Date())
     const anchor = new Date(`${anchorText}T12:00:00`)
@@ -4148,6 +4225,7 @@ material: normalize(getField(r, [
           <button className={managementView==='plan'?'active':''} onClick={()=>setManagementView('plan')}>תכנון מול ביצוע</button>
           <button className={managementView==='costs'?'active':''} onClick={()=>setManagementView('costs')}>עלויות ויעילות</button>
           <button className={managementView==='quality'?'active':''} onClick={()=>setManagementView('quality')}>איכות ומגמות</button>
+          <button className={managementView==='presentation'?'active':''} onClick={()=>setManagementView('presentation')}>מצגת הנהלה</button>
         </div>
         <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
         {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadProgress&&<div className="management-batch-progress"><b>{managementUploadProgress.current}/{managementUploadProgress.total}</b><span>{managementUploadProgress.fileName}</span></div>}{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementUploadHistory.length>0&&<div className="management-upload-history"><h4>היסטוריית טעינות אחרונות</h4><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>קובץ</th><th>רשומות</th><th>סטטוס</th></tr></thead><tbody>{managementUploadHistory.slice(0,10).map((h,i)=><tr key={h.id||i}><td>{h.uploaded_at?new Date(h.uploaded_at).toLocaleString('he-IL'):'—'}</td><td>{h.data_kind==='plan'?'Plan Vs Actual':'עלויות קבלן'}</td><td>{h.file_name}</td><td>{Number(h.rows_written||0).toLocaleString()}</td><td><span className={`upload-status ${h.status}`}>{h.status==='success'?'נקלט':'שגיאה'}</span></td></tr>)}</tbody></table></div></div>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
@@ -4188,6 +4266,7 @@ material: normalize(getField(r, [
           {managementSummary.monthlyTrend.filter(r=>r.cost).slice(-1).map(row=>{const rec=managementHistory.contractor42?.[row.key];return <div className="management-summary-grid" key={`mix-${row.key}`}><article className="management-panel"><h3>תמהיל אריזה — {row.label}</h3>{Object.entries(rec?.lines||{}).map(([line,qty])=><div className="management-rank-row" key={line}><span><b>{line}</b></span><strong>{fmt(qty)}</strong></div>)}</article><article className="management-panel"><h3>יעילות לפי משמרת — {row.label}</h3>{(rec?.shiftQty||[]).map((qty,i)=><div className="management-rank-row" key={i}><span><b>משמרת {i+1}</b><small>{rec?.shiftCost?.[i]?`עלות ₪${fmt(rec.shiftCost[i])}`:''}</small></span><strong>{rec?.shiftCost?.[i]&&qty?`₪${(rec.shiftCost[i]/qty).toFixed(3)} / ל׳`:'—'}</strong></div>)}</article></div>})}
         </>}
         {managementView==='quality' && <div className="management-summary-grid"><article className="management-panel"><h3>איכות בתקופה</h3><div className="management-quality-big"><b>{managementSummary.hasReliableRft?`${managementSummary.rft.toFixed(1)}%`:'—'}</b><span>RFT</span><small>{managementSummary.hasReliableRft?'יעד ייחוס: 98%':'ממתין למקור RFT מאומת'}</small></div><div className="management-rank-row"><span><b>לוטים עם החלטה/חריגה שנמצאו</b></span><strong>{managementSummary.qualityLots||0}</strong></div><div className="management-rank-row"><span><b>לוטים עם דחייה / Restricted</b></span><strong>{managementSummary.qualityBadLots||0}</strong></div><div className="management-rank-row"><span><b>חריגות פתוחות</b></span><strong>{openDeviations.length}</strong></div></article><article className="management-panel"><h3>מה נדרש כדי לחשב RFT נכון?</h3><p className="management-explain">צריך מקור שבו קיימת אוכלוסיית כל ה-Inspection Lots בתקופה, לא רק לוטים חריגים: Inspection Lot, חומר, אצווה, מתקן/תחנה, תאריך, והחלטת שימוש או סטטוס First Pass לכל לוט.</p><p className="management-explain">אם קיים דוח RFT חודשי מוכן, מספיקים גם: חודש, מתקן, מספר לוטים שנבדקו, מספר שעברו בפעם הראשונה ו-RFT%. ל-COPQ נדרש דוח עלות אי-איכות לפי חודש ומתקן.</p></article></div>}
+        {managementView==='presentation' && <div className="management-summary-grid presentation-builder-grid"><article className="management-panel management-presentation-card"><h3>מצגת הנהלה אוטומטית</h3><p className="management-explain">המצגת נוצרת לפי התקופה והמתקנים שנבחרו בתקציר המנהלים, ומשתמשת באותם נתוני Supabase/IML: תפוקה, FMS, מגמות, עלויות, איכות ותובנות.</p><button type="button" className="management-ppt-button" onClick={downloadManagementPresentation} disabled={managementPresentationBusy}>{managementPresentationBusy ? <RefreshCw size={18}/> : <Download size={18}/>}<span>{managementPresentationBusy ? 'מכין מצגת...' : 'הפק PowerPoint'}</span></button>{managementPresentationMessage&&<p className="management-upload-message">{managementPresentationMessage}</p>}</article><article className="management-panel"><h3>שקופיות שייכנסו למצגת</h3><div className="presentation-slide-list">{buildManagementPresentationSlides().map((slide,i)=><div key={`${slide.title}-${i}`}><b>{String(i+1).padStart(2,'0')}</b><span>{slide.title}</span><small>{(slide.bullets||[]).slice(0,2).join(' · ')}</small></div>)}</div></article></div>}
         <article className="management-panel management-insights"><h3>תובנות אוטומטיות מהנתונים</h3><div className="management-insight-grid">{managementSummary.insights.map((item,i)=><div className={`management-insight ${item.state}`} key={`${item.title}-${i}`}><strong>{item.title}</strong><p>{item.text}</p></div>)}{!managementSummary.insights.length&&<div className="management-insight good"><strong>אין מספיק נתונים להשוואה</strong><p>בחר תקופה הכוללת חודשים 2024–2026 ומתקן ניהולי כדי לקבל השוואות.</p></div>}</div></article>
         <div className="management-source-note"><Database size={18}/><div><b>מקורות מחוברים</b><span>כמות ואיכות מ-IML CONTROL · Plan Vs Actual היסטורי 2024–2026 · חשבונות קבלן מתקן 42 לשנים 2024–2026. הנתונים מחושבים לפי התקופה והמתקנים שנבחרו. מקור היסטורי: <b>{managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}</b>{managementHistoryError ? ` · ${managementHistoryError}` : ''}.</span></div></div>
       </section>}
