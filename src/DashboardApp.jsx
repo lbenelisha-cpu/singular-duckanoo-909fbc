@@ -12,6 +12,7 @@ import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLine
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
 import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, inspectManagementRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
 import * as XLSXCore from 'xlsx'
+import PptxGenJS from 'pptxgenjs'
 import './styles.css'
 
 // Use the styled browser build when available, but always fall back to the
@@ -2978,53 +2979,102 @@ material: normalize(getField(r, [
 
   const downloadManagementPresentation = async () => {
     setManagementPresentationBusy(true)
-    setManagementPresentationMessage('מכין מצגת PowerPoint...')
+    setManagementPresentationMessage('מכין קובץ PowerPoint אמיתי (.pptx)...')
     try {
       const slides = buildManagementPresentationSlides()
-      const safeText = value => String(value ?? '').replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]))
-      const slideHtml = slides.map((slide, index) => `
-        <section class="slide ${index === 0 ? 'cover' : ''}">
-          <div class="brand">IML CONTROL</div>
-          <h1>${safeText(slide.title)}</h1>
-          <div class="period">${safeText(from || 'תחילת הנתונים')} עד ${safeText(to || 'סוף הנתונים')} · ${safeText(managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים')}</div>
-          <div class="bullets">
-            ${(slide.bullets || []).slice(0, 7).map((b, i) => `<div class="bullet"><b>${String(i + 1).padStart(2, '0')}</b><span>${safeText(b)}</span></div>`).join('')}
-          </div>
-          ${index === 2 && managementSummary.monthlyTrend?.length ? `<div class="mini-chart">${managementSummary.monthlyTrend.slice(-6).map(row => {
-            const max = Math.max(1, ...managementSummary.monthlyTrend.slice(-6).flatMap(x => [x.plan, x.actual]))
-            const planH = Math.max(8, row.plan / max * 145)
-            const actualH = Math.max(8, row.actual / max * 145)
-            return `<div class="bar-col"><div class="bars"><i class="plan" style="height:${planH}px"></i><i class="actual" style="height:${actualH}px"></i></div><em>${safeText(row.key.slice(5))}</em></div>`
-          }).join('')}</div>` : ''}
-          <footer>נוצר אוטומטית מתוך תקציר מנהלים · מקור היסטורי: ${safeText(managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי')}</footer>
-        </section>`).join('')
-      const html = `<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>תקציר מנהלים</title><style>
-        @page { size: 13.333in 7.5in; margin:0; }
-        body{margin:0;background:#f4f8fb;font-family:Arial, sans-serif;color:#10233a;direction:rtl;}
-        .slide{width:13.333in;height:7.5in;box-sizing:border-box;padding:.55in .72in;page-break-after:always;background:linear-gradient(135deg,#f8fbfc,#eef8f7);position:relative;overflow:hidden;}
-        .slide:before{content:"";position:absolute;top:0;right:0;left:0;height:.68in;background:#0b2239;}
-        .brand{position:absolute;top:.22in;left:.55in;color:white;font-size:12pt;font-weight:bold;letter-spacing:1px;z-index:2;}
-        h1{position:relative;margin:.68in 0 .12in 0;font-size:30pt;color:#0b2239;font-weight:900;text-align:right;}
-        .period{position:relative;color:#64748b;font-size:14pt;text-align:right;margin-bottom:.35in;}
-        .bullets{display:grid;grid-template-columns:1fr;gap:.12in;margin-top:.1in;}
-        .bullet{display:grid;grid-template-columns:.55in 1fr;gap:.16in;align-items:center;background:white;border:1px solid #d9e7ef;border-radius:.13in;padding:.12in .18in;min-height:.48in;box-shadow:0 8px 20px rgba(15,35,58,.06);}
-        .bullet b{color:#0f766e;font-size:16pt;text-align:center;}.bullet span{font-size:17pt;font-weight:700;line-height:1.25;text-align:right;}
-        .cover{background:linear-gradient(135deg,#0b2239,#0f766e);color:white;}.cover:before{display:none}.cover h1{color:white;font-size:34pt;margin-top:1.1in}.cover .period{color:#d6e8ee}.cover .bullet{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.24);box-shadow:none}.cover .bullet b,.cover .bullet span{color:white}.cover .brand{top:.45in;left:.65in;font-size:14pt;}
-        .mini-chart{position:absolute;left:.75in;right:.75in;bottom:.56in;height:1.65in;border-top:1px solid #d9e7ef;display:flex;gap:.35in;align-items:flex-end;justify-content:center;padding-top:.1in;}.bar-col{text-align:center;color:#64748b;font-size:9pt}.bars{height:1.35in;display:flex;align-items:flex-end;gap:.05in;justify-content:center}.bars i{display:inline-block;width:.14in;border-radius:.05in .05in 0 0}.bars .plan{background:#94a3b8}.bars .actual{background:#0f766e}.bar-col em{font-style:normal;display:block;margin-top:.05in;}
-        footer{position:absolute;left:.6in;bottom:.25in;color:#7890a6;font-size:9pt;}
-      </style></head><body>${slideHtml}</body></html>`
-      const blob = new Blob([html], { type: 'application/vnd.ms-powerpoint;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.ppt`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
-      setManagementPresentationMessage('המצגת נוצרה בהצלחה והורדה למחשב. הקובץ נפתח ב-PowerPoint וניתן לשמור אותו כ-PPTX.')
+      const pptx = new PptxGenJS()
+      pptx.layout = 'LAYOUT_WIDE'
+      pptx.author = 'IML CONTROL'
+      pptx.company = 'ADAMA'
+      pptx.subject = 'Management Summary'
+      pptx.title = 'תקציר מנהלים — IML CONTROL'
+      pptx.lang = 'he-IL'
+      pptx.theme = {
+        headFontFace: 'Arial',
+        bodyFontFace: 'Arial',
+        lang: 'he-IL'
+      }
+      pptx.defineSlideMaster({
+        title: 'IML_MASTER',
+        background: { color: 'F4F8FB' },
+        objects: [
+          { text: { text: 'IML CONTROL', options: { x: 0.55, y: 0.18, w: 2.1, h: 0.3, fontFace: 'Arial', fontSize: 11, bold: true, color: 'FFFFFF', margin: 0 } } },
+          { text: { text: '', options: { x: 0, y: 0, w: 13.333, h: 0.68, fill: { color: '0B2239' }, line: { color: '0B2239' }, margin: 0 } } },
+          { text: { text: 'נוצר אוטומטית מתוך תקציר מנהלים', options: { x: 0.55, y: 7.12, w: 4.0, h: 0.2, fontFace: 'Arial', fontSize: 8, color: '7890A6', margin: 0 } } }
+        ],
+        slideNumber: { x: 12.35, y: 7.05, w: 0.45, h: 0.2, color: '7890A6', fontFace: 'Arial', fontSize: 8, align: 'center' }
+      })
+
+      const periodLabel = `${from || 'תחילת הנתונים'} עד ${to || 'סוף הנתונים'}`
+      const facilityLabel = managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים'
+      const addRtlText = (slide, text, x, y, w, h, extra={}) => slide.addText(String(text ?? ''), {
+        x, y, w, h, fontFace: 'Arial', fontSize: 18, color: '10233A',
+        rtlMode: true, align: 'right', valign: 'mid', margin: 0.06,
+        breakLine: false, fit: 'shrink', ...extra
+      })
+
+      slides.forEach((data, index) => {
+        if (index === 0) {
+          const slide = pptx.addSlide()
+          slide.background = { color: '0B2239' }
+          addRtlText(slide, 'IML CONTROL', 0.65, 0.42, 2.4, 0.35, { fontSize: 15, bold: true, color: 'FFFFFF', align: 'left', rtlMode: false })
+          addRtlText(slide, 'תקציר מנהלים', 6.2, 1.25, 6.2, 0.8, { fontSize: 34, bold: true, color: 'FFFFFF' })
+          addRtlText(slide, `${facilityLabel} · ${periodLabel}`, 5.0, 2.05, 7.4, 0.45, { fontSize: 17, color: 'D6E8EE' })
+          ;(data.bullets || []).slice(2, 6).forEach((bullet, i) => {
+            addRtlText(slide, bullet, 6.4, 3.0 + i * 0.72, 5.8, 0.55, {
+              fontSize: 19, bold: true, color: 'FFFFFF',
+              fill: { color: '163A4B', transparency: 8 },
+              line: { color: '6FA6B2', transparency: 55, width: 1 },
+              margin: 0.14
+            })
+          })
+          addRtlText(slide, '2024 · 2025 · 2026', 0.65, 6.6, 3.0, 0.35, { fontSize: 13, color: 'A7CBD2', align: 'left', rtlMode: false })
+          return
+        }
+
+        const slide = pptx.addSlide('IML_MASTER')
+        addRtlText(slide, data.title, 5.4, 0.88, 7.1, 0.55, { fontSize: 28, bold: true, color: '0B2239' })
+        addRtlText(slide, `${facilityLabel} · ${periodLabel}`, 5.4, 1.42, 7.1, 0.34, { fontSize: 12, color: '64748B' })
+
+        const bullets = (data.bullets || []).slice(0, 7)
+        bullets.forEach((bullet, i) => {
+          const y = 1.95 + i * 0.7
+          addRtlText(slide, String(i + 1).padStart(2, '0'), 0.75, y + 0.07, 0.52, 0.38, { fontSize: 14, bold: true, color: '0F766E', align: 'center', rtlMode: false })
+          addRtlText(slide, bullet, 1.35, y, 11.1, 0.55, {
+            fontSize: 17, bold: true,
+            fill: { color: 'FFFFFF' },
+            line: { color: 'D9E7EF', width: 1 },
+            margin: 0.13
+          })
+        })
+
+        if (index === 2 && managementSummary.monthlyTrend?.length) {
+          const rows = managementSummary.monthlyTrend.slice(-6)
+          const max = Math.max(1, ...rows.flatMap(row => [Number(row.plan)||0, Number(row.actual)||0]))
+          const chartY = 5.55
+          const chartH = 1.1
+          const baseX = 1.55
+          rows.forEach((row, i) => {
+            const groupX = baseX + i * 1.65
+            const planH = Math.max(0.08, ((Number(row.plan)||0) / max) * chartH)
+            const actualH = Math.max(0.08, ((Number(row.actual)||0) / max) * chartH)
+            slide.addText('', { x: groupX, y: chartY + chartH - planH, w: 0.22, h: planH, fill: { color: '94A3B8' }, line: { color: '94A3B8' }, margin: 0 })
+            slide.addText('', { x: groupX + 0.28, y: chartY + chartH - actualH, w: 0.22, h: actualH, fill: { color: '0F766E' }, line: { color: '0F766E' }, margin: 0 })
+            addRtlText(slide, row.key?.slice(5) || '', groupX - 0.12, 6.7, 0.85, 0.22, { fontSize: 9, color: '64748B', align: 'center', rtlMode: false })
+          })
+          addRtlText(slide, 'תכנון', 10.4, 6.7, 0.7, 0.22, { fontSize: 9, color: '64748B' })
+          slide.addText('', { x: 11.15, y: 6.72, w: 0.13, h: 0.13, fill: { color: '94A3B8' }, line: { color: '94A3B8' }, margin: 0 })
+          addRtlText(slide, 'ביצוע', 11.45, 6.7, 0.7, 0.22, { fontSize: 9, color: '64748B' })
+          slide.addText('', { x: 12.2, y: 6.72, w: 0.13, h: 0.13, fill: { color: '0F766E' }, line: { color: '0F766E' }, margin: 0 })
+        }
+      })
+
+      const fileName = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.pptx`
+      await pptx.writeFile({ fileName })
+      setManagementPresentationMessage(`המצגת נוצרה בהצלחה: ${fileName}`)
     } catch (error) {
-      setManagementPresentationMessage(`לא ניתן ליצור מצגת: ${error?.message || error}`)
+      console.error('PPTX generation failed', error)
+      setManagementPresentationMessage(`לא ניתן ליצור מצגת PPTX: ${error?.message || error}`)
     } finally {
       setManagementPresentationBusy(false)
     }
