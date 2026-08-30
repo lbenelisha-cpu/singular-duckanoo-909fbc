@@ -944,9 +944,19 @@ const monthLabelHe = key => {
   return `${names[Number(month)] || month} ${year}`
 }
 const MANAGEMENT_PLAN_OVERRIDES = {
-  // Confirmed by the facility manager on 2026-08-30. The uploaded FMS workbook
-  // snapshot does not contain the complete August target for Facility 42.
-  '2026-08|42': { plan: 766000 },
+  // August 2026 audited target workbook (IML_TARGETS_Aug_2026_AUDITED):
+  // Facility 42 total = 776kL = 20k (1L) + 250k (5L) + 362k (10/20L) + 144k Galigan ISO.
+  // The Plan Vs Actual snapshot contains partial/incorrect line targets for Facility 42,
+  // so both the total and the management line breakdown are overridden here.
+  '2026-08|42': {
+    plan: 776000,
+    groups: {
+      '42-P-02': { plan: 20000 },
+      '42-P-03': { plan: 250000 },
+      '42-P-04': { plan: 362000 },
+      'GALIGAN-ISO-42': { plan: 144000 },
+    },
+  },
 }
 const managementPlanForFacility = (monthKey, facilityId) => {
   const month = MANAGEMENT_HISTORY.planActual?.[monthKey] || {}
@@ -964,7 +974,31 @@ const managementPlanForFacility = (monthKey, facilityId) => {
   const override = MANAGEMENT_PLAN_OVERRIDES[`${monthKey}|${wanted}`]
   if (override?.plan != null) plan = Number(override.plan)
   if (override?.actual != null) actual = Number(override.actual)
-  return { plan, actual, groups: direct?.groups || {} }
+
+  // Keep only groups that belong to the selected logical facility. This prevents,
+  // for example, 43-P-A / 43-P-B from appearing when only Facility 42 is selected.
+  const sourceGroups = { ...(direct?.groups || {}) }
+  let groups = Object.fromEntries(Object.entries(sourceGroups).filter(([group]) => {
+    const g = String(group || '').toUpperCase()
+    if (wanted === '42') return g.startsWith('42-') || g.includes('-42')
+    if (wanted === '43') return g.startsWith('43-') || g.includes('-43')
+    return g.startsWith(`${wanted}-`) || g.includes(`-${wanted}`)
+  }))
+
+  // Audited target files may provide a corrected management breakdown. Preserve
+  // actuals from the historical source where a matching resource exists.
+  if (override?.groups) {
+    const corrected = {}
+    Object.entries(override.groups).forEach(([group, vals]) => {
+      const historical = sourceGroups[group] || {}
+      corrected[group] = {
+        plan: Number(vals?.plan ?? historical.plan ?? 0),
+        actual: Number(vals?.actual ?? historical.actual ?? 0),
+      }
+    })
+    groups = corrected
+  }
+  return { plan, actual, groups }
 }
 
 export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
@@ -3950,7 +3984,7 @@ material: normalize(getField(r, [
         {managementView==='plan' && <>
           <div className="management-cost-strip"><article><span>תכנון לתקופה</span><b>{fmt(managementSummary.fmsPlan)}</b></article><article><span>ביצוע FMS</span><b>{fmt(managementSummary.fmsActual)}</b></article><article><span>פער מול תכנון</span><b>{managementSummary.fmsPlan?`${managementSummary.fmsActual-managementSummary.fmsPlan>=0?'+':''}${fmt(managementSummary.fmsActual-managementSummary.fmsPlan)}`:'—'}</b></article></div>
           <article className="management-panel management-wide-panel"><h3>תכנון מול ביצוע לפי חודש</h3><p className="management-explain">אין צורך לחפש בטבלה: התקופה והמתקן נקבעים מהמסננים הראשיים של IML CONTROL. כאן מוצגים אוטומטית התכנון, הביצוע, הפער ואחוז העמידה.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תכנון FMS</th><th>ביצוע FMS</th><th>פער</th><th>עמידה</th></tr></thead><tbody>{managementSummary.monthlyTrend.map(row=><tr key={row.key}><td><b>{row.label}</b></td><td>{fmt(row.plan)}</td><td>{fmt(row.actual)}</td><td className={row.actual-row.plan>=0?'positive-text':'negative-text'}>{row.actual-row.plan>=0?'+':''}{fmt(row.actual-row.plan)}</td><td><span className={`management-pct-chip ${row.pct>=100?'good':row.pct>=90?'warning':'risk'}`}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.monthlyTrend.length&&<tr><td colSpan="5" className="empty">אין נתונים לתקופה.</td></tr>}</tbody></table></div></article>
-          {managementSummary.monthlyTrend.length===1 && <article className="management-panel management-wide-panel"><h3>פירוט FMS לפי קו / קבוצת משאב</h3><div className="management-line-grid">{Object.entries(managementSummary.monthlyTrend[0].groups||{}).filter(([,v])=>num(v.plan)||num(v.actual)).map(([group,v])=><div className="management-line-card" key={group}><b>{group}</b><span>תכנון {fmt(v.plan)}</span><span>ביצוע {fmt(v.actual)}</span><strong>{num(v.plan)?`${(num(v.actual)/num(v.plan)*100).toFixed(1)}%`:'—'}</strong></div>)}</div></article>}
+          {managementSummary.monthlyTrend.length===1 && <article className="management-panel management-wide-panel"><h3>פירוט FMS לפי קו / קבוצת משאב</h3><div className="management-line-grid">{Object.entries(managementSummary.monthlyTrend[0].groups||{}).filter(([,v])=>num(v.plan)||num(v.actual)).map(([group,v])=><div className="management-line-card" key={group}><b>{group==='GALIGAN-ISO-42'?'Galigan ISO (42)':group}</b><span>תכנון {fmt(v.plan)}</span><span>ביצוע {fmt(v.actual)}</span><strong>{num(v.plan)?`${(num(v.actual)/num(v.plan)*100).toFixed(1)}%`:'—'}</strong></div>)}</div></article>}
         </>}
         {managementView==='costs' && <>
           <div className="management-cost-strip"><article><span>סה״כ תשלום לקבלן</span><b>{managementSummary.contractorCost?`₪${fmt(managementSummary.contractorCost)}`:'—'}</b></article><article><span>תוצרת בחשבונות קבלן</span><b>{managementSummary.contractorPackaged?fmt(managementSummary.contractorPackaged):'—'}</b></article><article><span>עלות משוקללת</span><b>{managementSummary.contractorCostPerUnit?`₪${managementSummary.contractorCostPerUnit.toFixed(3)}`:'—'}</b></article></div>
