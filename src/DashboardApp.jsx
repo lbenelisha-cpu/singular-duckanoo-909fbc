@@ -10,7 +10,7 @@ import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
-import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows } from './data/managementHistoryCloud'
+import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
 import * as XLSXCore from 'xlsx'
 import './styles.css'
 
@@ -1030,12 +1030,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [managementCloudStatus, setManagementCloudStatus] = useState({planRows:0,contractorRows:0,lastUpdated:'',error:''})
   const [managementUploadBusy, setManagementUploadBusy] = useState(false)
   const [managementUploadMessage, setManagementUploadMessage] = useState('')
+  const [managementUploadHistory, setManagementUploadHistory] = useState([])
+  const [managementUploadProgress, setManagementUploadProgress] = useState(null)
   const refreshManagementHistory = async () => {
     const result = await loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY)
     setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
     setManagementHistorySource(result.source || 'embedded')
     setManagementHistoryError(result.error || '')
     setManagementCloudStatus(await getManagementCloudStatus())
+    try { setManagementUploadHistory(await getManagementUploadHistory(30)) } catch {}
   }
   useEffect(() => {
     let cancelled = false
@@ -2916,14 +2919,24 @@ material: normalize(getField(r, [
     return [...merged.values()]
   }
   const handleManagementUpload = async (files, kind) => {
-    const file=files?.[0]; if(!file)return
-    setManagementUploadBusy(true); setManagementUploadMessage(`בודק ${file.name}...`)
+    const selected=(files||[]).filter(Boolean); if(!selected.length)return
+    setManagementUploadBusy(true); setManagementUploadMessage(`מתחיל טעינה של ${selected.length} קבצים...`)
+    let ok=0, failed=0, totalRows=0, updated=0, created=0; const errors=[]
     try{
-      const rows=await parseManagementWorkbook(file,kind)
-      if(!rows.length) throw new Error('לא זוהו שורות חודש/מתקן עם נתוני תכנון או עלות. בדוק כותרות בקובץ.')
-      const count=kind==='plan'?await upsertManagementPlanRows(rows):await upsertManagementContractorRows(rows)
-      await refreshManagementHistory(); setManagementUploadMessage(`נשמרו ${count} רשומות ב-Supabase · ${file.name}`)
-    }catch(error){setManagementUploadMessage(`שגיאה: ${error?.message||error}`)}finally{setManagementUploadBusy(false)}
+      for(let i=0;i<selected.length;i++){
+        const file=selected[i]; setManagementUploadProgress({current:i+1,total:selected.length,fileName:file.name})
+        try{
+          const rows=await parseManagementWorkbook(file,kind)
+          if(!rows.length) throw new Error('לא זוהו רשומות חודש/מתקן תקינות')
+          const periods=[...new Set(rows.map(r=>`${r.month}|${r.facility}`))]
+          const count=kind==='plan'?await upsertManagementPlanRows(rows):await upsertManagementContractorRows(rows)
+          totalRows+=count; ok++; updated+=count
+          try{await logManagementUpload({file_name:file.name,data_kind:kind,status:'success',rows_written:count,periods})}catch{}
+        }catch(error){failed++; errors.push(`${file.name}: ${error?.message||error}`); try{await logManagementUpload({file_name:file.name,data_kind:kind,status:'error',rows_written:0,periods:[],error_message:error?.message||String(error)})}catch{}}
+      }
+      await refreshManagementHistory()
+      setManagementUploadMessage(`הטעינה הסתיימה · ${ok} קבצים נקלטו · ${failed} נכשלו · ${totalRows} רשומות נשמרו${errors.length?` · ${errors.slice(0,2).join(' | ')}`:''}`)
+    } finally { setManagementUploadBusy(false); setManagementUploadProgress(null) }
   }
 
   const setManagementPeriodPreset = preset => {
@@ -4123,7 +4136,7 @@ material: normalize(getField(r, [
           <button className={managementView==='quality'?'active':''} onClick={()=>setManagementView('quality')}>איכות ומגמות</button>
         </div>
         <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
-        {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>Excel חודשי / היסטורי</small></span><input type="file" accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>Excel תוצרת ועלויות מתקן 42</small></span><input type="file" accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
+        {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadProgress&&<div className="management-batch-progress"><b>{managementUploadProgress.current}/{managementUploadProgress.total}</b><span>{managementUploadProgress.fileName}</span></div>}{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementUploadHistory.length>0&&<div className="management-upload-history"><h4>היסטוריית טעינות אחרונות</h4><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>קובץ</th><th>רשומות</th><th>סטטוס</th></tr></thead><tbody>{managementUploadHistory.slice(0,10).map((h,i)=><tr key={h.id||i}><td>{h.uploaded_at?new Date(h.uploaded_at).toLocaleString('he-IL'):'—'}</td><td>{h.data_kind==='plan'?'Plan Vs Actual':'עלויות קבלן'}</td><td>{h.file_name}</td><td>{Number(h.rows_written||0).toLocaleString()}</td><td><span className={`upload-status ${h.status}`}>{h.status==='success'?'נקלט':'שגיאה'}</span></td></tr>)}</tbody></table></div></div>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
         <div className="management-kpi-grid management-kpi-grid-six">
           <article><span>תפוקה בפועל IML</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
           <article><span>ממוצע ליום</span><b>{fmt(managementSummary.avgDaily)}</b><small>שיא {fmt(managementSummary.peakDaily)}</small></article>

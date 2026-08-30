@@ -1,1 +1,5 @@
-{"version": "11.19.1", "build": "Sprint 11.19.1 — Management Summary Style Fix", "updated": "2026-08-30"}
+{
+  "version": "11.20.0",
+  "label": "Sprint 11.20.0 — Management Multi Upload",
+  "releasedAt": "2026-08-30T23:45:00+03:00"
+}

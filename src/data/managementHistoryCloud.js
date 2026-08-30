@@ -47,3 +47,17 @@ export async function upsertManagementContractorRows(rows){
   const {error}=await supabase.from('iml_management_contractor_costs').upsert(payload,{onConflict:'month,facility'})
   if(error)throw error; return payload.length
 }
+
+
+export async function getManagementUploadHistory(limit=30){
+  if(!supabase) return []
+  const {data,error}=await supabase.from('iml_management_upload_log').select('id,file_name,data_kind,status,rows_written,periods,uploaded_at,error_message').order('uploaded_at',{ascending:false}).limit(limit)
+  if(error){ if(String(error.message||'').includes('iml_management_upload_log')) return []; throw error }
+  return data||[]
+}
+export async function logManagementUpload(entry){
+  if(!supabase) return
+  const payload={file_name:String(entry.file_name||''),data_kind:String(entry.data_kind||''),status:String(entry.status||'success'),rows_written:Number(entry.rows_written||0),periods:Array.isArray(entry.periods)?entry.periods:[],error_message:String(entry.error_message||'')}
+  const {error}=await supabase.from('iml_management_upload_log').insert(payload)
+  if(error && !String(error.message||'').includes('iml_management_upload_log')) throw error
+}
