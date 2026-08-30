@@ -49,7 +49,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.9.49'
-const BUILD_LABEL = 'Sprint 11.9.49 — Active Facilities Unified Mobile Load'
+const BUILD_LABEL = 'Sprint 11.10.0 — Management Summary'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -2629,6 +2629,25 @@ material: normalize(getField(r, [
   const targetRequiredDaily = scopedPlanningRows.reduce((sum,row) => sum + row.requiredDaily, 0)
   const uniqueOrders = useMemo(() => new Set(filtered.map(r => r.order).filter(Boolean)).size, [filtered])
   const uniqueBatches = useMemo(() => new Set(filtered.map(r => r.batch).filter(Boolean)).size, [filtered])
+  const managementSummary = useMemo(() => {
+    const total = filtered.reduce((sum,row) => sum + num(row.qty), 0)
+    const dayMap = new Map()
+    filtered.forEach(row => { const key=iso(row.date); if(key) dayMap.set(key,(dayMap.get(key)||0)+num(row.qty)) })
+    const days = [...dayMap.values()]
+    const avgDaily = days.length ? total / days.length : 0
+    const peakDaily = days.length ? Math.max(...days) : 0
+    const targetPct = targetTotal > 0 ? targetActual / targetTotal * 100 : 0
+    const forecastPct = targetTotal > 0 ? targetForecast / targetTotal * 100 : 0
+    const facilityRows = [...new Set(filtered.map(r=>String(r.facility||'')).filter(Boolean))].map(facility => {
+      const rows=filtered.filter(r=>String(r.facility||'')===facility)
+      return { facility, qty:rows.reduce((sum,r)=>sum+num(r.qty),0), records:rows.length }
+    }).sort((a,b)=>b.qty-a.qty)
+    const materialMap = new Map()
+    filtered.forEach(r=>{ const key=String(r.material||r.desc||'—'); materialMap.set(key,(materialMap.get(key)||0)+num(r.qty)) })
+    const topMaterials=[...materialMap.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5)
+    return { total, days:days.length, avgDaily, peakDaily, targetPct, forecastPct, facilityRows, topMaterials }
+  }, [filtered, targetTotal, targetActual, targetForecast])
+
   const managerInsights = useMemo(() => {
     const insights = []
     const highestRisk = planningRows.filter(r => r.state === 'risk').sort((a,b) => (b.requiredDaily - b.provenMax) - (a.requiredDaily - a.provenMax))[0]
@@ -3300,9 +3319,10 @@ material: normalize(getField(r, [
     setShowHome(false)
     if (area === 'quality') setActiveTab('quality')
     if (area === 'production' || area === 'recent') setActiveTab('production')
+    if (area === 'management-summary') setActiveTab('management-summary')
     if (area === 'admin') setActiveTab(canManageData ? 'mapping-center' : 'production')
     window.setTimeout(() => {
-      const targetId = area === 'planning' ? 'planning-section' : area === 'daily' ? 'daily-management-section' : area === 'quality' || area === 'recent' || area === 'admin' ? 'details-section' : 'control-tower-section'
+      const targetId = area === 'planning' ? 'planning-section' : area === 'daily' ? 'daily-management-section' : area === 'quality' || area === 'recent' || area === 'admin' || area === 'management-summary' ? 'details-section' : 'control-tower-section'
       document.getElementById(targetId)?.scrollIntoView({ behavior:'smooth', block:'start' })
     }, 80)
   }
@@ -3493,6 +3513,7 @@ material: normalize(getField(r, [
         <button className="home-nav-card teal" onClick={()=>openHomeArea('production')}><div className="home-nav-icon"><BarChart3/></div><h2>סקירת מתקנים</h2><p>סקירה כוללת של כל המתקנים, ביצועים מול יעדים ותחזית חודשית</p><span>כניסה לאזור <ChevronLeft/></span></button>
         <button className="home-nav-card green" onClick={()=>openHomeArea('daily')}><div className="home-nav-icon"><ClipboardList/></div><h2>ניהול יומי</h2><p>ניהול ותפעול יומי של מתקנים, קווים, תקלות והערות</p><span>כניסה לאזור <ChevronLeft/></span></button>
         <button className="home-nav-card purple" onClick={()=>openHomeArea('planning')}><div className="home-nav-icon"><Factory/></div><h2>תחזית חודשית לפי מתקן</h2><p>תחזית ביצועים חודשית לפי מתקן עם ניתוח קצבים ועמידה ביעדים</p><span>כניסה לאזור <ChevronLeft/></span></button>
+        <button className="home-nav-card management-summary-card" onClick={()=>openHomeArea('management-summary')}><div className="home-nav-icon"><TrendingUp/></div><h2>תקציר מנהלים</h2><p>תפוקה, תכנון מול ביצוע, איכות, מגמות ותובנות לתקופה שנבחרה</p><span>כניסה לתקציר <ChevronLeft/></span></button>
         <button className="home-nav-card orange" onClick={()=>openHomeArea('quality')}><div className="home-nav-icon"><FlaskConical/></div><h2>איכות</h2><p>סקירת איכות, מנות חריגות, תוצאות מעבדה וכרטיסי מנה</p><span>כניסה לאזור <ChevronLeft/></span></button>
         <button className="home-nav-card blue" onClick={()=>openHomeArea('recent')}><div className="home-nav-icon"><ClipboardList/></div><h2>רשומות תפוקה אחרונות</h2><p>רשומות התפוקה האחרונות ומעקב אחר המנות והחומרים שיוצרו</p><span>כניסה לאזור <ChevronLeft/></span></button>
       </section>
@@ -3741,6 +3762,7 @@ material: normalize(getField(r, [
 
       <section className="tabs" id="details-section">
         <button className={activeTab === 'production' ? 'active' : ''} onClick={() => setActiveTab('production')}><BarChart3 size={16}/> תפוקה</button>
+        <button className={activeTab === 'management-summary' ? 'active' : ''} onClick={() => setActiveTab('management-summary')}><TrendingUp size={16}/> תקציר מנהלים</button>
         <button className={activeTab === 'shifts' ? 'active' : ''} onClick={() => setActiveTab('shifts')}><Clock3 size={16}/> ניתוח משמרות</button>
         <button className={activeTab === 'bulk-balance' ? 'active' : ''} onClick={() => setActiveTab('bulk-balance')}><Activity size={16}/> מאזן מתקן 42</button>
         <button className={activeTab === 'facility42-residues' ? 'active' : ''} onClick={() => setActiveTab('facility42-residues')}><Archive size={16}/> שאריות מתקן 42 ({facility42Balance.residueRows.length})</button>
@@ -3794,6 +3816,21 @@ material: normalize(getField(r, [
           <tr><td><b>באלק</b></td><td>1119 + תיאור 777</td><td><b>{fmt(facility19Balance.bulk)}</b></td><td>{facility19Balance.bulkRows.length}</td><td>{new Set(facility19Balance.bulkRows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(facility19Balance.bulkRows.map(r=>r.order).filter(Boolean)).size}</td></tr>
           {['WG','SMALL PACKS'].map(type => { const rows=facility19Balance.packedRows.filter(r => (facility19Balance.isSmallPack(r) ? 'SMALL PACKS' : 'WG') === type); return <tr key={type}><td><b>{type === 'WG' ? 'מנות ייצור WG' : 'אריזות קטנות'}</b></td><td>1519 + {type === 'WG' ? 'WG רגיל' : '19PWG-01/05/15'}</td><td><b>{fmt(facility19Balance.byType[type])}</b></td><td>{rows.length}</td><td>{new Set(rows.map(r=>r.batch).filter(Boolean)).size}</td><td>{new Set(rows.map(r=>r.order).filter(Boolean)).size}</td></tr> })}
         </tbody></table></div>
+      </section>}
+      {activeTab === 'management-summary' && <section className="details management-summary">
+        <div className="management-summary-hero"><div><small>MANAGEMENT SUMMARY</small><h2>תקציר מנהלים</h2><p>{from || 'תחילת הנתונים'} עד {to || 'סוף הנתונים'} · {selectedFacilities.length ? `מתקנים ${selectedFacilities.join(', ')}` : 'כל המתקנים'}</p></div><div className="management-summary-badge"><TrendingUp size={24}/><span>IML CONTROL</span></div></div>
+        <div className="management-kpi-grid">
+          <article><span>סה״כ תפוקה</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
+          <article><span>ממוצע ליום</span><b>{fmt(managementSummary.avgDaily)}</b><small>שיא יומי {fmt(managementSummary.peakDaily)}</small></article>
+          <article className={managementSummary.targetPct>=95?'good':managementSummary.targetPct>=85?'warning':'risk'}><span>ביצוע מול תכנון</span><b>{managementSummary.targetPct ? `${managementSummary.targetPct.toFixed(1)}%` : '—'}</b><small>תחזית {managementSummary.forecastPct ? `${managementSummary.forecastPct.toFixed(1)}%` : '—'}</small></article>
+          <article className={openDeviations.length?'risk':'good'}><span>חריגות איכות פתוחות</span><b>{openDeviations.length}</b><small>{qualityBad.length} תוצאות איכות לא תקינות</small></article>
+        </div>
+        <div className="management-summary-grid">
+          <article className="management-panel"><h3>תפוקה לפי מתקן</h3>{managementSummary.facilityRows.slice(0,8).map(row=><div className="management-rank-row" key={row.facility}><span><b>{row.facility}</b><small>{row.records.toLocaleString()} רשומות</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.facilityRows.length&&<p className="empty">אין נתוני תפוקה בטווח.</p>}</article>
+          <article className="management-panel"><h3>מוצרים מובילים</h3>{managementSummary.topMaterials.map(([name,qty],i)=><div className="management-rank-row" key={name}><span><b>#{i+1} · {name}</b></span><strong>{fmt(qty)}</strong></div>)}{!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}</article>
+        </div>
+        <article className="management-panel management-insights"><h3>תובנות אוטומטיות</h3><div className="management-insight-grid">{managerInsights.map((item,i)=><div className={`management-insight ${item.state}`} key={`${item.title}-${i}`}><strong>{item.title}</strong><p>{item.text}</p></div>)}</div></article>
+        <div className="management-source-note"><Database size={18}/><div><b>מקורות הנתונים</b><span>התקציר מחושב מהכמות, האיכות והיעדים שכבר טעונים ב-IML CONTROL. נתוני FMS היסטוריים ועלויות קבלן יתווספו בשכבת ההיסטוריה בעדכון הבא.</span></div></div>
       </section>}
       {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8" data-smart-group-column="3" data-smart-facility-summary="1"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`} data-facility={r.facility || ''} style={{backgroundColor: new Set(sortedRecentProduction.map(x => x.facility).filter(Boolean)).size > 1 ? facilityColor(r.facility) : undefined}}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td><button type="button" className={`qty-variance-btn ${num(r.plannedQty)>0 && Math.abs(num(r.qty)-num(r.plannedQty))>0.0001 ? 'has-variance' : ''}`} onClick={()=>setQuantityVarianceRow(r)} title={num(r.plannedQty)>0 ? 'לחץ להצגת כמות מתוכננת, בפועל והפער' : 'לא נמצאה כמות מתוכננת לרשומה'}>{fmt(r.qty)}</button></td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
