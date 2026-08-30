@@ -943,17 +943,28 @@ const monthLabelHe = key => {
   const names=['','ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר']
   return `${names[Number(month)] || month} ${year}`
 }
+const MANAGEMENT_PLAN_OVERRIDES = {
+  // Confirmed by the facility manager on 2026-08-30. The uploaded FMS workbook
+  // snapshot does not contain the complete August target for Facility 42.
+  '2026-08|42': { plan: 766000 },
+}
 const managementPlanForFacility = (monthKey, facilityId) => {
   const month = MANAGEMENT_HISTORY.planActual?.[monthKey] || {}
   const wanted = String(facilityId || '')
-  let plan=0, actual=0
-  Object.values(month).forEach(rec => {
+  const direct = month[wanted]
+  let plan = Number(direct?.plan || 0)
+  let actual = Number(direct?.actual || 0)
+  // Fallback for legacy snapshots where the facility column and resource prefix differ.
+  if (!direct) Object.values(month).forEach(rec => {
     Object.entries(rec.groups || {}).forEach(([group,vals]) => {
       const groupId=String(group || '').match(/^(\d{2})[-_]/)?.[1] || ''
       if (groupId === wanted) { plan += Number(vals.plan || 0); actual += Number(vals.actual || 0) }
     })
   })
-  return { plan, actual }
+  const override = MANAGEMENT_PLAN_OVERRIDES[`${monthKey}|${wanted}`]
+  if (override?.plan != null) plan = Number(override.plan)
+  if (override?.actual != null) actual = Number(override.actual)
+  return { plan, actual, groups: direct?.groups || {} }
 }
 
 export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest = false, onSignOut, onRequestAdminLogin }) {
@@ -2700,7 +2711,8 @@ material: normalize(getField(r, [
       uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(key,facility); plan+=rec.plan; actual+=rec.actual })
       const costRec=uniqueLogical.length===1&&uniqueLogical[0]==='42'?MANAGEMENT_HISTORY.contractor42?.[key]:null
       fmsPlan+=plan; fmsActual+=actual
-      return { key,label:monthLabelHe(key),plan,actual,pct:plan?actual/plan*100:0,cost:costRec?.cost||0,packaged:costRec?.packaged||0,costPerUnit:costRec?.costPerUnit||0 }
+      const groups = uniqueLogical.length===1 ? managementPlanForFacility(key,uniqueLogical[0]).groups : {}
+      return { key,label:monthLabelHe(key),plan,actual,pct:plan?actual/plan*100:0,cost:costRec?.cost||0,packaged:costRec?.packaged||0,costPerUnit:costRec?.costPerUnit||0,groups }
     })
     const currentYear=Number((toMonth||fromMonth||String(new Date().getFullYear())).slice(0,4))
     const selectedMonthNums=scopeMonths.filter(k=>Number(k.slice(0,4))===currentYear).map(k=>k.slice(5,7))
@@ -2713,9 +2725,23 @@ material: normalize(getField(r, [
     const contractorCostPerUnit=contractorPackaged?contractorCost/contractorPackaged:0
     const facilityRows=[...facilityMap.values()].sort((a,b)=>b.qty-a.qty)
     const topMaterials=[...materialMap.values()].sort((a,b)=>b.qty-a.qty).slice(0,8)
-    const qualityLots=new Set(filteredQualityRows.map(r=>r.inspectionLot||`${r.batch}|${r.material}`).filter(Boolean))
-    const badLots=new Set(qualityBad.map(r=>r.inspectionLot||`${r.batch}|${r.material}`).filter(Boolean))
-    const rft=qualityLots.size?Math.max(0,(qualityLots.size-badLots.size)/qualityLots.size*100):0
+    // RFT is calculated at Inspection-Lot level from the decision/deviation dataset,
+    // not from individual characteristic result rows. A lot is first-pass-right when
+    // no rejected characteristic was recorded and the final UD is not a reject/restricted decision.
+    const qualityLotMap=new Map()
+    filteredDeviationRows.forEach(r=>{
+      const key=r.inspectionLot||`${r.batch}|${r.material}`
+      if(!key) return
+      const cur=qualityLotMap.get(key)||{bad:false,ud:''}
+      const ud=normalize(r.udCode).toLowerCase()
+      const rejected=num(r.rejectedCount)>0
+      const badUd=['a2-','a3-','a3i-','a3r-','rejected','restricted'].some(x=>ud.includes(x))
+      cur.bad=cur.bad||rejected||badUd; if(ud) cur.ud=ud; qualityLotMap.set(key,cur)
+    })
+    const qualityLots=new Set(qualityLotMap.keys())
+    const badLots=new Set([...qualityLotMap.entries()].filter(([,v])=>v.bad).map(([k])=>k))
+    const goodLots=Math.max(0,qualityLots.size-badLots.size)
+    const rft=qualityLots.size?goodLots/qualityLots.size*100:0
     const targetPct=fmsPlan>0?fmsActual/fmsPlan*100:(targetTotal>0?targetActual/targetTotal*100:0)
     const forecastPct=targetTotal>0?targetForecast/targetTotal*100:0
     const insights=[]
@@ -2724,8 +2750,8 @@ material: normalize(getField(r, [
     if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`₪${fmt(contractorCost)} על ${fmt(contractorPackaged)} ליטר/יחידות מדווחות. מקור: חשבונות קבלן מתקן 42.`})
     else if (uniqueLogical.includes('42')) insights.push({state:'warning',title:'אין עלות קבלן בתקופה',text:`נתוני הקבלן שהועלו זמינים עד ${MANAGEMENT_HISTORY.meta?.contractor2026Through || 'החודש האחרון בקובץ'}.`})
     if (qualityLots.size) insights.push({state:rft>=98?'good':'warning',title:`RFT מחושב ${rft.toFixed(1)}%`,text:`מבוסס על ${qualityLots.size.toLocaleString()} Inspection Lots/מנות איכות בטווח הנבחר.`})
-    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,rft,qualityLots:qualityLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
-  }, [filtered, filteredQualityRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast])
+    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,rft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
+  }, [filtered, filteredQualityRows, filteredDeviationRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast])
 
   const managerInsights = useMemo(() => {
     const insights = []
@@ -3921,12 +3947,18 @@ material: normalize(getField(r, [
           <article className="management-panel"><h3>תפוקה לפי מתקן ניהולי</h3>{managementSummary.facilityRows.slice(0,10).map(row=><div className="management-rank-row" key={row.facility}><span><b>מתקן {row.facility}</b><small>{row.records.toLocaleString()} רשומות</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.facilityRows.length&&<p className="empty">אין נתוני תפוקה בטווח.</p>}</article>
           <article className="management-panel"><h3>מוצרים מובילים</h3>{managementSummary.topMaterials.map((row,i)=><div className="management-rank-row management-material-row" key={`${row.material}-${i}`}><span><b>#{i+1} · {row.desc || row.material}</b><small>{row.material}</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}</article>
         </div>}
-        {managementView==='plan' && <article className="management-panel management-wide-panel"><h3>תכנון מול ביצוע לפי חודש</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תכנון FMS</th><th>ביצוע FMS</th><th>פער</th><th>עמידה</th><th>עלות קבלן / ליטר</th></tr></thead><tbody>{managementSummary.monthlyTrend.map(row=><tr key={row.key}><td><b>{row.label}</b></td><td>{fmt(row.plan)}</td><td>{fmt(row.actual)}</td><td className={row.actual-row.plan>=0?'positive-text':'negative-text'}>{fmt(row.actual-row.plan)}</td><td><span className={`management-pct-chip ${row.pct>=100?'good':row.pct>=90?'warning':'risk'}`}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</span></td><td>{row.costPerUnit?`₪${row.costPerUnit.toFixed(3)}`:'—'}</td></tr>)}{!managementSummary.monthlyTrend.length&&<tr><td colSpan="6" className="empty">אין נתונים לתקופה.</td></tr>}</tbody></table></div></article>}
+        {managementView==='plan' && <>
+          <div className="management-cost-strip"><article><span>תכנון לתקופה</span><b>{fmt(managementSummary.fmsPlan)}</b></article><article><span>ביצוע FMS</span><b>{fmt(managementSummary.fmsActual)}</b></article><article><span>פער מול תכנון</span><b>{managementSummary.fmsPlan?`${managementSummary.fmsActual-managementSummary.fmsPlan>=0?'+':''}${fmt(managementSummary.fmsActual-managementSummary.fmsPlan)}`:'—'}</b></article></div>
+          <article className="management-panel management-wide-panel"><h3>תכנון מול ביצוע לפי חודש</h3><p className="management-explain">אין צורך לחפש בטבלה: התקופה והמתקן נקבעים מהמסננים הראשיים של IML CONTROL. כאן מוצגים אוטומטית התכנון, הביצוע, הפער ואחוז העמידה.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תכנון FMS</th><th>ביצוע FMS</th><th>פער</th><th>עמידה</th></tr></thead><tbody>{managementSummary.monthlyTrend.map(row=><tr key={row.key}><td><b>{row.label}</b></td><td>{fmt(row.plan)}</td><td>{fmt(row.actual)}</td><td className={row.actual-row.plan>=0?'positive-text':'negative-text'}>{row.actual-row.plan>=0?'+':''}{fmt(row.actual-row.plan)}</td><td><span className={`management-pct-chip ${row.pct>=100?'good':row.pct>=90?'warning':'risk'}`}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.monthlyTrend.length&&<tr><td colSpan="5" className="empty">אין נתונים לתקופה.</td></tr>}</tbody></table></div></article>
+          {managementSummary.monthlyTrend.length===1 && <article className="management-panel management-wide-panel"><h3>פירוט FMS לפי קו / קבוצת משאב</h3><div className="management-line-grid">{Object.entries(managementSummary.monthlyTrend[0].groups||{}).filter(([,v])=>num(v.plan)||num(v.actual)).map(([group,v])=><div className="management-line-card" key={group}><b>{group}</b><span>תכנון {fmt(v.plan)}</span><span>ביצוע {fmt(v.actual)}</span><strong>{num(v.plan)?`${(num(v.actual)/num(v.plan)*100).toFixed(1)}%`:'—'}</strong></div>)}</div></article>}
+        </>}
         {managementView==='costs' && <>
           <div className="management-cost-strip"><article><span>סה״כ תשלום לקבלן</span><b>{managementSummary.contractorCost?`₪${fmt(managementSummary.contractorCost)}`:'—'}</b></article><article><span>תוצרת בחשבונות קבלן</span><b>{managementSummary.contractorPackaged?fmt(managementSummary.contractorPackaged):'—'}</b></article><article><span>עלות משוקללת</span><b>{managementSummary.contractorCostPerUnit?`₪${managementSummary.contractorCostPerUnit.toFixed(3)}`:'—'}</b></article></div>
           <article className="management-panel management-wide-panel"><h3>עלות קבלן מתקן 42 — היסטוריה</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תוצרת</th><th>תשלום לקבלן</th><th>עלות / ליטר</th></tr></thead><tbody>{managementSummary.monthlyTrend.filter(r=>r.cost).map(row=><tr key={`cost-${row.key}`}><td>{row.label}</td><td>{fmt(row.packaged)}</td><td>₪{fmt(row.cost)}</td><td><b>₪{row.costPerUnit.toFixed(3)}</b></td></tr>)}{!managementSummary.monthlyTrend.some(r=>r.cost)&&<tr><td colSpan="4" className="empty">אין נתוני קבלן בטווח שנבחר. ב-2026 הנתונים שהועלו מגיעים עד יולי.</td></tr>}</tbody></table></div></article>
+          <div className="management-summary-grid"><article className="management-panel"><h3>מה מודדים כאן?</h3><p className="management-explain">המסך מחבר תשלום לקבלן לתוצרת הארוזה ומציג עלות משוקללת לליטר. בתקופה של חודש בודד מוצג גם תמהיל 1L / 5L / 10L / 20L וחלוקת תפוקה ועלות לפי משמרת, כאשר הנתונים קיימים בחשבון הקבלן.</p></article><article className="management-panel"><h3>זמינות נתוני עלות</h3><p className="management-explain">לשנת 2026 חשבונות הקבלן שהועלו זמינים עד <b>יולי 2026</b>. בחירת אוגוסט בלבד לא תציג עלות; בחירת ינואר–אוגוסט תציג YTD עד יולי ותסמן שאוגוסט טרם זמין.</p></article></div>
+          {managementSummary.monthlyTrend.filter(r=>r.cost).slice(-1).map(row=>{const rec=MANAGEMENT_HISTORY.contractor42?.[row.key];return <div className="management-summary-grid" key={`mix-${row.key}`}><article className="management-panel"><h3>תמהיל אריזה — {row.label}</h3>{Object.entries(rec?.lines||{}).map(([line,qty])=><div className="management-rank-row" key={line}><span><b>{line}</b></span><strong>{fmt(qty)}</strong></div>)}</article><article className="management-panel"><h3>יעילות לפי משמרת — {row.label}</h3>{(rec?.shiftQty||[]).map((qty,i)=><div className="management-rank-row" key={i}><span><b>משמרת {i+1}</b><small>{rec?.shiftCost?.[i]?`עלות ₪${fmt(rec.shiftCost[i])}`:''}</small></span><strong>{rec?.shiftCost?.[i]&&qty?`₪${(rec.shiftCost[i]/qty).toFixed(3)} / ל׳`:'—'}</strong></div>)}</article></div>})}
         </>}
-        {managementView==='quality' && <div className="management-summary-grid"><article className="management-panel"><h3>איכות בתקופה</h3><div className="management-quality-big"><b>{managementSummary.qualityLots?`${managementSummary.rft.toFixed(1)}%`:'—'}</b><span>RFT מחושב</span><small>יעד ייחוס מהמצגת: 98%</small></div><div className="management-rank-row"><span><b>חריגות פתוחות</b></span><strong>{openDeviations.length}</strong></div><div className="management-rank-row"><span><b>תוצאות לא תקינות</b></span><strong>{qualityBad.length}</strong></div></article><article className="management-panel"><h3>הערת מקור</h3><p className="management-explain">RFT כאן מחושב מנתוני האיכות הטעונים באפליקציה לפי Inspection Lot/מנה ייחודית. COPQ ובטיחות אינם נמצאים בקובצי המקור שהועלו ולכן אינם מומצאים אוטומטית.</p></article></div>}
+        {managementView==='quality' && <div className="management-summary-grid"><article className="management-panel"><h3>איכות בתקופה</h3><div className="management-quality-big"><b>{managementSummary.qualityLots?`${managementSummary.rft.toFixed(1)}%`:'—'}</b><span>RFT לפי Inspection Lot</span><small>יעד ייחוס מהמצגת: 98%</small></div><div className="management-rank-row"><span><b>מנות / לוטים שנבדקו</b></span><strong>{managementSummary.qualityLots||0}</strong></div><div className="management-rank-row"><span><b>תקין בפעם הראשונה</b></span><strong>{managementSummary.qualityGood||0}</strong></div><div className="management-rank-row"><span><b>לוטים עם דחייה / Restricted</b></span><strong>{managementSummary.qualityBadLots||0}</strong></div><div className="management-rank-row"><span><b>חריגות פתוחות</b></span><strong>{openDeviations.length}</strong></div></article><article className="management-panel"><h3>איך RFT מחושב?</h3><p className="management-explain">החישוב נעשה ברמת Inspection Lot מתוך קובץ החלטות השימוש/חריגות: לוט ללא Rejected characteristics וללא החלטת שימוש A2/A3/A3I/A3R נחשב תקין בפעם הראשונה. תוצאות בדיקה בודדות אינן נספרות כלוט נפרד.</p><p className="management-explain">COPQ ובטיחות עדיין דורשים מקור נתונים נפרד ואינם מחושבים אוטומטית.</p></article></div>}
         <article className="management-panel management-insights"><h3>תובנות אוטומטיות מהנתונים</h3><div className="management-insight-grid">{managementSummary.insights.map((item,i)=><div className={`management-insight ${item.state}`} key={`${item.title}-${i}`}><strong>{item.title}</strong><p>{item.text}</p></div>)}{!managementSummary.insights.length&&<div className="management-insight good"><strong>אין מספיק נתונים להשוואה</strong><p>בחר תקופה הכוללת חודשים 2024–2026 ומתקן ניהולי כדי לקבל השוואות.</p></div>}</div></article>
         <div className="management-source-note"><Database size={18}/><div><b>מקורות מחוברים</b><span>כמות ואיכות מ-IML CONTROL · Plan Vs Actual היסטורי 2024–2026 · חשבונות קבלן מתקן 42 לשנים 2024–2026. הנתונים מחושבים לפי התקופה והמתקנים שנבחרו.</span></div></div>
       </section>}

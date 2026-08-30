@@ -1,5 +1,1 @@
-{
-  "version": "11.11.0",
-  "label": "Sprint 11.11.0 — Historical Management BI",
-  "releasedAt": "2026-08-30T21:55:00+03:00"
-}
+{"version":"11.12.0","build":"management-bi-fms-cost-rft","date":"2026-08-30","notes":"Correct FMS, management plan/cost views, lot-level RFT"}

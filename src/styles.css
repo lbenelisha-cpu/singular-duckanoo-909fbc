@@ -1220,3 +1220,4 @@ button,input,select,textarea{font:inherit}
 @media(max-width:1450px){.management-kpi-grid-six{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:900px){.management-kpi-grid-six{grid-template-columns:repeat(2,minmax(0,1fr))}.management-cost-strip{grid-template-columns:1fr}.management-view-tabs{width:100%}.management-view-tabs button{flex:1}}
 @media(max-width:620px){.management-kpi-grid-six{grid-template-columns:1fr}.management-month-col{min-width:50px}.management-summary-badge{font-size:12px}}
+.management-line-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:14px}.management-line-card{display:grid;gap:6px;padding:16px;border:1px solid #dbe7ed;border-radius:16px;background:#f7fafb}.management-line-card b{font-size:17px}.management-line-card span{color:#6b7d8f}.management-line-card strong{font-size:22px;color:#0f7f76}
