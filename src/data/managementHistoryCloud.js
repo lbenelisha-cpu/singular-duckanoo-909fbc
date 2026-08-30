@@ -1,6 +1,7 @@
 import { supabase } from '../supabase'
 
 const monthKey = value => { const s=String(value||''); return s.length>=7?s.slice(0,7):'' }
+const monthDate = value => { const key=monthKey(value); return key ? `${key}-01` : '' }
 const normalizePlanRow = row => ({ month:monthKey(row.month), facility:String(row.facility||''), plan:Number(row.plan||0), source_actual:Number(row.source_actual||0), groups:row.groups||{}, source_label:row.source_label||'' })
 const normalizeCostRow = row => ({ month:monthKey(row.month), facility:String(row.facility||'42'), packaged:Number(row.packaged||0), cost:Number(row.cost||0), cost_per_unit:Number(row.cost_per_unit||0), lines:row.lines||{}, shift_qty:Array.isArray(row.shift_qty)?row.shift_qty:[], shift_cost:Array.isArray(row.shift_cost)?row.shift_cost:[], source_label:row.source_label||'' })
 
@@ -35,14 +36,14 @@ export async function getManagementCloudStatus(){
 
 export async function upsertManagementPlanRows(rows){
   if(!supabase) throw new Error('Supabase אינו מחובר')
-  const payload=(rows||[]).map(normalizePlanRow).filter(r=>r.month&&r.facility)
+  const payload=(rows||[]).map(normalizePlanRow).filter(r=>r.month&&r.facility).map(r=>({...r,month:monthDate(r.month)}))
   if(!payload.length) throw new Error('לא נמצאו רשומות Plan Vs Actual תקינות')
   const {error}=await supabase.from('iml_management_plan_actual').upsert(payload,{onConflict:'month,facility'})
   if(error)throw error; return payload.length
 }
 export async function upsertManagementContractorRows(rows){
   if(!supabase) throw new Error('Supabase אינו מחובר')
-  const payload=(rows||[]).map(normalizeCostRow).filter(r=>r.month&&r.facility)
+  const payload=(rows||[]).map(normalizeCostRow).filter(r=>r.month&&r.facility).map(r=>({...r,month:monthDate(r.month)}))
   if(!payload.length) throw new Error('לא נמצאו רשומות עלות קבלן תקינות')
   const {error}=await supabase.from('iml_management_contractor_costs').upsert(payload,{onConflict:'month,facility'})
   if(error)throw error; return payload.length
