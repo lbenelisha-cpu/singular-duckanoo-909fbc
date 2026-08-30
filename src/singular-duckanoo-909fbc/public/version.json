@@ -1,6 +1,5 @@
 {
-  "version": "11.17.0",
-  "build": "management-annual-trend",
-  "date": "2026-08-30",
-  "updated": "2026-08-30T23:33:00+03:00"
+  "version": "11.18.0",
+  "build": "management-cloud",
+  "updated": "2026-08-30"
 }
