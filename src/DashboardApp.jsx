@@ -1156,13 +1156,47 @@ const managementPlanForFacility = (history, monthKey, facilityId) => {
   const direct = month[wanted]
   let plan = Number(direct?.plan || 0)
   let actual = Number(direct?.actual || 0)
+
+  // Historical uploads did not always use the same facility key. In several
+  // older FMS files (especially Facility 42) the monthly total can be zero
+  // while the line-level rows still contain the real Plan / Production values.
+  // Recover those line values before treating the month as missing.
+  const directGroups = Object.entries(direct?.groups || {})
+  if (direct && actual <= 0 && directGroups.length) {
+    const groupActual = directGroups.reduce((sum,[,vals])=>sum + Number(vals?.actual || 0),0)
+    if (groupActual > 0) actual = groupActual
+  }
+  if (direct && plan <= 0 && directGroups.length) {
+    const groupPlan = directGroups.reduce((sum,[,vals])=>sum + Number(vals?.plan || 0),0)
+    if (groupPlan > 0) plan = groupPlan
+  }
+
   // Fallback for legacy snapshots where the facility column and resource prefix differ.
-  if (!direct) Object.values(month).forEach(rec => {
-    Object.entries(rec.groups || {}).forEach(([group,vals]) => {
-      const groupId=String(group || '').match(/^(\d{2})[-_]/)?.[1] || ''
-      if (groupId === wanted) { plan += Number(vals.plan || 0); actual += Number(vals.actual || 0) }
+  // For Facility 42 also recognise its historical FMS line names (LQ / ISO),
+  // because some source files were uploaded without a leading "42-" resource id.
+  if (!direct || actual <= 0 || plan <= 0) {
+    let fallbackPlan = 0
+    let fallbackActual = 0
+    Object.entries(month).forEach(([recKey,rec]) => {
+      Object.entries(rec?.groups || {}).forEach(([group,vals]) => {
+        const raw = `${recKey} ${group} ${vals?.label || ''}`.toUpperCase()
+        const groupId=String(group || '').match(/^(\d{2})[-_]/)?.[1] || ''
+        const belongs42 = wanted === '42' && (
+          /(^|[^0-9])42([^0-9]|$)/.test(raw) ||
+          /\bLQ\b/.test(raw) ||
+          /SHAKED\s*ISO/.test(raw) ||
+          /GALIGAN\s*ISO/.test(raw)
+        )
+        const belongs = groupId === wanted || belongs42
+        if (belongs) {
+          fallbackPlan += Number(vals?.plan || 0)
+          fallbackActual += Number(vals?.actual || 0)
+        }
+      })
     })
-  })
+    if (plan <= 0 && fallbackPlan > 0) plan = fallbackPlan
+    if (actual <= 0 && fallbackActual > 0) actual = fallbackActual
+  }
   const override = MANAGEMENT_PLAN_OVERRIDES[`${monthKey}|${wanted}`]
   if (override?.plan != null) plan = Number(override.plan)
   if (override?.actual != null) actual = Number(override.actual)
@@ -4559,7 +4593,7 @@ material: normalize(getField(r, [
           <div className="management-trend-highlights"><article><span>חודש שיא</span><b>{managementSummary.peakMonth?.label||'—'}</b><small>{managementSummary.peakMonth?fmt(managementSummary.peakMonth.actual):'אין נתונים'}</small></article><article><span>חודש חלש</span><b>{managementSummary.weakMonth?.label||'—'}</b><small>{managementSummary.weakMonth?fmt(managementSummary.weakMonth.actual):'אין נתונים'}</small></article><article><span>עמידה מיטבית בתכנון</span><b>{managementSummary.bestPlanMonth?.label||'—'}</b><small>{managementSummary.bestPlanMonth?.plan?`${managementSummary.bestPlanMonth.pct.toFixed(1)}%`:'אין תכנון'}</small></article></div>
           <article className="management-panel management-wide-panel management-annual-panel"><h3>מגמה רב־שנתית 2024–2026</h3><p className="management-explain">אותם חודשי בחירה מושווים בין שלוש השנים. ביצוע חי מ-IML מקבל עדיפות; כשאינו טעון נעשה שימוש בהיסטוריה.</p><div className="management-annual-grid">{managementSummary.annualRows.map(row=><div className="management-annual-card" key={row.year}><div><strong>{row.year}</strong><small>{row.source==='IML'?'ביצוע IML':'היסטוריה'}</small></div><b>{fmt(row.actual)}</b><span>תכנון {fmt(row.plan)}</span><em className={row.pct>=100?'good':row.pct>=90?'warning':'risk'}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</em>{row.costPerUnit>0&&<small>עלות/ליטר ₪{row.costPerUnit.toFixed(3)}</small>}</div>)}</div><div className="management-year-bars">{managementSummary.annualRows.map(row=><div className="management-year-bar" key={`annual-bar-${row.year}`}><div className="management-year-track"><i style={{height:`${Math.max(4,row.actual/managementSummary.annualActualMax*100)}%`}}/></div><b>{row.year}</b><small>{fmt(row.actual)}</small></div>)}</div></article>
           {managementSummary.logicalFacilities.length===1&&managementSummary.logicalFacilities[0]==='42'&&<article className="management-panel management-wide-panel"><h3>מגמת עלות קבלן 2024–2026</h3><p className="management-explain">עלות משוקללת לליטר באותם חודשים שנבחרו. שנים ללא חשבון קבלן זמין מוצגות ללא ערך.</p><div className="management-cost-year-grid">{managementSummary.annualRows.map(row=><div key={`cost-year-${row.year}`}><span>{row.year}</span><b>{row.costPerUnit?`₪${row.costPerUnit.toFixed(3)}`:'—'}</b><div><i style={{width:`${row.costPerUnit?Math.max(4,row.costPerUnit/managementSummary.annualCostMax*100):0}%`}}/></div></div>)}</div></article>}
-          <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע של השנה הנוכחית והקודמת נלקח מנתוני IML כאשר הם טעונים; אחרת נעשה שימוש ב-Plan Vs Actual ההיסטורי.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{fmt(row.previous)}</td><td className={row.delta>=0?'positive-text':'negative-text'}>{row.delta>=0?'+':''}{fmt(row.delta)}</td><td><span className={`management-pct-chip ${row.pct>=0?'good':'warning'}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
+          <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע של השנה הנוכחית והקודמת נלקח מנתוני IML כאשר הם טעונים; אחרת נעשה שימוש ב-Plan Vs Actual ההיסטורי.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{row.previous?fmt(row.previous):'אין נתון'}</td><td className={row.previous?(row.delta>=0?'positive-text':'negative-text'):''}>{row.previous?`${row.delta>=0?'+':''}${fmt(row.delta)}`:'—'}</td><td><span className={`management-pct-chip ${row.previous?(row.pct>=0?'good':'warning'):''}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
         </>}
         {managementView==='plan' && <>
           <div className="management-cost-strip"><article><span>תכנון לתקופה</span><b>{fmt(managementSummary.fmsPlan)}</b></article><article><span>ביצוע IML</span><b>{fmt(managementSummary.fmsActual)}</b></article><article><span>פער מול תכנון</span><b>{managementSummary.fmsPlan?`${managementSummary.fmsActual-managementSummary.fmsPlan>=0?'+':''}${fmt(managementSummary.fmsActual-managementSummary.fmsPlan)}`:'—'}</b></article></div>
