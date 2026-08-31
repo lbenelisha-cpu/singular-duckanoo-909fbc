@@ -2872,13 +2872,80 @@ material: normalize(getField(r, [
     let rows = baseFiltered.filter(r => r.facility === id)
     if (id === '1542') rows = rows.filter(r => r.orderType.toUpperCase().includes('ZFIN'))
     const actual = rows.reduce((s, r) => s + r.qty, 0)
+
     const plans = planningRows.filter(x => (x.facilities || [x.facility]).includes(id))
-    const target = plans.reduce((sum, row) => sum + row.target, 0)
+    const monthlyTarget = plans.reduce((sum, row) => sum + row.target, 0)
     const forecast = plans.reduce((sum, row) => sum + row.forecast, 0)
+
+    // "ביצועים לפי מתקן בטווח המסונן" חייב להשוות תפוקה של הטווח
+    // לתכנון של אותו הטווח — לא ליעד של החודש האחרון בלבד.
+    const logicalMap = {
+      '1542':'42', '1142':'42',
+      '1519':'19', '1119':'19',
+      '1523':'23', '1123':'23',
+      '1528':'28',
+      '1524':'24'
+    }
+    const logicalId = logicalMap[String(id)] || String(id)
+    const startDate = from ? new Date(`${from}T12:00:00`) : null
+    const endDate = to ? new Date(`${to}T12:00:00`) : null
+
+    let periodTarget = 0
+    let permanentPlanFound = false
+
+    if (startDate && endDate && !Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime())) {
+      const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1, 12)
+      const lastMonth = new Date(endDate.getFullYear(), endDate.getMonth(), 1, 12)
+
+      while (cursor <= lastMonth) {
+        const monthKey = `${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,'0')}`
+        const rec = managementPlanForFacility(managementHistory, monthKey, logicalId)
+        const fullMonthPlan = num(rec?.plan)
+
+        if (fullMonthPlan > 0) {
+          permanentPlanFound = true
+
+          // אם נבחר חלק מחודש, מחשבים רק את חלק ימי העבודה שנמצא בטווח.
+          const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1, 12)
+          const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth()+1, 0, 12)
+          const overlapStart = startDate > monthStart ? startDate : monthStart
+          const overlapEnd = endDate < monthEnd ? endDate : monthEnd
+
+          let workdaysMonth = 0
+          let workdaysSelected = 0
+          const d = new Date(monthStart)
+          while (d <= monthEnd) {
+            const dow = d.getDay()
+            if (dow !== 5 && dow !== 6) {
+              workdaysMonth++
+              if (d >= overlapStart && d <= overlapEnd) workdaysSelected++
+            }
+            d.setDate(d.getDate()+1)
+          }
+
+          periodTarget += fullMonthPlan * (workdaysMonth ? workdaysSelected / workdaysMonth : 1)
+        }
+
+        cursor.setMonth(cursor.getMonth()+1)
+      }
+    }
+
+    const target = permanentPlanFound ? periodTarget : monthlyTarget
     const rank = { risk: 3, warning: 2, 'no-target': 1, good: 0, achieved: 0 }
-    const state = plans.sort((a,b) => (rank[b.state] || 0) - (rank[a.state] || 0))[0]?.state || 'no-target'
-    return { id, actual, target, pct: target ? actual / target * 100 : 0, orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state, forecast }
-  }), [facilities, baseFiltered, planningRows])
+    const state = !target ? 'no-target' : actual / target * 100 >= 100 ? 'good' : actual / target * 100 >= 75 ? 'warning' : 'risk'
+
+    return {
+      id,
+      actual,
+      target,
+      monthlyTarget,
+      periodPlan: permanentPlanFound,
+      pct: target ? actual / target * 100 : 0,
+      orders: new Set(rows.map(r => r.order).filter(Boolean)).size,
+      state,
+      forecast
+    }
+  }), [facilities, baseFiltered, planningRows, managementHistory, from, to])
 
 
   const toggleFacility = (id) => setSelectedFacilities(current => current.includes(id) ? current.filter(x => x !== id) : [...current, id])
@@ -4933,7 +5000,7 @@ function ForecastCard({ facility, facilities, resource, packagingType, routingGr
     <div className="forecast-metrics"><div><span>ימים נותרו</span><b>{remainingWorkdays}</b></div><div><span>נדרש ליום</span><b>{fmt(requiredDaily)}</b></div><div><span>7 ימים</span><b>{fmt(recentAverage)}</b></div><div><span>שיא מוכח</span><b>{fmt(provenMax)}</b></div></div>
   </article>
 }
-function Facility({ id, actual, target, pct, orders, selected, onClick }) {
+function Facility({ id, actual, target, pct, orders, selected, onClick, periodPlan }) {
   const state = !target ? 'no-target' : pct >= 100 ? 'good' : pct >= 75 ? 'warning' : 'risk'
-  return <article className={`facility ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0"><div className="facility-top"><div><small>מתקן</small><h3>{id}</h3></div><b>{target ? pctFmt(pct) : '—'}</b></div><div className="bar"><i style={{width:`${Math.min(100,pct)}%`}}/></div><div className="facility-numbers"><span>בפועל<strong>{fmt(actual)}</strong></span><span>יעד חודשי<strong>{fmt(target)}</strong></span><span>הזמנות<strong>{orders}</strong></span></div></article>
+  return <article className={`facility ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0"><div className="facility-top"><div><small>מתקן</small><h3>{id}</h3></div><b>{target ? pctFmt(pct) : '—'}</b></div><div className="bar"><i style={{width:`${Math.min(100,pct)}%`}}/></div><div className="facility-numbers"><span>בפועל<strong>{fmt(actual)}</strong></span><span>{periodPlan ? 'תכנון בטווח' : 'יעד חודשי'}<strong>{fmt(target)}</strong></span><span>הזמנות<strong>{orders}</strong></span></div></article>
 }
