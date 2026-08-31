@@ -3068,7 +3068,14 @@ material: normalize(getField(r, [
     const annualActualMax=Math.max(1,...annualRows.map(r=>num(r.actual)))
     const annualCostMax=Math.max(1,...annualRows.map(r=>num(r.costPerUnit)))
     const facilityRows=[...facilityMap.values()].sort((a,b)=>b.qty-a.qty)
-    const topMaterials=[...materialMap.values()].sort((a,b)=>b.qty-a.qty).slice(0,8)
+    const allMaterials=[...materialMap.values()].sort((a,b)=>b.qty-a.qty)
+    const topMaterials=allMaterials.slice(0,8)
+    const uniqueMaterials=allMaterials.filter(row=>row.material&&row.material!=='—').length
+    const top5Qty=allMaterials.slice(0,5).reduce((sum,row)=>sum+num(row.qty),0)
+    const top5SharePct=total?top5Qty/total*100:0
+    const topMaterial=allMaterials[0]||null
+    const topMaterialSharePct=total&&topMaterial?num(topMaterial.qty)/total*100:0
+    const topMaterialMax=Math.max(1,...topMaterials.map(row=>num(row.qty)))
     // RFT is calculated at Inspection-Lot level from the decision/deviation dataset,
     // not from individual characteristic result rows. A lot is first-pass-right when
     // no rejected characteristic was recorded and the final UD is not a reject/restricted decision.
@@ -3099,7 +3106,7 @@ material: normalize(getField(r, [
     if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`₪${fmt(contractorCost)} על ${fmt(contractorPackaged)} ליטר/יחידות מדווחות. מקור: חשבונות קבלן מתקן 42.`})
     else if (uniqueLogical.includes('42')) insights.push({state:'warning',title:'אין עלות קבלן בתקופה',text:`נתוני הקבלן שהועלו זמינים עד ${managementHistory.meta?.contractor2026Through || 'החודש האחרון בקובץ'}.`})
     if (!hasReliableRft && qualityLots.size) insights.push({state:'warning',title:'RFT ממתין למקור מאומת',text:`קיימים ${qualityLots.size.toLocaleString()} לוטים/רשומות איכות עם החלטות או חריגות, אך אין מכנה מלא ואמין לחישוב RFT.`})
-    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,peakMonth,weakMonth,bestPlanMonth,annualActualMax,annualCostMax,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
+    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,uniqueMaterials,top5Qty,top5SharePct,topMaterial,topMaterialSharePct,topMaterialMax,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,peakMonth,weakMonth,bestPlanMonth,annualActualMax,annualCostMax,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
   }, [filtered, dashboardProd, filteredQualityRows, filteredDeviationRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast, managementHistory])
 
 
@@ -4523,7 +4530,23 @@ material: normalize(getField(r, [
         {managementView==='overview' && <>
           <div className="management-summary-grid">
             <article className="management-panel"><h3>תפוקה לפי מתקן ניהולי</h3>{managementSummary.facilityRows.slice(0,10).map(row=><div className="management-rank-row" key={row.facility}><span><b>מתקן {row.facility}</b><small>{row.records.toLocaleString()} רשומות</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.facilityRows.length&&<p className="empty">אין נתוני תפוקה בטווח.</p>}</article>
-            <article className="management-panel"><h3>מוצרים מובילים</h3>{managementSummary.topMaterials.map((row,i)=><div className="management-rank-row management-material-row" key={`${row.material}-${i}`}><span><b>#{i+1} · {row.desc || row.material}</b><small>{row.material}</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}</article>
+            <article className="management-panel management-products-panel">
+              <div className="management-section-title"><div><BarChart3/><span><b>מוצרים ומגוון ייצור</b><small>תמהיל המוצרים משתנה אוטומטית לפי הטווח והמתקנים שנבחרו</small></span></div></div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:10,margin:'10px 0 16px'}}>
+                <div style={{padding:'11px 12px',borderRadius:14,background:'rgba(20,184,166,.08)',border:'1px solid rgba(20,184,166,.20)'}}><small>חומרים שונים</small><b style={{display:'block',fontSize:22,marginTop:3}}>{managementSummary.uniqueMaterials.toLocaleString()}</b></div>
+                <div style={{padding:'11px 12px',borderRadius:14,background:'rgba(59,130,246,.07)',border:'1px solid rgba(59,130,246,.18)'}}><small>Top 5 מכלל התפוקה</small><b style={{display:'block',fontSize:22,marginTop:3}}>{managementSummary.top5SharePct.toFixed(1)}%</b></div>
+                <div style={{padding:'11px 12px',borderRadius:14,background:'rgba(139,92,246,.07)',border:'1px solid rgba(139,92,246,.18)'}}><small>המוצר המוביל</small><b style={{display:'block',fontSize:18,marginTop:3}}>{managementSummary.topMaterial?`${managementSummary.topMaterialSharePct.toFixed(1)}%`:'—'}</b><small>מתפוקת התקופה</small></div>
+              </div>
+              <div style={{display:'grid',gap:11}}>
+                {managementSummary.topMaterials.map((row,i)=>{const share=managementSummary.total?num(row.qty)/managementSummary.total*100:0;const width=Math.max(2,num(row.qty)/managementSummary.topMaterialMax*100);return <div key={`${row.material}-${i}`} style={{display:'grid',gridTemplateColumns:'minmax(180px,1.35fr) minmax(180px,2fr) 92px',alignItems:'center',gap:12}}>
+                  <div style={{minWidth:0}}><b style={{display:'block',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>#{i+1} · {row.desc||row.material}</b><small style={{color:'#64748b'}}>{row.material} · {share.toFixed(1)}% מהתפוקה</small></div>
+                  <div style={{height:18,borderRadius:999,background:'rgba(148,163,184,.13)',overflow:'hidden',position:'relative'}}><i style={{display:'block',height:'100%',width:`${width}%`,borderRadius:999,background:i===0?'linear-gradient(90deg,#0f766e,#14b8a6)':i<3?'linear-gradient(90deg,#2563eb,#60a5fa)':'linear-gradient(90deg,#7c3aed,#a78bfa)'}}/></div>
+                  <strong style={{fontSize:16,textAlign:'left'}}>{fmt(row.qty)}</strong>
+                </div>})}
+                {!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}
+              </div>
+              <p className="management-explain" style={{marginTop:14}}>הפסים מציגים את נפח הייצור היחסי של שמונת המוצרים המובילים. בשלב הבא ניתן לחבר לכל מק״ט גם יעד מוצר היסטורי ולהציג ביצוע מול תכנון.</p>
+            </article>
           </div>
           <div className="management-trend-highlights"><article><span>חודש שיא</span><b>{managementSummary.peakMonth?.label||'—'}</b><small>{managementSummary.peakMonth?fmt(managementSummary.peakMonth.actual):'אין נתונים'}</small></article><article><span>חודש חלש</span><b>{managementSummary.weakMonth?.label||'—'}</b><small>{managementSummary.weakMonth?fmt(managementSummary.weakMonth.actual):'אין נתונים'}</small></article><article><span>עמידה מיטבית בתכנון</span><b>{managementSummary.bestPlanMonth?.label||'—'}</b><small>{managementSummary.bestPlanMonth?.plan?`${managementSummary.bestPlanMonth.pct.toFixed(1)}%`:'אין תכנון'}</small></article></div>
           <article className="management-panel management-wide-panel management-annual-panel"><h3>מגמה רב־שנתית 2024–2026</h3><p className="management-explain">אותם חודשי בחירה מושווים בין שלוש השנים. ביצוע חי מ-IML מקבל עדיפות; כשאינו טעון נעשה שימוש בהיסטוריה.</p><div className="management-annual-grid">{managementSummary.annualRows.map(row=><div className="management-annual-card" key={row.year}><div><strong>{row.year}</strong><small>{row.source==='IML'?'ביצוע IML':'היסטוריה'}</small></div><b>{fmt(row.actual)}</b><span>תכנון {fmt(row.plan)}</span><em className={row.pct>=100?'good':row.pct>=90?'warning':'risk'}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</em>{row.costPerUnit>0&&<small>עלות/ליטר ₪{row.costPerUnit.toFixed(3)}</small>}</div>)}</div><div className="management-year-bars">{managementSummary.annualRows.map(row=><div className="management-year-bar" key={`annual-bar-${row.year}`}><div className="management-year-track"><i style={{height:`${Math.max(4,row.actual/managementSummary.annualActualMax*100)}%`}}/></div><b>{row.year}</b><small>{fmt(row.actual)}</small></div>)}</div></article>
