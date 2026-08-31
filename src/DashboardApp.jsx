@@ -3012,6 +3012,119 @@ material: normalize(getField(r, [
     return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,peakMonth,weakMonth,bestPlanMonth,annualActualMax,annualCostMax,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
   }, [filtered, dashboardProd, filteredQualityRows, filteredDeviationRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast, managementHistory])
 
+
+  const managementProgress = useMemo(() => {
+    const parseDay = value => {
+      const key = iso(value)
+      if (!key) return null
+      const [y,m,d] = key.split('-').map(Number)
+      return new Date(y, m-1, d, 12, 0, 0, 0)
+    }
+    const start = parseDay(from) || parseDay(filtered[0]?.date)
+    const end = parseDay(to) || parseDay(filtered[filtered.length-1]?.date)
+    if (!start || !end || end < start) return { points:[], mode:'none', title:'מגמה לפי ציר הזמן', subtitle:'אין נתונים בטווח שנבחר', actual:0, plan:0, pct:0 }
+
+    const dayMs = 86400000
+    const spanDays = Math.max(1, Math.round((end-start)/dayMs)+1)
+    const sameDay = spanDays === 1
+    const mode = sameDay ? 'hour' : spanDays <= 14 ? 'day' : spanDays <= 93 ? 'week' : 'month'
+    const modeTitle = sameDay ? 'התקדמות יומית' : spanDays <= 14 ? 'התקדמות שבועית' : spanDays <= 93 ? 'התקדמות חודשית' : 'התקדמות רב־חודשית'
+    const subtitle = sameDay
+      ? 'צבירת תפוקה במהלך היום מול קצב התכנון היומי'
+      : mode === 'day'
+        ? 'צבירה יום־אחר־יום מול התכנון לתקופה שנבחרה'
+        : mode === 'week'
+          ? 'צבירה שבועית מול התכנון היחסי של אותם שבועות'
+          : 'צבירה חודשית מול תכנון FMS לכל חודש'
+
+    const logicalFacilities = managementSummary.logicalFacilities || []
+    const monthPlan = key => logicalFacilities.reduce((sum,facility)=>sum + num(managementPlanForFacility(managementHistory,key,facility).plan),0)
+    const workdaysInMonth = key => {
+      const [y,m] = key.split('-').map(Number)
+      const last = new Date(y,m,0).getDate()
+      let count=0
+      for(let d=1; d<=last; d++){
+        const dow = new Date(y,m-1,d,12).getDay()
+        if(dow>=0 && dow<=4) count++
+      }
+      return Math.max(1,count)
+    }
+    const plannedForDate = date => {
+      const key = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`
+      const dow = date.getDay()
+      if(dow===5 || dow===6) return 0
+      return monthPlan(key)/workdaysInMonth(key)
+    }
+
+    const rows = filtered
+      .map(row=>({ row, dt: row.date instanceof Date ? row.date : new Date(row.date) }))
+      .filter(x=>x.dt && !Number.isNaN(x.dt.getTime()) && x.dt>=new Date(start.getFullYear(),start.getMonth(),start.getDate(),0,0,0) && x.dt<=new Date(end.getFullYear(),end.getMonth(),end.getDate(),23,59,59))
+
+    const raw=[]
+    if(mode==='hour'){
+      const dailyPlan = plannedForDate(start)
+      for(let h=0; h<24; h+=2){
+        const until = h===22 ? 24 : h+2
+        const actual = rows.filter(x=>x.dt.getHours()<until).reduce((s,x)=>s+num(x.row.qty),0)
+        const plan = dailyPlan*(until/24)
+        raw.push({ key:`${String(until).padStart(2,'0')}:00`, label:`${String(until).padStart(2,'0')}:00`, actual, plan })
+      }
+    } else {
+      const bucketMap = new Map()
+      const cursor = new Date(start)
+      while(cursor<=end){
+        let key,label
+        if(mode==='day'){
+          key=iso(cursor); label=`${String(cursor.getDate()).padStart(2,'0')}/${String(cursor.getMonth()+1).padStart(2,'0')}`
+        } else if(mode==='week'){
+          const diff=Math.floor((cursor-start)/dayMs)
+          const idx=Math.floor(diff/7)+1
+          key=`W${idx}`; label=`שבוע ${idx}`
+        } else {
+          key=`${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,'0')}`; label=monthLabelHe(key)
+        }
+        if(!bucketMap.has(key)) bucketMap.set(key,{key,label,actualStep:0,planStep:0})
+        bucketMap.get(key).planStep += mode==='month' ? 0 : plannedForDate(cursor)
+        cursor.setDate(cursor.getDate()+1)
+      }
+      rows.forEach(x=>{
+        let key
+        if(mode==='day') key=iso(x.dt)
+        else if(mode==='week'){
+          const d0=new Date(x.dt.getFullYear(),x.dt.getMonth(),x.dt.getDate(),12)
+          const diff=Math.floor((d0-start)/dayMs)
+          key=`W${Math.floor(diff/7)+1}`
+        } else key=`${x.dt.getFullYear()}-${String(x.dt.getMonth()+1).padStart(2,'0')}`
+        if(bucketMap.has(key)) bucketMap.get(key).actualStep += num(x.row.qty)
+      })
+      if(mode==='month'){
+        for(const item of bucketMap.values()) item.planStep = monthPlan(item.key)
+      }
+      let actualCum=0, planCum=0
+      for(const item of bucketMap.values()){
+        actualCum += item.actualStep
+        planCum += item.planStep
+        raw.push({key:item.key,label:item.label,actual:actualCum,plan:planCum})
+      }
+    }
+
+    const final = raw[raw.length-1] || {actual:0,plan:0}
+    const max = Math.max(1,...raw.flatMap(p=>[p.actual,p.plan]))
+    const width=1000, height=300, padX=48, padTop=26, padBottom=54
+    const innerW=width-padX*2, innerH=height-padTop-padBottom
+    const points = raw.map((p,i)=>{
+      const x = raw.length===1 ? width/2 : padX + (i/(raw.length-1))*innerW
+      const yActual = padTop + innerH - (p.actual/max)*innerH
+      const yPlan = padTop + innerH - (p.plan/max)*innerH
+      return {...p,x,yActual,yPlan}
+    })
+    return {
+      points, mode, title:modeTitle, subtitle,
+      actual:final.actual, plan:final.plan, pct:final.plan ? final.actual/final.plan*100 : 0,
+      max, width, height, padX, padTop, padBottom
+    }
+  }, [filtered, from, to, managementSummary.logicalFacilities, managementHistory])
+
   const handleExportManagementPresentation = async () => {
     if (managementPptBusy) return
     try {
@@ -4289,9 +4402,33 @@ material: normalize(getField(r, [
           <article className={managementSummary.hasReliableRft?'good':managementSummary.qualityLots?'warning':''}><span>RFT</span><b>{managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : '—'}</b><small>{managementSummary.hasReliableRft ? 'מקור RFT מאומת' : 'נדרש מקור RFT/UD מלא'}</small></article>
         </div>
         {(managementView==='overview'||managementView==='plan') && <div className="management-history-card">
-          <div className="management-section-title"><div><BarChart3/><span><b>מגמה חודשית — FMS</b><small>תכנון מה-FMS מול ביצוע חי מנתוני IML הטעונים באפליקציה</small></span></div><span>{managementSummary.monthlyTrend.length} חודשים</span></div>
-          <div className="management-month-chart">{managementSummary.monthlyTrend.slice(-12).map(row=>{const max=Math.max(1,...managementSummary.monthlyTrend.slice(-12).flatMap(x=>[x.plan,x.actual]));return <div className="management-month-col" key={row.key}><div className="management-bars"><i className="plan" style={{height:`${Math.max(3,row.plan/max*100)}%`}} title={`תכנון ${fmt(row.plan)}`}/><i className="actual" style={{height:`${Math.max(3,row.actual/max*100)}%`}} title={`ביצוע ${fmt(row.actual)}`}/></div><b>{row.pct?`${row.pct.toFixed(0)}%`:'—'}</b><small>{row.key.slice(5)}</small></div>})}{!managementSummary.monthlyTrend.length&&<div className="empty">אין נתוני FMS לתקופה שנבחרה.</div>}</div>
-          <div className="management-legend"><span><i className="plan"/>תכנון</span><span><i className="actual"/>ביצוע</span></div>
+          <div className="management-section-title"><div><TrendingUp/><span><b>{managementProgress.title}</b><small>{managementProgress.subtitle}</small></span></div><span>{from||'—'} ← {to||'—'}</span></div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:12,margin:'10px 0 14px'}}>
+            <div style={{padding:'12px 14px',border:'1px solid rgba(20,184,166,.24)',borderRadius:16,background:'linear-gradient(135deg,rgba(20,184,166,.10),rgba(20,184,166,.025))'}}><small style={{color:'#64748b'}}>ביצוע מצטבר</small><b style={{display:'block',fontSize:24,color:'#0f766e',marginTop:4}}>{fmt(managementProgress.actual)}</b></div>
+            <div style={{padding:'12px 14px',border:'1px solid rgba(59,130,246,.22)',borderRadius:16,background:'linear-gradient(135deg,rgba(59,130,246,.09),rgba(59,130,246,.02))'}}><small style={{color:'#64748b'}}>תכנון מצטבר</small><b style={{display:'block',fontSize:24,color:'#2563eb',marginTop:4}}>{managementProgress.plan?fmt(managementProgress.plan):'—'}</b></div>
+            <div style={{padding:'12px 14px',border:'1px solid rgba(139,92,246,.22)',borderRadius:16,background:'linear-gradient(135deg,rgba(139,92,246,.09),rgba(139,92,246,.02))'}}><small style={{color:'#64748b'}}>עמידה בתכנון</small><b style={{display:'block',fontSize:24,color:managementProgress.pct>=100?'#059669':managementProgress.pct>=90?'#d97706':'#dc2626',marginTop:4}}>{managementProgress.plan?`${managementProgress.pct.toFixed(1)}%`:'—'}</b></div>
+          </div>
+          {managementProgress.points.length ? <div style={{overflowX:'auto',padding:'4px 0 2px'}}>
+            <svg viewBox={`0 0 ${managementProgress.width} ${managementProgress.height}`} role="img" aria-label="גרף התקדמות מול תכנון" style={{width:'100%',minWidth:managementProgress.points.length>18?820:620,height:'auto',display:'block'}}>
+              <defs>
+                <linearGradient id="mgmtActualFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#14b8a6" stopOpacity=".28"/><stop offset="100%" stopColor="#14b8a6" stopOpacity=".02"/></linearGradient>
+                <filter id="mgmtGlow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              </defs>
+              {[0,.25,.5,.75,1].map((ratio,i)=>{const y=managementProgress.padTop+(1-ratio)*(managementProgress.height-managementProgress.padTop-managementProgress.padBottom);return <g key={i}><line x1={managementProgress.padX} x2={managementProgress.width-managementProgress.padX} y1={y} y2={y} stroke="rgba(148,163,184,.22)" strokeDasharray={i===0?'0':'5 7'}/><text x={managementProgress.padX-8} y={y+4} textAnchor="end" fontSize="11" fill="#94a3b8">{fmt(managementProgress.max*ratio)}</text></g>})}
+              <polygon points={`${managementProgress.points[0].x},${managementProgress.height-managementProgress.padBottom} ${managementProgress.points.map(p=>`${p.x},${p.yActual}`).join(' ')} ${managementProgress.points[managementProgress.points.length-1].x},${managementProgress.height-managementProgress.padBottom}`} fill="url(#mgmtActualFill)"/>
+              <polyline points={managementProgress.points.map(p=>`${p.x},${p.yPlan}`).join(' ')} fill="none" stroke="#3b82f6" strokeWidth="3" strokeDasharray="10 7" strokeLinecap="round" strokeLinejoin="round"/>
+              <polyline points={managementProgress.points.map(p=>`${p.x},${p.yActual}`).join(' ')} fill="none" stroke="#14b8a6" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" filter="url(#mgmtGlow)"/>
+              {managementProgress.points.map((p,i)=><g key={p.key}>
+                <circle cx={p.x} cy={p.yPlan} r="4" fill="#fff" stroke="#3b82f6" strokeWidth="2"><title>{`${p.label} · תכנון ${fmt(p.plan)}`}</title></circle>
+                <circle cx={p.x} cy={p.yActual} r="5" fill="#14b8a6" stroke="#fff" strokeWidth="2"><title>{`${p.label} · ביצוע ${fmt(p.actual)} · ${p.plan?`${(p.actual/p.plan*100).toFixed(1)}%`:'ללא תכנון'}`}</title></circle>
+                {(managementProgress.points.length<=14 || i===0 || i===managementProgress.points.length-1 || i%Math.ceil(managementProgress.points.length/8)===0) && <text x={p.x} y={managementProgress.height-25} textAnchor="middle" fontSize="11" fill="#64748b">{p.label}</text>}
+              </g>)}
+            </svg>
+          </div> : <div className="empty">אין נתוני תפוקה להצגת מגמה בטווח שנבחר.</div>}
+          <div className="management-legend" style={{justifyContent:'center',gap:22}}>
+            <span><i style={{background:'#14b8a6'}}/>ביצוע IML מצטבר</span>
+            <span><i style={{background:'#3b82f6'}}/>תכנון FMS מצטבר</span>
+          </div>
         </div>}
         {managementView==='overview' && <>
           <div className="management-summary-grid">
