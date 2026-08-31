@@ -1063,6 +1063,93 @@ const MANAGEMENT_PLAN_OVERRIDES = {
     },
   },
 }
+
+const loadPermanentManagementPlanHistory = async (baseHistory) => {
+  const history = {
+    ...(baseHistory || {}),
+    planActual: { ...((baseHistory || {}).planActual || {}) },
+  }
+  if (!supabase) return { history, rows:0, error:'' }
+
+  const { data, error } = await supabase
+    .from('iml_management_monthly_history')
+    .select('month_key,source_system,facility_label,facility_group,line_code,plan_normalized,production_normalized,updated_at')
+    .order('month_key', { ascending:true })
+
+  if (error) return { history, rows:0, error:error.message || String(error) }
+  if (!Array.isArray(data) || !data.length) return { history, rows:0, error:'' }
+
+  // FMS is the primary source for packaging facilities. AIMS remains available
+  // as a fallback for facilities that do not have an FMS row in the same month.
+  const priority = { AIMS:1, FMS:2 }
+  const chosen = new Map()
+  data.forEach(row => {
+    const monthKey = String(row.month_key || '').slice(0,7)
+    const facility = String(row.facility_group || '').trim()
+    if (!monthKey || !facility) return
+    const key = `${monthKey}|${facility}`
+    const existing = chosen.get(key)
+    if (!existing || (priority[String(row.source_system || '').toUpperCase()] || 0) >= (priority[String(existing.source_system || '').toUpperCase()] || 0)) {
+      if (!existing || String(existing.source_system || '').toUpperCase() !== String(row.source_system || '').toUpperCase()) {
+        chosen.set(key, { source_system:row.source_system, rows:[row] })
+      } else {
+        existing.rows.push(row)
+      }
+    }
+  })
+
+  // Rebuild each permanent month/facility from the stored source rows.
+  // This overrides old embedded/cloud snapshots only where the new permanent
+  // history actually contains data; all other historical months remain intact.
+  const grouped = new Map()
+  data.forEach(row => {
+    const monthKey = String(row.month_key || '').slice(0,7)
+    const facility = String(row.facility_group || '').trim()
+    if (!monthKey || !facility) return
+    const winner = chosen.get(`${monthKey}|${facility}`)
+    if (!winner || String(winner.source_system || '').toUpperCase() !== String(row.source_system || '').toUpperCase()) return
+    const key = `${monthKey}|${facility}`
+    if (!grouped.has(key)) grouped.set(key, { monthKey, facility, rows:[] })
+    grouped.get(key).rows.push(row)
+  })
+
+  grouped.forEach(({monthKey,facility,rows}) => {
+    const month = { ...(history.planActual[monthKey] || {}) }
+    const groups = {}
+    let plan = 0
+    let actual = 0
+    rows.forEach((row, index) => {
+      const rowPlan = Number(row.plan_normalized || 0)
+      const rowActual = Number(row.production_normalized || 0)
+      plan += rowPlan
+      actual += rowActual
+      const groupKey = String(row.line_code || row.facility_label || `${facility}-${index+1}`).trim()
+      groups[groupKey] = {
+        plan: rowPlan,
+        actual: rowActual,
+        label: row.facility_label || groupKey,
+        source: row.source_system || '',
+      }
+    })
+    month[facility] = { plan, actual, groups, source:'permanent-supabase' }
+    history.planActual[monthKey] = month
+  })
+
+  return { history, rows:data.length, error:'' }
+}
+
+const loadManagementHistoryWithPermanentPlan = async () => {
+  const legacy = await loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY)
+  const base = legacy.history || EMBEDDED_MANAGEMENT_HISTORY
+  const permanent = await loadPermanentManagementPlanHistory(base)
+  return {
+    history: permanent.history || base,
+    source: permanent.rows > 0 ? 'supabase' : (legacy.source || 'embedded'),
+    permanentRows: permanent.rows,
+    error: permanent.error || legacy.error || '',
+  }
+}
+
 const managementPlanForFacility = (history, monthKey, facilityId) => {
   const month = history?.planActual?.[monthKey] || {}
   const wanted = String(facilityId || '')
@@ -1139,21 +1226,24 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [managementPptBusy, setManagementPptBusy] = useState(false)
   const [managementPptMessage, setManagementPptMessage] = useState('')
   const refreshManagementHistory = async () => {
-    const result = await loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY)
+    const result = await loadManagementHistoryWithPermanentPlan()
     setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
     setManagementHistorySource(result.source || 'embedded')
     setManagementHistoryError(result.error || '')
-    setManagementCloudStatus(await getManagementCloudStatus())
+    const legacyStatus = await getManagementCloudStatus()
+    setManagementCloudStatus({ ...legacyStatus, permanentRows:Number(result.permanentRows || 0) })
     try { setManagementUploadHistory(await getManagementUploadHistory(30)) } catch {}
   }
   useEffect(() => {
     let cancelled = false
-    loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY).then(result => {
+    loadManagementHistoryWithPermanentPlan().then(result => {
       if (cancelled) return
       setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
       setManagementHistorySource(result.source || 'embedded')
       setManagementHistoryError(result.error || '')
-      getManagementCloudStatus().then(setManagementCloudStatus)
+      getManagementCloudStatus().then(status => {
+        if (!cancelled) setManagementCloudStatus({ ...status, permanentRows:Number(result.permanentRows || 0) })
+      })
     })
     return () => { cancelled = true }
   }, [])
@@ -4392,7 +4482,7 @@ material: normalize(getField(r, [
           <button className={managementView==='quality'?'active':''} onClick={()=>setManagementView('quality')}>איכות ומגמות</button>
         </div>
         <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
-        {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadProgress&&<div className="management-batch-progress"><b>{managementUploadProgress.current}/{managementUploadProgress.total}</b><span>{managementUploadProgress.fileName}</span></div>}{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementUploadHistory.length>0&&<div className="management-upload-history"><h4>היסטוריית טעינות אחרונות</h4><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>קובץ</th><th>רשומות</th><th>סטטוס</th></tr></thead><tbody>{managementUploadHistory.slice(0,10).map((h,i)=><tr key={h.id||i}><td>{h.uploaded_at?new Date(h.uploaded_at).toLocaleString('he-IL'):'—'}</td><td>{h.data_kind==='plan'?'Plan Vs Actual':'עלויות קבלן'}</td><td>{h.file_name}</td><td>{Number(h.rows_written||0).toLocaleString()}</td><td><span className={`upload-status ${h.status}`}>{h.status==='success'?'נקלט':'שגיאה'}</span></td></tr>)}</tbody></table></div></div>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
+        {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>היסטוריית תכנון קבועה</span><b>{Number(managementCloudStatus.permanentRows||0).toLocaleString()}</b><small>רשומות Supabase</small></article><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות קודמות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadProgress&&<div className="management-batch-progress"><b>{managementUploadProgress.current}/{managementUploadProgress.total}</b><span>{managementUploadProgress.fileName}</span></div>}{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementUploadHistory.length>0&&<div className="management-upload-history"><h4>היסטוריית טעינות אחרונות</h4><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>קובץ</th><th>רשומות</th><th>סטטוס</th></tr></thead><tbody>{managementUploadHistory.slice(0,10).map((h,i)=><tr key={h.id||i}><td>{h.uploaded_at?new Date(h.uploaded_at).toLocaleString('he-IL'):'—'}</td><td>{h.data_kind==='plan'?'Plan Vs Actual':'עלויות קבלן'}</td><td>{h.file_name}</td><td>{Number(h.rows_written||0).toLocaleString()}</td><td><span className={`upload-status ${h.status}`}>{h.status==='success'?'נקלט':'שגיאה'}</span></td></tr>)}</tbody></table></div></div>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
         <div className="management-kpi-grid management-kpi-grid-six">
           <article><span>תפוקה בפועל IML</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
           <article><span>ממוצע ליום</span><b>{fmt(managementSummary.avgDaily)}</b><small>שיא {fmt(managementSummary.peakDaily)}</small></article>
