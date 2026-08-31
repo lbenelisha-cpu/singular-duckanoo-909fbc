@@ -3056,10 +3056,18 @@ material: normalize(getField(r, [
         const day=row.productionDay||iso(row.date); if(!day||Number(day.slice(0,4))!==year||!months.includes(day.slice(5,7))) return false
         const logical=managementFacilityId(row.facility); return !uniqueLogical.length||uniqueLogical.includes(logical)
       }).reduce((sum,row)=>sum+num(row.qty),0)
-      const actual=liveActual>0?liveActual:historicalActual
+      // For the currently selected year use the SAME validated monthly IML totals
+      // shown in the management trend. This prevents facility 42 bulk / routing rows
+      // from being counted again by the broader dashboardProd annual scan.
+      const currentYearActual = year===currentYear
+        ? monthlyTrend.reduce((sum,row)=>sum+num(row.actual),0)
+        : 0
+      const actual = year===currentYear
+        ? currentYearActual
+        : (liveActual>0 ? liveActual : historicalActual)
       const costRows=uniqueLogical.length===1&&uniqueLogical[0]==='42'?months.map(mm=>managementHistory.contractor42?.[`${year}-${mm}`]).filter(Boolean):[]
       const cost=costRows.reduce((sum,row)=>sum+num(row.cost),0), packaged=costRows.reduce((sum,row)=>sum+num(row.packaged),0)
-      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:packaged?cost/packaged:0,source:liveActual>0?'IML':'Historical'}
+      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:packaged?cost/packaged:0,source:year===currentYear?'IML':(liveActual>0?'IML':'Historical')}
     })
     const comparableMonths=monthlyTrend.filter(r=>num(r.plan)>0||num(r.actual)>0)
     const peakMonth=comparableMonths.length?[...comparableMonths].sort((a,b)=>num(b.actual)-num(a.actual))[0]:null
