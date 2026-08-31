@@ -559,6 +559,110 @@ async function readTargetWorkbook(file) {
   return output
 }
 
+// Large SAP quality exports can expand to >512 MiB inside the XLSX archive.
+// SheetJS must materialize the full worksheet XML and may run out of browser memory.
+// This reader inflates sheet1.xml as a stream and keeps only columns used by IML CONTROL.
+const LARGE_QUALITY_XLSX_BYTES = 42 * 1024 * 1024
+
+const xmlText = value => String(value || '')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+  .replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+
+const xlsxColumn = ref => {
+  const letters = String(ref || '').match(/^[A-Z]+/i)?.[0]?.toUpperCase() || ''
+  let n = 0
+  for (const ch of letters) n = n * 26 + ch.charCodeAt(0) - 64
+  return n - 1
+}
+
+async function xlsxEntryStream(file, wantedName) {
+  const tailSize = Math.min(file.size, 70000)
+  const tail = new Uint8Array(await file.slice(file.size - tailSize).arrayBuffer())
+  const dv = new DataView(tail.buffer, tail.byteOffset, tail.byteLength)
+  let eocd = -1
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break }
+  }
+  if (eocd < 0) throw new Error('מבנה XLSX לא תקין (ZIP directory לא נמצא)')
+  const centralSize = dv.getUint32(eocd + 12, true)
+  const centralOffset = dv.getUint32(eocd + 16, true)
+  const central = new Uint8Array(await file.slice(centralOffset, centralOffset + centralSize).arrayBuffer())
+  const cdv = new DataView(central.buffer, central.byteOffset, central.byteLength)
+  const decoder = new TextDecoder()
+  let pos = 0, found = null
+  while (pos + 46 <= central.length && cdv.getUint32(pos, true) === 0x02014b50) {
+    const method = cdv.getUint16(pos + 10, true)
+    const compressedSize = cdv.getUint32(pos + 20, true)
+    const nameLen = cdv.getUint16(pos + 28, true)
+    const extraLen = cdv.getUint16(pos + 30, true)
+    const commentLen = cdv.getUint16(pos + 32, true)
+    const localOffset = cdv.getUint32(pos + 42, true)
+    const name = decoder.decode(central.subarray(pos + 46, pos + 46 + nameLen))
+    if (name === wantedName) { found = { method, compressedSize, localOffset }; break }
+    pos += 46 + nameLen + extraLen + commentLen
+  }
+  if (!found) throw new Error(`לא נמצא ${wantedName} בתוך קובץ ה-XLSX`)
+  const localHead = new Uint8Array(await file.slice(found.localOffset, found.localOffset + 30).arrayBuffer())
+  const ldv = new DataView(localHead.buffer, localHead.byteOffset, localHead.byteLength)
+  if (ldv.getUint32(0, true) !== 0x04034b50) throw new Error('מבנה XLSX לא תקין (local header)')
+  const nameLen = ldv.getUint16(26, true), extraLen = ldv.getUint16(28, true)
+  const dataStart = found.localOffset + 30 + nameLen + extraLen
+  const compressed = file.slice(dataStart, dataStart + found.compressedSize).stream()
+  if (found.method === 0) return compressed
+  if (found.method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('הדפדפן אינו תומך בקריאה חסכונית של קובץ XLSX גדול')
+  return compressed.pipeThrough(new DecompressionStream('deflate-raw'))
+}
+
+async function readLargeQualityWorkbook(file, allowedFacilities, onProgress) {
+  const stream = await xlsxEntryStream(file, 'xl/worksheets/sheet1.xml')
+  const reader = stream.getReader(), decoder = new TextDecoder()
+  let pending = '', header = [], rows = [], rowCount = 0
+  const keep = new Set([
+    'Material #','Material Number','Material No.','Material','Batch','Batch Number','Inspection Lot','Inspection Lot #',
+    'Sample #','Sample Number','Sample','Operation Activity','Operation activity','Operation','Operation short text','Operation Short Text',
+    'Process Order','Process Order #','Order','Process Order Confirmed Release Date','Process Order Storage Location',
+    'Master Insp Charactristic','Master Inspection Characteristic','Arithmetic Mean of Valid Measured Values','Lower Specif Limit','Lower Spec Limit',
+    'Upper Specif Limit','Upper Spec Limit','Unit of Measurement','Result Status','QA Approval','Status','Inspection Lot Storage Location',
+    'Start Date of Inspection','Date of Lot Creation','End Date of Inspection','Inspection Lot UD Date','Process Order Delivered Date',
+    'Production Line','UD Code','Usage Decision','Usage decision','Charactristic Remarks','Characteristic Remarks','Batch Remarks','Qualitative'
+  ].map(normKey))
+  const parseRow = xml => {
+    const cells = []
+    const cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>/g
+    let m
+    while ((m = cellRe.exec(xml))) {
+      const ref = m[1].match(/\br="([A-Z]+\d+)"/i)?.[1] || ''
+      const idx = xlsxColumn(ref)
+      const body = m[2]
+      const inline = body.match(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/)
+      const numeric = body.match(/<v>([\s\S]*?)<\/v>/)
+      cells[idx] = xmlText(inline ? inline[1] : numeric ? numeric[1] : '')
+    }
+    if (!header.length) { header = cells.map(normalize); return }
+    const obj = { __sheet:'Sheet1' }
+    for (let i=0; i<header.length; i++) if (header[i] && keep.has(normKey(header[i]))) obj[header[i]] = cells[i] ?? ''
+    const facility = canonicalFacility(getField(obj, ['Inspection Lot Storage Location','Process Order Storage Location','Storage Location','Facility','Production Line']))
+    if (allowedFacilities?.size && !allowedFacilities.has(String(facility || ''))) return
+    if (getField(obj, ['Batch','Batch Number','Inspection Lot','Inspection Lot #']) === '') return
+    rows.push(obj)
+  }
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    pending += decoder.decode(value, { stream:true })
+    let end
+    while ((end = pending.indexOf('</row>')) >= 0) {
+      const start = pending.lastIndexOf('<row', end)
+      if (start >= 0) parseRow(pending.slice(start, end + 6))
+      pending = pending.slice(end + 6)
+      rowCount++
+      if (rowCount % 5000 === 0) { onProgress?.(rowCount); await new Promise(r=>setTimeout(r,0)) }
+    }
+  }
+  pending += decoder.decode()
+  return rows
+}
+
 async function readWorkbook(file) {
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array', cellDates: false, dense: true })
@@ -1646,7 +1750,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           }
           await idbSetKey(TARGET_FILE_KEY, targetWorkbookOriginal)
         }
-        const rows = forcedKind === 'targets' ? await readTargetWorkbook(file) : await readWorkbook(file)
+        const useLargeQualityReader = forcedKind === 'quality' && file.size >= LARGE_QUALITY_XLSX_BYTES
+        const rows = forcedKind === 'targets'
+          ? await readTargetWorkbook(file)
+          : useLargeQualityReader
+            ? await readLargeQualityWorkbook(file, selectableFacilitySet, count => setStatus(`${displayDatasetName('quality')}: קורא קובץ גדול... ${fmt(count)} שורות`))
+            : await readWorkbook(file)
         const detected = forcedKind === 'targets' ? 'targets' : classifyFile(rows)
         const kind = forcedKind || detected
         const missing = validateRows(kind, rows)
