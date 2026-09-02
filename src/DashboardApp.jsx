@@ -73,7 +73,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.23.0 — Facility 42 Business Unit'
+const BUILD_LABEL = 'Sprint 11.23.1 — Facility 42 Management Data Fix'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -2817,15 +2817,17 @@ material: normalize(getField(r, [
     })
     let fmsPlan=0,fmsActual=0
     const monthlyTrend=scopeMonths.map(key=>{
-      let plan=0
-      uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(managementHistory,key,facility); plan+=rec.plan })
-      const actual=num(liveActualByMonth.get(key))
+      let plan=0, archivedActual=0
+      uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(managementHistory,key,facility); plan+=rec.plan; archivedActual+=rec.actual })
+      // Closed/audited months use the archived management value. Live production
+      // is only a fallback for a month that has not yet been closed in history.
+      const actual=archivedActual>0?archivedActual:num(liveActualByMonth.get(key))
       const costRec=uniqueLogical.length===1&&uniqueLogical[0]==='42'?managementHistory.contractor42?.[key]:null
       fmsPlan+=plan; fmsActual+=actual
       const baseGroups = uniqueLogical.length===1 ? managementPlanForFacility(managementHistory,key,uniqueLogical[0]).groups : {}
       const groups = Object.fromEntries(Object.entries(baseGroups||{}).map(([group,vals])=>[
         group,
-        { ...vals, actual: uniqueLogical[0]==='42' ? num(liveGroupActualByMonth.get(`${key}|${group}`)) : num(vals.actual) }
+        { ...vals, actual: archivedActual>0 ? num(vals.actual) : (uniqueLogical[0]==='42' ? num(liveGroupActualByMonth.get(`${key}|${group}`)) : num(vals.actual)) }
       ]))
       return { key,label:monthLabelHe(key),plan,actual,pct:plan?actual/plan*100:0,cost:costRec?.cost||0,packaged:costRec?.packaged||0,costPerUnit:costRec?.costPerUnit||0,groups }
     })
@@ -2879,7 +2881,7 @@ material: normalize(getField(r, [
         const day=row.productionDay||iso(row.date); if(!day||Number(day.slice(0,4))!==year||!months.includes(day.slice(5,7))) return false
         const logical=managementFacilityId(row.facility); return !uniqueLogical.length||uniqueLogical.includes(logical)
       }).reduce((sum,row)=>sum+num(row.qty),0)
-      const actual=liveActual>0?liveActual:historicalActual
+      const actual=historicalActual>0?historicalActual:liveActual
       const costRows=uniqueLogical.length===1&&uniqueLogical[0]==='42'?months.map(mm=>managementHistory.contractor42?.[`${year}-${mm}`]).filter(Boolean):[]
       const cost=costRows.reduce((sum,row)=>sum+num(row.cost),0), packaged=costRows.reduce((sum,row)=>sum+num(row.packaged),0)
       return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:packaged?cost/packaged:0,source:liveActual>0?'IML':'Historical'}

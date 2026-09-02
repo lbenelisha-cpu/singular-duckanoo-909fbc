@@ -44,8 +44,15 @@ export async function loadManagementHistoryFromCloud(fallbackHistory) {
     if(!(planRes.data||[]).length&&!(contractorRes.data||[]).length) return {history:fallbackHistory,source:'embedded',error:null}
     const planActual={}; (planRes.data||[]).forEach(row=>{const r=normalizePlanRow(row);if(!r.month)return;if(!planActual[r.month])planActual[r.month]={};planActual[r.month][r.facility]={plan:r.plan,actual:r.source_actual,groups:r.groups}})
     const contractor42={}; (contractorRes.data||[]).forEach(row=>{const r=normalizeCostRow(row);if(!r.month||r.facility!=='42')return;contractor42[r.month]={facility:'42',packaged:r.packaged,cost:r.cost,costPerUnit:r.cost_per_unit,lines:r.lines,shiftQty:r.shift_qty,shiftCost:r.shift_cost}})
-    const contractorKeys=Object.keys(contractor42).sort()
-    return {history:{planActual,contractor42,meta:{...(fallbackHistory?.meta||{}),source:'supabase',contractor2026Through:contractorKeys.filter(k=>k.startsWith('2026-')).slice(-1)[0]||fallbackHistory?.meta?.contractor2026Through||''}},source:'supabase',error:null}
+    const mergedPlanActual={...(fallbackHistory?.planActual||{})}
+    Object.entries(planActual).forEach(([month,facilities])=>{
+      mergedPlanActual[month]={...(mergedPlanActual[month]||{}),...facilities}
+    })
+    // Cloud rows override matching months, while embedded audited months remain
+    // available until they are explicitly uploaded to Supabase.
+    const mergedContractor42={...(fallbackHistory?.contractor42||{}),...contractor42}
+    const contractorKeys=Object.keys(mergedContractor42).sort()
+    return {history:{planActual:mergedPlanActual,contractor42:mergedContractor42,meta:{...(fallbackHistory?.meta||{}),source:'supabase+embedded',contractor2026Through:contractorKeys.filter(k=>k.startsWith('2026-')).slice(-1)[0]||fallbackHistory?.meta?.contractor2026Through||''}},source:'supabase+embedded',error:null}
   } catch(error){return {history:fallbackHistory,source:'embedded',error:error?.message||String(error)}}
 }
 
