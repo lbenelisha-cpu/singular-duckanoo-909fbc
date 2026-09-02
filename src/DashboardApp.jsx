@@ -73,7 +73,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.22.3 — August Contractor Account'
+const BUILD_LABEL = 'Sprint 11.23.0 — Facility 42 Business Unit'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -2922,7 +2922,9 @@ material: normalize(getField(r, [
     if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`₪${fmt(contractorCost)} על ${fmt(contractorPackaged)} ליטר/יחידות מדווחות. מקור: חשבונות קבלן מתקן 42.`})
     else if (uniqueLogical.includes('42')) insights.push({state:'warning',title:'אין עלות קבלן בתקופה',text:`נתוני הקבלן שהועלו זמינים עד ${managementHistory.meta?.contractor2026Through || 'החודש האחרון בקובץ'}.`})
     if (!hasReliableRft && qualityLots.size) insights.push({state:'warning',title:'RFT ממתין למקור מאומת',text:`קיימים ${qualityLots.size.toLocaleString()} לוטים/רשומות איכות עם החלטות או חריגות, אך אין מכנה מלא ואמין לחישוב RFT.`})
-    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,peakMonth,weakMonth,bestPlanMonth,annualActualMax,annualCostMax,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
+    const latestContractorMonth=contractorRows.at(-1)?.key||''
+    const latestContractorRecord=latestContractorMonth?managementHistory.contractor42?.[latestContractorMonth]||null:null
+    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,peakMonth,weakMonth,bestPlanMonth,annualActualMax,annualCostMax,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical,latestContractorMonth,latestContractorRecord }
   }, [filtered, dashboardProd, filteredQualityRows, filteredDeviationRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast, managementHistory])
 
   const parseManagementWorkbook = async (file, kind) => {
