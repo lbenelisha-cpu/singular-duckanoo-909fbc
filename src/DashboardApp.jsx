@@ -1413,7 +1413,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           // installed, which would otherwise skip the new history loader and
           // leave the previous month invisible.  Force one migration load
           // until the cache explicitly identifies itself as cloud-history.
-          if (!IS_MOBILE_DEVICE && kind === 'production' && local?.source !== 'cloud-history') return true
+          if (!IS_MOBILE_DEVICE && ['production', 'quality', 'deviations'].includes(kind) && local?.source !== 'cloud-history') return true
           if (!remote) return !local
           const remoteId = remote.active_version_id || remote.updated_at || remote.loaded_at
           const localId = local?.versionId || local?.loadedAt
@@ -1482,7 +1482,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             if (!active) return
             if (!changed(kind)) continue
             setStatus(`טוען ${kind} ברקע...`)
-            loadedRows += applyDataset(kind, await loadCloudDatasetOnce(kind))
+            const dataset = kind === 'targets'
+              ? await loadCloudDatasetOnce(kind)
+              : await loadCloudDatasetHistory(kind, { maxVersions:60, maxMonths:36 })
+            loadedRows += applyDataset(kind, dataset)
             setPerformance(current => ({ ...current, queries:current.queries + 1, phase:`נטען ${kind}` }))
             await new Promise(resolve => setTimeout(resolve, 0))
           }

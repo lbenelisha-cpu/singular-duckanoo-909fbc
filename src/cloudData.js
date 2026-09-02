@@ -303,7 +303,7 @@ export async function loadCloudDatasetHistory(kind, { maxVersions = 60, maxMonth
     })
     const byMonth = new Map()
     rows.forEach(row => {
-      const raw = row?.productionDay || row?.finishDate || row?.date || row?.Date || ''
+      const raw = row?.productionDay || row?.finishDate || row?.sampleDate || row?.date || row?.Date || ''
       const text = raw instanceof Date ? raw.toISOString() : String(raw || '')
       const match = text.match(/(20\d{2})[-/.](\d{1,2})/)
       if (!match) return
