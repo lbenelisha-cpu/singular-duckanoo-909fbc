@@ -11,6 +11,7 @@ import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
 import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, inspectManagementRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
+import { exportManagementPresentation } from './utils/managementPresentation'
 import pptxGenBundleUrl from './vendor/pptxgen.bundle.js?url'
 import * as XLSXCore from 'xlsx'
 import './styles.css'
@@ -72,7 +73,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.23.3 — Embedded PowerPoint Engine'
+const BUILD_LABEL = 'Sprint 11.23.4 — Quantities Source + Light Executive Deck'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -2790,10 +2791,8 @@ material: normalize(getField(r, [
     const allHistoryMonths=Object.keys(managementHistory.planActual||{}).sort()
     const inRange=allHistoryMonths.filter(key=>(!fromMonth||key>=fromMonth)&&(!toMonth||key<=toMonth))
     const scopeMonths=inRange.length?inRange:(toMonth?[toMonth]:[])
-    // FMS target comes from the historical/audited target source, but execution must
-    // always come from the live IML production rows currently loaded in the app.
-    // This avoids stale Plan-vs-Actual snapshots showing 0 execution while IML already
-    // contains production for the selected month (e.g. July 2026).
+    // Targets come from the audited FMS source. Every quantity, output and actual
+    // shown in management views comes exclusively from the loaded quantities file.
     const liveActualByMonth=new Map()
     const liveGroupActualByMonth=new Map()
     filtered.forEach(row=>{
@@ -2816,26 +2815,23 @@ material: normalize(getField(r, [
     })
     let fmsPlan=0,fmsActual=0
     const monthlyTrend=scopeMonths.map(key=>{
-      let plan=0, archivedActual=0
-      uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(managementHistory,key,facility); plan+=rec.plan; archivedActual+=rec.actual })
-      // Closed/audited months use the archived management value. Live production
-      // is only a fallback for a month that has not yet been closed in history.
-      const actual=archivedActual>0?archivedActual:num(liveActualByMonth.get(key))
+      let plan=0
+      uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(managementHistory,key,facility); plan+=rec.plan })
+      const actual=num(liveActualByMonth.get(key))
       const costRec=uniqueLogical.length===1&&uniqueLogical[0]==='42'?managementHistory.contractor42?.[key]:null
       fmsPlan+=plan; fmsActual+=actual
       const baseGroups = uniqueLogical.length===1 ? managementPlanForFacility(managementHistory,key,uniqueLogical[0]).groups : {}
       const groups = Object.fromEntries(Object.entries(baseGroups||{}).map(([group,vals])=>[
         group,
-        { ...vals, actual: archivedActual>0 ? num(vals.actual) : (uniqueLogical[0]==='42' ? num(liveGroupActualByMonth.get(`${key}|${group}`)) : num(vals.actual)) }
+        { ...vals, actual: uniqueLogical[0]==='42' ? num(liveGroupActualByMonth.get(`${key}|${group}`)) : 0 }
       ]))
-      return { key,label:monthLabelHe(key),plan,actual,pct:plan?actual/plan*100:0,cost:costRec?.cost||0,packaged:costRec?.packaged||0,costPerUnit:costRec?.costPerUnit||0,groups }
+      const contractorCost=num(costRec?.cost)
+      return { key,label:monthLabelHe(key),plan,actual,pct:plan?actual/plan*100:0,cost:contractorCost,packaged:costRec?.packaged||0,costPerUnit:actual?contractorCost/actual:0,groups }
     })
     const currentYear=Number((toMonth||fromMonth||String(new Date().getFullYear())).slice(0,4))
     const selectedMonthNums=scopeMonths.filter(k=>Number(k.slice(0,4))===currentYear).map(k=>k.slice(5,7))
     let previousActual=0, previousPlan=0
-    selectedMonthNums.forEach(mm=>uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(managementHistory,`${currentYear-1}-${mm}`,facility); previousPlan+=rec.plan; previousActual+=rec.actual }))
-    // Prefer live IML production for the previous-year comparison whenever those rows
-    // are loaded. This makes YoY consistent with the current-period execution source.
+    selectedMonthNums.forEach(mm=>uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(managementHistory,`${currentYear-1}-${mm}`,facility); previousPlan+=rec.plan }))
     const previousFrom = from ? `${currentYear-1}${from.slice(4)}` : ''
     const previousTo = to ? `${currentYear-1}${to.slice(4)}` : ''
     const previousLiveRows = dashboardProd.filter(row=>{
@@ -2845,45 +2841,45 @@ material: normalize(getField(r, [
       return !uniqueLogical.length || uniqueLogical.includes(logical)
     })
     const previousLiveActual=previousLiveRows.reduce((sum,row)=>sum+num(row.qty),0)
-    if(previousLiveActual>0) previousActual=previousLiveActual
+    previousActual=previousLiveActual
     const yoyPct=previousActual?((fmsActual-previousActual)/previousActual*100):0
     const dailyPlanRate=days.length&&fmsPlan?fmsPlan/days.length:0
     const dailyPacePct=dailyPlanRate?avgDaily/dailyPlanRate*100:0
     const contractorRows=monthlyTrend.filter(r=>r.cost>0)
     const contractorCost=contractorRows.reduce((s,r)=>s+r.cost,0)
     const contractorPackaged=contractorRows.reduce((s,r)=>s+r.packaged,0)
-    const contractorCostPerUnit=contractorPackaged?contractorCost/contractorPackaged:0
+    const contractorCostPerUnit=total?contractorCost/total:0
     const previousContractorRows=selectedMonthNums.map(mm=>managementHistory.contractor42?.[`${currentYear-1}-${mm}`]).filter(Boolean)
     const previousContractorCost=previousContractorRows.reduce((s,r)=>s+num(r.cost),0)
     const previousContractorPackaged=previousContractorRows.reduce((s,r)=>s+num(r.packaged),0)
-    const previousContractorCostPerUnit=previousContractorPackaged?previousContractorCost/previousContractorPackaged:0
+    const previousContractorCostPerUnit=previousLiveActual?previousContractorCost/previousLiveActual:0
     const contractorYoyPct=previousContractorCostPerUnit&&contractorCostPerUnit?((contractorCostPerUnit-previousContractorCostPerUnit)/previousContractorCostPerUnit*100):0
     const yoyRows=selectedMonthNums.map(mm=>{
       const key=`${currentYear}-${mm}`
       const current=monthlyTrend.find(r=>r.key===key)
       const prevKey=`${currentYear-1}-${mm}`
       let prev=0, prevPlan=0
-      uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(managementHistory,prevKey,facility); prev+=num(rec.actual); prevPlan+=num(rec.plan)})
+      uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(managementHistory,prevKey,facility); prevPlan+=num(rec.plan)})
       const livePrev=dashboardProd.filter(row=>{
         const day=row.productionDay||iso(row.date); if(!day||day.slice(0,7)!==prevKey) return false
         const logical=managementFacilityId(row.facility); return !uniqueLogical.length||uniqueLogical.includes(logical)
       }).reduce((sum,row)=>sum+num(row.qty),0)
-      if(livePrev>0) prev=livePrev
+      prev=livePrev
       const actual=num(current?.actual)
       return {key,month:mm,current:actual,previous:prev,delta:actual-prev,pct:prev?(actual-prev)/prev*100:0,previousPlan:prevPlan}
     })
     const annualRows=[2024,2025,2026].map(year=>{
       const months=selectedMonthNums.length?selectedMonthNums:Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0'))
-      let plan=0, historicalActual=0
-      months.forEach(mm=>uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(managementHistory,`${year}-${mm}`,facility); plan+=num(rec.plan); historicalActual+=num(rec.actual)}))
+      let plan=0
+      months.forEach(mm=>uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(managementHistory,`${year}-${mm}`,facility); plan+=num(rec.plan)}))
       const liveActual=dashboardProd.filter(row=>{
         const day=row.productionDay||iso(row.date); if(!day||Number(day.slice(0,4))!==year||!months.includes(day.slice(5,7))) return false
         const logical=managementFacilityId(row.facility); return !uniqueLogical.length||uniqueLogical.includes(logical)
       }).reduce((sum,row)=>sum+num(row.qty),0)
-      const actual=historicalActual>0?historicalActual:liveActual
+      const actual=liveActual
       const costRows=uniqueLogical.length===1&&uniqueLogical[0]==='42'?months.map(mm=>managementHistory.contractor42?.[`${year}-${mm}`]).filter(Boolean):[]
       const cost=costRows.reduce((sum,row)=>sum+num(row.cost),0), packaged=costRows.reduce((sum,row)=>sum+num(row.packaged),0)
-      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:packaged?cost/packaged:0,source:liveActual>0?'IML':'Historical'}
+      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:liveActual?cost/liveActual:0,source:liveActual>0?'Quantities':'No quantities'}
     })
     const comparableMonths=monthlyTrend.filter(r=>num(r.plan)>0||num(r.actual)>0)
     const peakMonth=comparableMonths.length?[...comparableMonths].sort((a,b)=>num(b.actual)-num(a.actual))[0]:null
@@ -2919,8 +2915,8 @@ material: normalize(getField(r, [
     const forecastPct=targetTotal>0?targetForecast/targetTotal*100:0
     const insights=[]
     if (fmsPlan>0) insights.push({state:targetPct>=100?'good':targetPct>=90?'warning':'risk',title:`FMS: ${targetPct.toFixed(1)}% מהתכנון`,text:`ביצוע ${fmt(fmsActual)} מול תכנון ${fmt(fmsPlan)} בתקופה שנבחרה.`})
-    if (previousActual>0) insights.push({state:yoyPct>=0?'good':'warning',title:`שינוי שנתי ${yoyPct>=0?'+':''}${yoyPct.toFixed(1)}%`,text:`לעומת אותה תקופה ב-${currentYear-1}: ${fmt(previousActual)} ביצוע IML.`})
-    if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`₪${fmt(contractorCost)} על ${fmt(contractorPackaged)} ליטר/יחידות מדווחות. מקור: חשבונות קבלן מתקן 42.`})
+    if (previousActual>0) insights.push({state:yoyPct>=0?'good':'warning',title:`שינוי שנתי ${yoyPct>=0?'+':''}${yoyPct.toFixed(1)}%`,text:`לעומת אותה תקופה ב-${currentYear-1}: ${fmt(previousActual)} לפי קובץ הכמויות.`})
+    if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`עלות הקבלן חלקי ${fmt(total)} יחידות תפוקה מקובץ הכמויות. כמות החשבון אינה משמשת לחישוב התפוקה.`})
     else if (uniqueLogical.includes('42')) insights.push({state:'warning',title:'אין עלות קבלן בתקופה',text:`נתוני הקבלן שהועלו זמינים עד ${managementHistory.meta?.contractor2026Through || 'החודש האחרון בקובץ'}.`})
     if (!hasReliableRft && qualityLots.size) insights.push({state:'warning',title:'RFT ממתין למקור מאומת',text:`קיימים ${qualityLots.size.toLocaleString()} לוטים/רשומות איכות עם החלטות או חריגות, אך אין מכנה מלא ואמין לחישוב RFT.`})
     const latestContractorMonth=contractorRows.at(-1)?.key||''
@@ -2991,13 +2987,19 @@ material: normalize(getField(r, [
     const peakMonth = managementSummary.peakMonth?.label ? `${managementSummary.peakMonth.label} · ${fmt(managementSummary.peakMonth.actual)}` : 'אין נתון'
     const weakMonth = managementSummary.weakMonth?.label ? `${managementSummary.weakMonth.label} · ${fmt(managementSummary.weakMonth.actual)}` : 'אין נתון'
     return [
-      {title:'שער', bullets:[`תקציר מנהלים · ${facilityLabel}`, periodLabel, `תפוקה בפועל: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
-      {title:'תמונת מצב', bullets:[`ימי פעילות: ${managementSummary.days}`, `ממוצע ליום: ${fmt(managementSummary.avgDaily)}`, `שיא יומי: ${fmt(managementSummary.peakDaily)}`, `שנה מול שנה: ${yoyText}`]},
-      {title:'תכנון מול ביצוע', bullets:[`תכנון לתקופה: ${fmt(managementSummary.fmsPlan)}`, `ביצוע IML: ${fmt(managementSummary.fmsActual)}`, `פער: ${managementSummary.fmsPlan ? `${managementSummary.fmsActual - managementSummary.fmsPlan >= 0 ? '+' : ''}${fmt(managementSummary.fmsActual - managementSummary.fmsPlan)}` : '—'}`, `חודש עמידה טוב ביותר: ${bestMonth}`]},
-      {title:'מגמות 2024–2026', bullets:[`חודש שיא: ${peakMonth}`, `חודש חלש: ${weakMonth}`, `השוואה לאותה תקופה: ${yoyText}`, `מקור היסטורי: ${managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}`]},
-      {title:'עלויות ויעילות', bullets:[`עלות קבלן משוקללת: ${costText}`, `חודשי קבלן בטווח: ${managementSummary.contractorMonths || 0}`, `תוצרת בחשבונות קבלן: ${managementSummary.contractorPackaged ? fmt(managementSummary.contractorPackaged) : '—'}`, `תשלום לקבלן: ${managementSummary.contractorCost ? `₪${fmt(managementSummary.contractorCost)}` : '—'}`]},
-      {title:'איכות ומגמות', bullets:[`RFT: ${managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : 'ממתין למקור RFT מאומת'}`, `לוטים עם החלטה/חריגה: ${managementSummary.qualityLots || 0}`, `לוטים עם דחייה/Restricted: ${managementSummary.qualityBadLots || 0}`, `חריגות פתוחות: ${openDeviations.length}`]},
-      {title:'תובנות והמלצות', bullets:managementSummary.insights.slice(0,4).map(item => `${item.title}: ${item.text}`)}
+      {title:'שער', bullets:[`תקציר מנהלים · ${facilityLabel}`, periodLabel]},
+      {title:'בטיחות — משולש האירועים', bullets:['שדות פתוחים להשלמה ידנית', 'מסר מנהל היחידה']},
+      {title:'תמונת מצב ניהולית', bullets:[`תפוקה מקובץ כמויות: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
+      {title:'תכנון מול ביצוע', bullets:[`תכנון: ${fmt(managementSummary.fmsPlan)}`, `ביצוע מקובץ כמויות: ${fmt(managementSummary.fmsActual)}`]},
+      {title:'מגמה רב־שנתית', bullets:[`חודש שיא: ${peakMonth}`, `שנה מול שנה: ${yoyText}`]},
+      {title:'תמהיל תפוקה', bullets:['לפי מתקן ומוצר', 'מקור: קובץ הכמויות']},
+      {title:'מתקן 42 כיחידה עסקית', bullets:['בטיחות · לקוחות · תפעול', 'כלכלה · איכות · אנשים']},
+      {title:'תפוקת אריזה ועלות', bullets:[`תפוקה: ${fmt(managementSummary.total)}`, `עלות ליחידת תפוקה: ${costText}`]},
+      {title:'עלויות ויעילות', bullets:[`תשלום לקבלן: ${managementSummary.contractorCost ? `₪${fmt(managementSummary.contractorCost)}` : '—'}`, 'המכנה נלקח מקובץ הכמויות']},
+      {title:'איכות ומגמות', bullets:[`RFT: ${managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : 'ממתין למקור מאומת'}`, `חריגות פתוחות: ${openDeviations.length}`]},
+      {title:'ממשל נתונים', bullets:['מקור יחיד לכמויות ולתפוקות', 'חשבון קבלן משמש לעלות בלבד']},
+      {title:'תוכנית פעולה ניהולית', bullets:['פעולה · בעל אחריות · יעד', 'תאריך וסטטוס']},
+      {title:'תובנות והמלצות', bullets:managementSummary.insights.slice(0,2).map(item => `${item.title}: ${item.text}`)}
     ]
   }
 
@@ -3005,6 +3007,10 @@ material: normalize(getField(r, [
     setManagementPresentationBusy(true)
     setManagementPresentationMessage('מכין קובץ PowerPoint אמיתי (.pptx)...')
     try {
+      await exportManagementPresentation({ summary: managementSummary, from, to })
+      const exportedFileName = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.pptx`
+      setManagementPresentationMessage(`המצגת הבהירה נוצרה בהצלחה: ${exportedFileName}`)
+      return
       const slides = buildManagementPresentationSlides()
       const PptxGenJS = await ensurePptxGenJS()
       const pptx = new PptxGenJS()
@@ -4330,7 +4336,7 @@ material: normalize(getField(r, [
         <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
         {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadProgress&&<div className="management-batch-progress"><b>{managementUploadProgress.current}/{managementUploadProgress.total}</b><span>{managementUploadProgress.fileName}</span></div>}{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementUploadHistory.length>0&&<div className="management-upload-history"><h4>היסטוריית טעינות אחרונות</h4><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>קובץ</th><th>רשומות</th><th>סטטוס</th></tr></thead><tbody>{managementUploadHistory.slice(0,10).map((h,i)=><tr key={h.id||i}><td>{h.uploaded_at?new Date(h.uploaded_at).toLocaleString('he-IL'):'—'}</td><td>{h.data_kind==='plan'?'Plan Vs Actual':'עלויות קבלן'}</td><td>{h.file_name}</td><td>{Number(h.rows_written||0).toLocaleString()}</td><td><span className={`upload-status ${h.status}`}>{h.status==='success'?'נקלט':'שגיאה'}</span></td></tr>)}</tbody></table></div></div>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
         <div className="management-kpi-grid management-kpi-grid-six">
-          <article><span>תפוקה בפועל IML</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
+          <article><span>תפוקה מקובץ הכמויות</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
           <article><span>ממוצע ליום</span><b>{fmt(managementSummary.avgDaily)}</b><small>שיא {fmt(managementSummary.peakDaily)}</small></article>
           <article className={managementSummary.targetPct>=100?'good':managementSummary.targetPct>=90?'warning':'risk'}><span>FMS מול תכנון</span><b>{managementSummary.fmsPlan ? `${managementSummary.targetPct.toFixed(1)}%` : '—'}</b><small>{managementSummary.fmsPlan ? `${fmt(managementSummary.fmsActual)} / ${fmt(managementSummary.fmsPlan)}` : 'אין FMS לטווח'}</small></article>
           <article className={managementSummary.previousActual?(managementSummary.yoyPct>=0?'good':'warning'):''}><span>שנה מול שנה</span><b>{managementSummary.previousActual ? `${managementSummary.yoyPct>=0?'+':''}${managementSummary.yoyPct.toFixed(1)}%` : '—'}</b><small>{managementSummary.previousActual ? `מול ${managementSummary.currentYear-1}` : 'אין תקופת השוואה'}</small></article>
@@ -4338,7 +4344,7 @@ material: normalize(getField(r, [
           <article className={managementSummary.hasReliableRft?'good':managementSummary.qualityLots?'warning':''}><span>RFT</span><b>{managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : '—'}</b><small>{managementSummary.hasReliableRft ? 'מקור RFT מאומת' : 'נדרש מקור RFT/UD מלא'}</small></article>
         </div>
         {(managementView==='overview'||managementView==='plan') && <div className="management-history-card">
-          <div className="management-section-title"><div><BarChart3/><span><b>מגמה חודשית — FMS</b><small>תכנון מה-FMS מול ביצוע חי מנתוני IML הטעונים באפליקציה</small></span></div><span>{managementSummary.monthlyTrend.length} חודשים</span></div>
+          <div className="management-section-title"><div><BarChart3/><span><b>מגמה חודשית — FMS</b><small>תכנון מה-FMS מול ביצוע מקובץ הכמויות הטעון באפליקציה</small></span></div><span>{managementSummary.monthlyTrend.length} חודשים</span></div>
           <div className="management-month-chart">{managementSummary.monthlyTrend.slice(-12).map(row=>{const max=Math.max(1,...managementSummary.monthlyTrend.slice(-12).flatMap(x=>[x.plan,x.actual]));return <div className="management-month-col" key={row.key}><div className="management-bars"><i className="plan" style={{height:`${Math.max(3,row.plan/max*100)}%`}} title={`תכנון ${fmt(row.plan)}`}/><i className="actual" style={{height:`${Math.max(3,row.actual/max*100)}%`}} title={`ביצוע ${fmt(row.actual)}`}/></div><b>{row.pct?`${row.pct.toFixed(0)}%`:'—'}</b><small>{row.key.slice(5)}</small></div>})}{!managementSummary.monthlyTrend.length&&<div className="empty">אין נתוני FMS לתקופה שנבחרה.</div>}</div>
           <div className="management-legend"><span><i className="plan"/>תכנון</span><span><i className="actual"/>ביצוע</span></div>
         </div>}
@@ -4348,27 +4354,26 @@ material: normalize(getField(r, [
             <article className="management-panel"><h3>מוצרים מובילים</h3>{managementSummary.topMaterials.map((row,i)=><div className="management-rank-row management-material-row" key={`${row.material}-${i}`}><span><b>#{i+1} · {row.desc || row.material}</b><small>{row.material}</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}</article>
           </div>
           <div className="management-trend-highlights"><article><span>חודש שיא</span><b>{managementSummary.peakMonth?.label||'—'}</b><small>{managementSummary.peakMonth?fmt(managementSummary.peakMonth.actual):'אין נתונים'}</small></article><article><span>חודש חלש</span><b>{managementSummary.weakMonth?.label||'—'}</b><small>{managementSummary.weakMonth?fmt(managementSummary.weakMonth.actual):'אין נתונים'}</small></article><article><span>עמידה מיטבית בתכנון</span><b>{managementSummary.bestPlanMonth?.label||'—'}</b><small>{managementSummary.bestPlanMonth?.plan?`${managementSummary.bestPlanMonth.pct.toFixed(1)}%`:'אין תכנון'}</small></article></div>
-          <article className="management-panel management-wide-panel management-annual-panel"><h3>מגמה רב־שנתית 2024–2026</h3><p className="management-explain">אותם חודשי בחירה מושווים בין שלוש השנים. ביצוע חי מ-IML מקבל עדיפות; כשאינו טעון נעשה שימוש בהיסטוריה.</p><div className="management-annual-grid">{managementSummary.annualRows.map(row=><div className="management-annual-card" key={row.year}><div><strong>{row.year}</strong><small>{row.source==='IML'?'ביצוע IML':'היסטוריה'}</small></div><b>{fmt(row.actual)}</b><span>תכנון {fmt(row.plan)}</span><em className={row.pct>=100?'good':row.pct>=90?'warning':'risk'}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</em>{row.costPerUnit>0&&<small>עלות/ליטר ₪{row.costPerUnit.toFixed(3)}</small>}</div>)}</div><div className="management-year-bars">{managementSummary.annualRows.map(row=><div className="management-year-bar" key={`annual-bar-${row.year}`}><div className="management-year-track"><i style={{height:`${Math.max(4,row.actual/managementSummary.annualActualMax*100)}%`}}/></div><b>{row.year}</b><small>{fmt(row.actual)}</small></div>)}</div></article>
+          <article className="management-panel management-wide-panel management-annual-panel"><h3>מגמה רב־שנתית 2024–2026</h3><p className="management-explain">אותם חודשי בחירה מושווים בין שלוש השנים. הביצוע מוצג רק כאשר קיימים נתונים מקובץ הכמויות; לא נעשה שימוש בביצוע היסטורי ממקור אחר.</p><div className="management-annual-grid">{managementSummary.annualRows.map(row=><div className="management-annual-card" key={row.year}><div><strong>{row.year}</strong><small>{row.source==='Quantities'?'קובץ כמויות':'אין נתוני כמויות'}</small></div><b>{fmt(row.actual)}</b><span>תכנון {fmt(row.plan)}</span><em className={row.pct>=100?'good':row.pct>=90?'warning':'risk'}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</em>{row.costPerUnit>0&&<small>עלות/יחידת תפוקה ₪{row.costPerUnit.toFixed(3)}</small>}</div>)}</div><div className="management-year-bars">{managementSummary.annualRows.map(row=><div className="management-year-bar" key={`annual-bar-${row.year}`}><div className="management-year-track"><i style={{height:`${Math.max(4,row.actual/managementSummary.annualActualMax*100)}%`}}/></div><b>{row.year}</b><small>{fmt(row.actual)}</small></div>)}</div></article>
           {managementSummary.logicalFacilities.length===1&&managementSummary.logicalFacilities[0]==='42'&&<article className="management-panel management-wide-panel"><h3>מגמת עלות קבלן 2024–2026</h3><p className="management-explain">עלות משוקללת לליטר באותם חודשים שנבחרו. שנים ללא חשבון קבלן זמין מוצגות ללא ערך.</p><div className="management-cost-year-grid">{managementSummary.annualRows.map(row=><div key={`cost-year-${row.year}`}><span>{row.year}</span><b>{row.costPerUnit?`₪${row.costPerUnit.toFixed(3)}`:'—'}</b><div><i style={{width:`${row.costPerUnit?Math.max(4,row.costPerUnit/managementSummary.annualCostMax*100):0}%`}}/></div></div>)}</div></article>}
-          <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע של השנה הנוכחית והקודמת נלקח מנתוני IML כאשר הם טעונים; אחרת נעשה שימוש ב-Plan Vs Actual ההיסטורי.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{fmt(row.previous)}</td><td className={row.delta>=0?'positive-text':'negative-text'}>{row.delta>=0?'+':''}{fmt(row.delta)}</td><td><span className={`management-pct-chip ${row.pct>=0?'good':'warning'}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
+          <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע בשתי השנים נלקח אך ורק מקובצי הכמויות הטעונים. שנה ללא קובץ כמויות אינה מושלמת ממקור היסטורי אחר.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{fmt(row.previous)}</td><td className={row.delta>=0?'positive-text':'negative-text'}>{row.delta>=0?'+':''}{fmt(row.delta)}</td><td><span className={`management-pct-chip ${row.pct>=0?'good':'warning'}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
         </>}
         {managementView==='plan' && <>
-          <div className="management-cost-strip"><article><span>תכנון לתקופה</span><b>{fmt(managementSummary.fmsPlan)}</b></article><article><span>ביצוע IML</span><b>{fmt(managementSummary.fmsActual)}</b></article><article><span>פער מול תכנון</span><b>{managementSummary.fmsPlan?`${managementSummary.fmsActual-managementSummary.fmsPlan>=0?'+':''}${fmt(managementSummary.fmsActual-managementSummary.fmsPlan)}`:'—'}</b></article></div>
+          <div className="management-cost-strip"><article><span>תכנון לתקופה</span><b>{fmt(managementSummary.fmsPlan)}</b></article><article><span>ביצוע מקובץ הכמויות</span><b>{fmt(managementSummary.fmsActual)}</b></article><article><span>פער מול תכנון</span><b>{managementSummary.fmsPlan?`${managementSummary.fmsActual-managementSummary.fmsPlan>=0?'+':''}${fmt(managementSummary.fmsActual-managementSummary.fmsPlan)}`:'—'}</b></article></div>
           <div className="management-cost-strip"><article><span>ממוצע ביצוע ליום פעילות</span><b>{fmt(managementSummary.avgDaily)}</b></article><article><span>תכנון ממוצע ליום פעילות</span><b>{managementSummary.dailyPlanRate?fmt(managementSummary.dailyPlanRate):'—'}</b></article><article><span>קצב יומי מול תכנון</span><b>{managementSummary.dailyPlanRate?`${managementSummary.dailyPacePct.toFixed(1)}%`:'—'}</b></article></div>
-          <article className="management-panel management-wide-panel"><h3>תכנון מול ביצוע לפי חודש</h3><p className="management-explain">אין צורך לחפש בטבלה: התקופה והמתקן נקבעים מהמסננים הראשיים של IML CONTROL. כאן מוצגים אוטומטית התכנון, הביצוע, הפער ואחוז העמידה.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תכנון FMS</th><th>ביצוע IML</th><th>פער</th><th>עמידה</th></tr></thead><tbody>{managementSummary.monthlyTrend.map(row=><tr key={row.key}><td><b>{row.label}</b></td><td>{fmt(row.plan)}</td><td>{fmt(row.actual)}</td><td className={row.actual-row.plan>=0?'positive-text':'negative-text'}>{row.actual-row.plan>=0?'+':''}{fmt(row.actual-row.plan)}</td><td><span className={`management-pct-chip ${row.pct>=100?'good':row.pct>=90?'warning':'risk'}`}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.monthlyTrend.length&&<tr><td colSpan="5" className="empty">אין נתונים לתקופה.</td></tr>}</tbody></table></div></article>
+          <article className="management-panel management-wide-panel"><h3>תכנון מול ביצוע לפי חודש</h3><p className="management-explain">אין צורך לחפש בטבלה: התקופה והמתקן נקבעים מהמסננים הראשיים של IML CONTROL. כל הביצוע המוצג מגיע מקובץ הכמויות בלבד.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תכנון FMS</th><th>ביצוע מקובץ כמויות</th><th>פער</th><th>עמידה</th></tr></thead><tbody>{managementSummary.monthlyTrend.map(row=><tr key={row.key}><td><b>{row.label}</b></td><td>{fmt(row.plan)}</td><td>{fmt(row.actual)}</td><td className={row.actual-row.plan>=0?'positive-text':'negative-text'}>{row.actual-row.plan>=0?'+':''}{fmt(row.actual-row.plan)}</td><td><span className={`management-pct-chip ${row.pct>=100?'good':row.pct>=90?'warning':'risk'}`}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.monthlyTrend.length&&<tr><td colSpan="5" className="empty">אין נתונים לתקופה.</td></tr>}</tbody></table></div></article>
           {managementSummary.monthlyTrend.length===1 && <article className="management-panel management-wide-panel"><h3>פירוט FMS לפי קו / קבוצת משאב</h3><div className="management-line-grid">{Object.entries(managementSummary.monthlyTrend[0].groups||{}).filter(([,v])=>num(v.plan)||num(v.actual)).map(([group,v])=><div className="management-line-card" key={group}><b>{group==='GALIGAN-ISO-42'?'Galigan ISO (42)':group}</b><span>תכנון {fmt(v.plan)}</span><span>ביצוע {fmt(v.actual)}</span><strong>{num(v.plan)?`${(num(v.actual)/num(v.plan)*100).toFixed(1)}%`:'—'}</strong></div>)}</div></article>}
         </>}
         {managementView==='costs' && <>
-          <div className="management-cost-strip"><article><span>סה״כ תשלום לקבלן</span><b>{managementSummary.contractorCost?`₪${fmt(managementSummary.contractorCost)}`:'—'}</b></article><article><span>תוצרת בחשבונות קבלן</span><b>{managementSummary.contractorPackaged?fmt(managementSummary.contractorPackaged):'—'}</b></article><article><span>עלות משוקללת</span><b>{managementSummary.contractorCostPerUnit?`₪${managementSummary.contractorCostPerUnit.toFixed(3)}`:'—'}</b></article></div>
+          <div className="management-cost-strip"><article><span>סה״כ תשלום לקבלן</span><b>{managementSummary.contractorCost?`₪${fmt(managementSummary.contractorCost)}`:'—'}</b></article><article><span>תפוקה מקובץ הכמויות</span><b>{fmt(managementSummary.total)}</b></article><article><span>עלות ליחידת תפוקה</span><b>{managementSummary.contractorCostPerUnit?`₪${managementSummary.contractorCostPerUnit.toFixed(3)}`:'—'}</b></article></div>
           {managementSummary.previousContractorCostPerUnit>0&&managementSummary.contractorCostPerUnit>0&&<div className="management-cost-strip"><article><span>עלות/ליטר {managementSummary.currentYear}</span><b>₪{managementSummary.contractorCostPerUnit.toFixed(3)}</b></article><article><span>אותם חודשים {managementSummary.currentYear-1}</span><b>₪{managementSummary.previousContractorCostPerUnit.toFixed(3)}</b></article><article><span>שינוי בעלות לליטר</span><b>{managementSummary.contractorYoyPct>=0?'+':''}{managementSummary.contractorYoyPct.toFixed(1)}%</b></article></div>}
-          <article className="management-panel management-wide-panel"><h3>עלות קבלן מתקן 42 — היסטוריה</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תוצרת</th><th>תשלום לקבלן</th><th>עלות / ליטר</th></tr></thead><tbody>{managementSummary.monthlyTrend.filter(r=>r.cost).map(row=><tr key={`cost-${row.key}`}><td>{row.label}</td><td>{fmt(row.packaged)}</td><td>₪{fmt(row.cost)}</td><td><b>₪{row.costPerUnit.toFixed(3)}</b></td></tr>)}{!managementSummary.monthlyTrend.some(r=>r.cost)&&<tr><td colSpan="4" className="empty">אין נתוני קבלן בטווח שנבחר. ב-2026 הנתונים שהועלו מגיעים עד אוגוסט.</td></tr>}</tbody></table></div></article>
-          <div className="management-summary-grid"><article className="management-panel"><h3>מה מודדים כאן?</h3><p className="management-explain">המסך מחבר תשלום לקבלן לתוצרת הארוזה ומציג עלות משוקללת לליטר. בתקופה של חודש בודד מוצג גם תמהיל 1L / 5L / 10L / 20L וחלוקת תפוקה ועלות לפי משמרת, כאשר הנתונים קיימים בחשבון הקבלן.</p></article><article className="management-panel"><h3>זמינות נתוני עלות</h3><p className="management-explain">לשנת 2026 חשבונות הקבלן שהועלו זמינים עד <b>אוגוסט 2026</b>. בחירת אוגוסט בלבד תציג את החשבון הסופי; בחירת ינואר–אוגוסט תציג YTD מלא עד אוגוסט.</p></article></div>
-          {managementSummary.monthlyTrend.filter(r=>r.cost).slice(-1).map(row=>{const rec=managementHistory.contractor42?.[row.key];return <div className="management-summary-grid" key={`mix-${row.key}`}><article className="management-panel"><h3>תמהיל אריזה — {row.label}</h3>{Object.entries(rec?.lines||{}).map(([line,qty])=><div className="management-rank-row" key={line}><span><b>{line}</b></span><strong>{fmt(qty)}</strong></div>)}</article><article className="management-panel"><h3>יעילות לפי משמרת — {row.label}</h3>{(rec?.shiftQty||[]).map((qty,i)=><div className="management-rank-row" key={i}><span><b>משמרת {i+1}</b><small>{rec?.shiftCost?.[i]?`עלות ₪${fmt(rec.shiftCost[i])}`:''}</small></span><strong>{rec?.shiftCost?.[i]&&qty?`₪${(rec.shiftCost[i]/qty).toFixed(3)} / ל׳`:'—'}</strong></div>)}</article></div>})}
+          <article className="management-panel management-wide-panel"><h3>עלות קבלן מתקן 42 — היסטוריה</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תפוקה מקובץ כמויות</th><th>תשלום לקבלן</th><th>עלות / יחידת תפוקה</th></tr></thead><tbody>{managementSummary.monthlyTrend.filter(r=>r.cost).map(row=><tr key={`cost-${row.key}`}><td>{row.label}</td><td>{fmt(row.actual)}</td><td>₪{fmt(row.cost)}</td><td><b>{row.actual?`₪${row.costPerUnit.toFixed(3)}`:'—'}</b></td></tr>)}{!managementSummary.monthlyTrend.some(r=>r.cost)&&<tr><td colSpan="4" className="empty">אין נתוני קבלן בטווח שנבחר. ב-2026 הנתונים שהועלו מגיעים עד אוגוסט.</td></tr>}</tbody></table></div></article>
+          <div className="management-summary-grid"><article className="management-panel"><h3>מה מודדים כאן?</h3><p className="management-explain">המסך מחבר את סכום התשלום מחשבון הקבלן לתפוקת האריזה מקובץ הכמויות. כל תמהיל, תפוקה וביצוע מחושבים רק מקובץ הכמויות.</p></article><article className="management-panel"><h3>זמינות נתוני עלות</h3><p className="management-explain">לשנת 2026 חשבונות הקבלן שהועלו זמינים עד <b>אוגוסט 2026</b>. ללא קובץ כמויות לא תחושב עלות ליחידת תפוקה.</p></article></div>
         </>}
         {managementView==='quality' && <div className="management-summary-grid"><article className="management-panel"><h3>איכות בתקופה</h3><div className="management-quality-big"><b>{managementSummary.hasReliableRft?`${managementSummary.rft.toFixed(1)}%`:'—'}</b><span>RFT</span><small>{managementSummary.hasReliableRft?'יעד ייחוס: 98%':'ממתין למקור RFT מאומת'}</small></div><div className="management-rank-row"><span><b>לוטים עם החלטה/חריגה שנמצאו</b></span><strong>{managementSummary.qualityLots||0}</strong></div><div className="management-rank-row"><span><b>לוטים עם דחייה / Restricted</b></span><strong>{managementSummary.qualityBadLots||0}</strong></div><div className="management-rank-row"><span><b>חריגות פתוחות</b></span><strong>{openDeviations.length}</strong></div></article><article className="management-panel"><h3>מה נדרש כדי לחשב RFT נכון?</h3><p className="management-explain">צריך מקור שבו קיימת אוכלוסיית כל ה-Inspection Lots בתקופה, לא רק לוטים חריגים: Inspection Lot, חומר, אצווה, מתקן/תחנה, תאריך, והחלטת שימוש או סטטוס First Pass לכל לוט.</p><p className="management-explain">אם קיים דוח RFT חודשי מוכן, מספיקים גם: חודש, מתקן, מספר לוטים שנבדקו, מספר שעברו בפעם הראשונה ו-RFT%. ל-COPQ נדרש דוח עלות אי-איכות לפי חודש ומתקן.</p></article></div>}
         {managementView==='presentation' && <div className="management-summary-grid presentation-builder-grid"><article className="management-panel management-presentation-card"><h3>מצגת הנהלה אוטומטית</h3><p className="management-explain">המצגת נוצרת לפי התקופה והמתקנים שנבחרו בתקציר המנהלים, ומשתמשת באותם נתוני Supabase/IML: תפוקה, FMS, מגמות, עלויות, איכות ותובנות.</p><button type="button" className="management-ppt-button" onClick={downloadManagementPresentation} disabled={managementPresentationBusy}>{managementPresentationBusy ? <RefreshCw size={18}/> : <Download size={18}/>}<span>{managementPresentationBusy ? 'מכין מצגת...' : 'הפק PowerPoint'}</span></button>{managementPresentationMessage&&<p className="management-upload-message">{managementPresentationMessage}</p>}</article><article className="management-panel"><h3>שקופיות שייכנסו למצגת</h3><div className="presentation-slide-list">{buildManagementPresentationSlides().map((slide,i)=><div key={`${slide.title}-${i}`}><b>{String(i+1).padStart(2,'0')}</b><span>{slide.title}</span><small>{(slide.bullets||[]).slice(0,2).join(' · ')}</small></div>)}</div></article></div>}
         <article className="management-panel management-insights"><h3>תובנות אוטומטיות מהנתונים</h3><div className="management-insight-grid">{managementSummary.insights.map((item,i)=><div className={`management-insight ${item.state}`} key={`${item.title}-${i}`}><strong>{item.title}</strong><p>{item.text}</p></div>)}{!managementSummary.insights.length&&<div className="management-insight good"><strong>אין מספיק נתונים להשוואה</strong><p>בחר תקופה הכוללת חודשים 2024–2026 ומתקן ניהולי כדי לקבל השוואות.</p></div>}</div></article>
-        <div className="management-source-note"><Database size={18}/><div><b>מקורות מחוברים</b><span>כמות ואיכות מ-IML CONTROL · Plan Vs Actual היסטורי 2024–2026 · חשבונות קבלן מתקן 42 לשנים 2024–2026. הנתונים מחושבים לפי התקופה והמתקנים שנבחרו. מקור היסטורי: <b>{managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}</b>{managementHistoryError ? ` · ${managementHistoryError}` : ''}.</span></div></div>
+        <div className="management-source-note"><Database size={18}/><div><b>מקורות מחוברים</b><span><b>כל הכמויות והתפוקות: קובץ הכמויות בלבד.</b> תכנון: FMS / יעדים מבוקרים · עלות: חשבונות קבלן מתקן 42 · איכות: קובצי האיכות. מקור היסטורי לתכנון ולעלות: <b>{managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}</b>{managementHistoryError ? ` · ${managementHistoryError}` : ''}.</span></div></div>
       </section>}
       {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8" data-smart-group-column="3" data-smart-facility-summary="1"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`} data-facility={r.facility || ''} style={{backgroundColor: new Set(sortedRecentProduction.map(x => x.facility).filter(Boolean)).size > 1 ? facilityColor(r.facility) : undefined}}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td><button type="button" className={`qty-variance-btn ${num(r.plannedQty)>0 && Math.abs(num(r.qty)-num(r.plannedQty))>0.0001 ? 'has-variance' : ''}`} onClick={()=>setQuantityVarianceRow(r)} title={num(r.plannedQty)>0 ? 'לחץ להצגת כמות מתוכננת, בפועל והפער' : 'לא נמצאה כמות מתוכננת לרשומה'}>{fmt(r.qty)}</button></td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">

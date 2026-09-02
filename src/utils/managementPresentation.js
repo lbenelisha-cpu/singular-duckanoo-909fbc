@@ -45,14 +45,15 @@ const rtl = (extra = {}) => ({ fontFace: 'Arial', lang: 'he-IL', rtlMode: true, 
 const centered = (extra = {}) => ({ fontFace: 'Arial', lang: 'he-IL', rtlMode: true, align: 'center', valign: 'mid', color: DARK, ...extra })
 
 function addHeader(slide, title, subtitle = '') {
-  slide.background = { color: NAVY }
+  slide.background = { color: LIGHT }
   slide.addShape('rect', { x: 0, y: 0, w: 13.333, h: 0.16, fill: { color: AQUA }, line: { color: AQUA } })
-  slide.addText(title, { x: 6.45, y: 0.45, w: 6.25, h: 0.55, fontSize: 24, bold: true, color: WHITE, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
-  if (subtitle) slide.addText(subtitle, { x: 6.0, y: 1.02, w: 6.7, h: 0.35, fontSize: 10.5, color: 'B8C7D4', fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
+  slide.addText(title, { x: 5.15, y: 0.42, w: 7.55, h: 0.68, fontSize: 35, bold: true, color: NAVY, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
+  if (subtitle) slide.addText(subtitle, { x: 5.0, y: 1.12, w: 7.7, h: 0.36, fontSize: 16, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
+  slide.addText('IML CONTROL', { x: 0.65, y: 0.52, w: 2.2, h: 0.32, fontSize: 15, bold: true, color: TEAL, fontFace: 'Arial', margin: 0 })
 }
 
 function addFooter(slide, text = 'IML CONTROL · תקציר מנהלים') {
-  slide.addText(text, { x: 0.55, y: 7.08, w: 6.0, h: 0.18, fontSize: 8, color: 'A9BBC8', fontFace: 'Arial', align: 'left', margin: 0 })
+  slide.addText(text, { x: 0.55, y: 7.08, w: 6.0, h: 0.18, fontSize: 9, color: MUTED, fontFace: 'Arial', align: 'left', margin: 0 })
 }
 
 function addKpi(slide, { x, y, w, h = 1.05, label, value, note = '', accent = TEAL }) {
@@ -64,7 +65,7 @@ function addKpi(slide, { x, y, w, h = 1.05, label, value, note = '', accent = TE
 }
 
 function addSectionTitle(slide, title, x = 0.65, y = 1.55, w = 12.0) {
-  slide.addText(title, { x, y, w, h: 0.36, fontSize: 17, bold: true, color: WHITE, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
+  slide.addText(title, { x, y, w, h: 0.42, fontSize: 24, bold: true, color: NAVY, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
 }
 
 function addMonthlyBars(slide, rows, { x = 0.8, y = 2.2, w = 11.8, h = 3.8 } = {}) {
@@ -86,7 +87,7 @@ function addMonthlyBars(slide, rows, { x = 0.8, y = 2.2, w = 11.8, h = 3.8 } = {
     slide.addShape('rect', { x: baseX - barW - 0.03, y: chartTop + chartH - planH, w: barW, h: planH, fill: { color: '9FB3C4' }, line: { color: '9FB3C4' } })
     slide.addShape('rect', { x: baseX + 0.03, y: chartTop + chartH - actH, w: barW, h: actH, fill: { color: AQUA }, line: { color: AQUA } })
     slide.addText(String(r.label || r.key || '').replace(/^.*\s/, ''), { x: x + i * groupW, y: chartTop + chartH + 0.08, w: groupW, h: 0.18, fontSize: 7.5, color: 'C6D3DD', align: 'center', margin: 0, fontFace: 'Arial' })
-    if (num(r.plan)) slide.addText(pct(r.pct), { x: x + i * groupW, y: chartTop + chartH - Math.max(planH, actH) - 0.24, w: groupW, h: 0.17, fontSize: 7.5, bold: true, color: WHITE, align: 'center', margin: 0, fontFace: 'Arial' })
+    if (num(r.plan)) slide.addText(pct(r.pct), { x: x + i * groupW, y: chartTop + chartH - Math.max(planH, actH) - 0.24, w: groupW, h: 0.17, fontSize: 9, bold: true, color: NAVY, align: 'center', margin: 0, fontFace: 'Arial' })
   })
   slide.addText('תכנון', { x: x + 8.8, y: y + h - 0.18, w: 0.8, h: 0.2, fontSize: 8, color: 'C6D3DD', ...rtl() })
   slide.addShape('rect', { x: x + 9.55, y: y + h - 0.14, w: 0.12, h: 0.12, fill: { color: '9FB3C4' }, line: { color: '9FB3C4' } })
@@ -103,7 +104,7 @@ function addAnnualCards(slide, rows, y = 2.1) {
     slide.addText(fmt(r.actual), { x: x + 0.25, y: y + 0.65, w: 3.25, h: 0.42, fontSize: 25, bold: true, color: DARK, align: 'center', margin: 0, fontFace: 'Arial' })
     slide.addText('ביצוע בפועל', { x: x + 0.25, y: y + 1.08, w: 3.25, h: 0.24, fontSize: 9, color: MUTED, ...centered() })
     slide.addText(`תכנון ${fmt(r.plan)} · ${r.plan ? pct(r.pct) : 'ללא תכנון'}`, { x: x + 0.25, y: y + 1.42, w: 3.25, h: 0.28, fontSize: 10, bold: true, color: r.pct >= 100 ? GREEN : r.pct >= 90 ? ORANGE : RED, ...centered() })
-    if (num(r.costPerUnit)) slide.addText(`עלות/ליטר ₪${num(r.costPerUnit).toFixed(3)}`, { x: x + 0.25, y: y + 1.78, w: 3.25, h: 0.22, fontSize: 9, color: MUTED, ...centered() })
+    if (num(r.costPerUnit)) slide.addText(`עלות/יחידת תפוקה ₪${num(r.costPerUnit).toFixed(3)}`, { x: x + 0.25, y: y + 1.78, w: 3.25, h: 0.22, fontSize: 9, color: MUTED, ...centered() })
   })
 }
 
@@ -138,11 +139,12 @@ export async function exportManagementPresentation({ summary, from, to }) {
 
   // 1 — cover
   let slide = pptx.addSlide()
-  slide.background = { color: NAVY }
+  slide.background = { color: LIGHT }
   slide.addShape('rect', { x: 0, y: 0, w: 13.333, h: 0.16, fill: { color: AQUA }, line: { color: AQUA } })
-  slide.addText('IML CONTROL', { x: 0.75, y: 0.65, w: 3.0, h: 0.4, fontSize: 18, bold: true, color: WHITE, fontFace: 'Arial', margin: 0 })
-  slide.addText('תקציר מנהלים', { x: 5.4, y: 1.65, w: 6.8, h: 0.85, fontSize: 36, bold: true, color: WHITE, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
-  slide.addText(`${period} · מתקנים ${facilities}`, { x: 5.0, y: 2.55, w: 7.2, h: 0.42, fontSize: 14, color: 'C5D2DD', fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
+  slide.addShape('rect', { x: 0, y: 0.16, w: 3.35, h: 7.34, fill: { color: 'E3F4F2' }, line: { color: 'E3F4F2' } })
+  slide.addText('IML CONTROL', { x: 0.75, y: 0.65, w: 2.3, h: 0.4, fontSize: 18, bold: true, color: TEAL, fontFace: 'Arial', margin: 0 })
+  slide.addText('תקציר מנהלים', { x: 4.35, y: 1.45, w: 7.9, h: 1.0, fontSize: 50, bold: true, color: NAVY, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
+  slide.addText(`${period} · מתקנים ${facilities}`, { x: 4.1, y: 2.55, w: 8.15, h: 0.45, fontSize: 18, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
   addKpi(slide, { x: 0.85, y: 4.65, w: 2.75, label: 'תפוקה בפועל', value: fmt(summary.total), note: `${summary.days} ימי פעילות`, accent: AQUA })
   addKpi(slide, { x: 3.85, y: 4.65, w: 2.75, label: 'FMS מול תכנון', value: summary.fmsPlan ? pct(summary.fmsActual / summary.fmsPlan * 100) : '—', note: `${fmt(summary.fmsActual)} / ${fmt(summary.fmsPlan)}`, accent: GREEN })
   addKpi(slide, { x: 6.85, y: 4.65, w: 2.75, label: 'שנה מול שנה', value: summary.previousActual ? `${summary.yoyPct >= 0 ? '+' : ''}${pct(summary.yoyPct)}` : '—', note: `מול ${summary.currentYear - 1}`, accent: ORANGE })
@@ -177,7 +179,7 @@ export async function exportManagementPresentation({ summary, from, to }) {
   addKpi(slide, { x: 3.85, y: 2.05, w: 2.85, label: 'תכנון FMS', value: fmt(summary.fmsPlan), note: `ביצוע ${fmt(summary.fmsActual)}`, accent: TEAL })
   addKpi(slide, { x: 6.95, y: 2.05, w: 2.85, label: 'פער מול FMS', value: summary.fmsPlan ? `${summary.fmsActual - summary.fmsPlan >= 0 ? '+' : ''}${fmt(summary.fmsActual - summary.fmsPlan)}` : '—', note: summary.fmsPlan ? pct(summary.fmsActual / summary.fmsPlan * 100) : '', accent: summary.fmsActual >= summary.fmsPlan ? GREEN : ORANGE })
   addKpi(slide, { x: 10.05, y: 2.05, w: 2.55, label: 'RFT', value: summary.hasReliableRft ? pct(summary.rft) : '—', note: summary.hasReliableRft ? 'מקור מאומת' : 'ממתין למקור איכות מאומת', accent: ORANGE })
-  slide.addText('תובנות אוטומטיות', { x: 6.6, y: 3.65, w: 6.0, h: 0.35, fontSize: 16, bold: true, color: WHITE, ...rtl() })
+  slide.addText('תובנות אוטומטיות', { x: 6.6, y: 3.65, w: 6.0, h: 0.35, fontSize: 20, bold: true, color: NAVY, ...rtl() })
   summary.insights.slice(0, 4).forEach((ins, i) => {
     const y = 4.12 + i * 0.62
     const color = ins.state === 'good' ? GREEN : ins.state === 'risk' ? RED : ORANGE
@@ -227,43 +229,32 @@ export async function exportManagementPresentation({ summary, from, to }) {
     slide.addText(p[1],{x:x+0.25,y:3.12,w:1.7,h:0.85,fontSize:13,...centered()})
     slide.addText('הוסף יעד / תוצאה',{x:x+0.25,y:4.18,w:1.7,h:0.28,fontSize:10,bold:true,color:MUTED,...centered()})
   })
-  slide.addText('מטרת המצגת: לנהל את מתקן 42 כיחידה עסקית בעלת תוצאות, אחריות ותוכנית פעולה.',{x:1.1,y:5.45,w:11.1,h:0.55,fontSize:20,bold:true,color:WHITE,...centered()})
+  slide.addText('מטרת המצגת: לנהל את מתקן 42 כיחידה עסקית בעלת תוצאות, אחריות ותוכנית פעולה.',{x:1.1,y:5.45,w:11.1,h:0.55,fontSize:20,bold:true,color:NAVY,...centered()})
   addFooter(slide,'IML CONTROL · מתקן 42 · מודל ניהולי')
 
-  // Packaging mix and shift economics
-  const contractor = summary.latestContractorRecord || null
-  slide = pptx.addSlide(); addHeader(slide, 'תמהיל אריזה ויעילות משמרות', contractor ? `חשבון קבלן אחרון: ${summary.latestContractorMonth}` : 'ממתין לחשבון קבלן בתקופה')
-  if(contractor){
-    const lineEntries=Object.entries(contractor.lines||{})
-    const maxLine=Math.max(1,...lineEntries.map(([,v])=>num(v)))
-    lineEntries.forEach(([label,value],i)=>{
-      const y=1.75+i*0.78
-      slide.addText(label,{x:10.7,y,w:1.1,h:0.28,fontSize:13,bold:true,color:WHITE,...rtl()})
-      slide.addShape('roundRect',{x:5.6,y:y+0.03,w:4.8,h:0.24,fill:{color:'29445C'},line:{color:'29445C'}})
-      slide.addShape('roundRect',{x:5.6,y:y+0.03,w:Math.max(0.08,4.8*num(value)/maxLine),h:0.24,fill:{color:[SKY,AQUA,PURPLE,ORANGE][i]||AQUA},line:{color:[SKY,AQUA,PURPLE,ORANGE][i]||AQUA}})
-      slide.addText(fmt(value),{x:4.45,y,w:1.0,h:0.28,fontSize:12,bold:true,color:WHITE,align:'left',margin:0,fontFace:'Arial'})
-    })
-    ;(contractor.shiftQty||[]).forEach((qty,i)=>addKpi(slide,{x:0.75+i*1.55,y:1.75,w:1.35,h:1.32,label:`משמרת ${i+1}`,value:fmt(qty),note:contractor.shiftCost?.[i]&&qty?`₪${(contractor.shiftCost[i]/qty).toFixed(3)} / ל׳`:'' ,accent:[SKY,PURPLE,AQUA][i]}))
-    addKpi(slide,{x:0.75,y:3.65,w:4.45,h:1.28,label:'תוצרת לחיוב בחשבון הקבלן',value:fmt(contractor.packaged),note:'מדד חשבונאי — אינו בהכרח זהה לתפוקת IML',accent:ORANGE})
-    addKpi(slide,{x:0.75,y:5.1,w:4.45,h:1.05,label:'עלות סופית בחשבון',value:money(contractor.cost),note:`עלות משוקללת ₪${num(contractor.costPerUnit).toFixed(3)}`,accent:PURPLE})
-  } else slide.addText('אין חשבון קבלן זמין בתקופה שנבחרה',{x:1,y:3,w:11.2,h:0.5,fontSize:22,color:'C9D6E1',...centered()})
-  addFooter(slide,'IML CONTROL · מתקן 42 · תמהיל ועלות')
+  // Quantity mix is always sourced from the quantities file; contractor data supplies cost only.
+  slide = pptx.addSlide(); addHeader(slide, 'תפוקת אריזה ועלות', 'כל נתוני הכמות והתפוקה מגיעים מקובץ הכמויות בלבד')
+  addKpi(slide,{x:0.75,y:1.9,w:3.7,h:1.3,label:'תפוקת אריזה',value:fmt(summary.total),note:`${summary.days} ימי פעילות · מקור: קובץ כמויות`,accent:AQUA})
+  addKpi(slide,{x:4.8,y:1.9,w:3.7,h:1.3,label:'עלות קבלן',value:summary.contractorCost?money(summary.contractorCost):'—',note:'מקור: חשבון קבלן',accent:PURPLE})
+  addKpi(slide,{x:8.85,y:1.9,w:3.7,h:1.3,label:'עלות ליחידת תפוקה',value:summary.contractorCostPerUnit?`₪${summary.contractorCostPerUnit.toFixed(3)}`:'—',note:'עלות קבלן ÷ תפוקה מקובץ הכמויות',accent:TEAL})
+  addRankList(slide, 'מוצרים מובילים לפי קובץ הכמויות', summary.topMaterials || [], { x: 0.75, y: 3.65, w: 11.8, labelFn: (r, i) => `#${i + 1} · ${r.desc || r.material}` })
+  addFooter(slide,'IML CONTROL · מתקן 42 · תפוקה ועלות')
 
   // 6 — cost
   slide = pptx.addSlide(); addHeader(slide, 'עלויות ויעילות', facilities === '42' ? 'חשבונות קבלן מתקן 42' : 'עלות קבלן זמינה למתקן 42 בלבד')
   addKpi(slide, { x: 0.75, y: 1.8, w: 3.6, label: 'סה״כ תשלום לקבלן', value: summary.contractorCost ? money(summary.contractorCost) : '—', note: summary.contractorCost ? `${summary.contractorMonths} חודשים` : 'אין נתונים בתקופה', accent: TEAL })
-  addKpi(slide, { x: 4.85, y: 1.8, w: 3.6, label: 'תוצרת בחשבונות', value: summary.contractorPackaged ? fmt(summary.contractorPackaged) : '—', note: 'ליטר / יחידות מדווחות', accent: SKY })
-  addKpi(slide, { x: 8.95, y: 1.8, w: 3.6, label: 'עלות משוקללת', value: summary.contractorCostPerUnit ? `₪${summary.contractorCostPerUnit.toFixed(3)}` : '—', note: 'לליטר / יחידה', accent: PURPLE })
+  addKpi(slide, { x: 4.85, y: 1.8, w: 3.6, label: 'תפוקה מקובץ הכמויות', value: fmt(summary.total), note: 'מקור יחיד לכל מדדי הכמות', accent: SKY })
+  addKpi(slide, { x: 8.95, y: 1.8, w: 3.6, label: 'עלות ליחידת תפוקה', value: summary.contractorCostPerUnit ? `₪${summary.contractorCostPerUnit.toFixed(3)}` : '—', note: 'עלות קבלן ÷ תפוקת קובץ כמויות', accent: PURPLE })
   if (summary.annualRows?.some(r => num(r.costPerUnit))) {
-    slide.addText('עלות משוקללת לפי שנה', { x: 6.4, y: 3.25, w: 6.1, h: 0.35, fontSize: 16, bold: true, color: WHITE, ...rtl() })
+    slide.addText('עלות ליחידת תפוקה לפי שנה', { x: 6.4, y: 3.25, w: 6.1, h: 0.35, fontSize: 20, bold: true, color: NAVY, ...rtl() })
     const vals = summary.annualRows.map(r => num(r.costPerUnit))
     const max = Math.max(0.01, ...vals)
     summary.annualRows.forEach((r, i) => {
       const y = 3.85 + i * 0.75
-      slide.addText(String(r.year), { x: 1.1, y, w: 1.0, h: 0.28, fontSize: 12, bold: true, color: WHITE, align: 'left', margin: 0, fontFace: 'Arial' })
+      slide.addText(String(r.year), { x: 1.1, y, w: 1.0, h: 0.28, fontSize: 12, bold: true, color: NAVY, align: 'left', margin: 0, fontFace: 'Arial' })
       slide.addShape('roundRect', { x: 2.2, y: y + 0.02, w: 8.2, h: 0.25, fill: { color: '29445C' }, line: { color: '29445C' } })
       if (num(r.costPerUnit)) slide.addShape('roundRect', { x: 2.2, y: y + 0.02, w: Math.max(0.12, 8.2 * num(r.costPerUnit) / max), h: 0.25, fill: { color: [SKY, PURPLE, AQUA][i] || AQUA }, line: { color: [SKY, PURPLE, AQUA][i] || AQUA } })
-      slide.addText(num(r.costPerUnit) ? `₪${num(r.costPerUnit).toFixed(3)}` : '—', { x: 10.65, y: y - 0.02, w: 1.3, h: 0.3, fontSize: 12, bold: true, color: WHITE, align: 'left', margin: 0, fontFace: 'Arial' })
+      slide.addText(num(r.costPerUnit) ? `₪${num(r.costPerUnit).toFixed(3)}` : '—', { x: 10.65, y: y - 0.02, w: 1.3, h: 0.3, fontSize: 12, bold: true, color: NAVY, align: 'left', margin: 0, fontFace: 'Arial' })
     })
   } else {
     slide.addText('אין נתוני עלות קבלן זמינים בתקופה שנבחרה', { x: 1.0, y: 4.15, w: 11.2, h: 0.5, fontSize: 20, color: 'C9D6E1', ...centered() })
@@ -279,14 +270,14 @@ export async function exportManagementPresentation({ summary, from, to }) {
   slide.addText(summary.hasReliableRft ? 'RFT מחושב ממקור מאומת.' : 'RFT אינו מוצג עד לחיבור מקור מלא ואמין של כל Inspection Lots והחלטת השימוש/First Pass. המערכת אינה מייצרת אחוז איכות מנתוני חריגות בלבד.', { x: 1.35, y: 4.4, w: 10.6, h: 0.75, fontSize: 16, color: DARK, bold: !summary.hasReliableRft, ...centered() })
   addFooter(slide)
 
-  // Data reconciliation — prevent management contradictions
-  slide = pptx.addSlide(); addHeader(slide, 'יישור נתונים — IML מול חשבון הקבלן', 'שני מקורות, שתי הגדרות; אין להציגם כאותו מדד')
-  addKpi(slide,{x:0.85,y:1.8,w:5.55,h:1.35,label:'תפוקת IML בתקופה',value:fmt(summary.total),note:'נתוני ייצור תפעוליים לפי מסנני האפליקציה',accent:AQUA})
-  addKpi(slide,{x:6.9,y:1.8,w:5.55,h:1.35,label:'תוצרת לחיוב בחשבונות הקבלן',value:summary.contractorPackaged?fmt(summary.contractorPackaged):'—',note:'נתון חשבונאי מצטבר מהחשבונות שנבחרו',accent:PURPLE})
+  // Data governance — one authoritative quantity source.
+  slide = pptx.addSlide(); addHeader(slide, 'ממשל נתונים — מקור יחיד לכמויות', 'תפוקה וביצוע מחושבים רק מקובץ הכמויות')
+  addKpi(slide,{x:0.85,y:1.8,w:5.55,h:1.35,label:'תפוקת אריזה בתקופה',value:fmt(summary.total),note:'מקור: קובץ הכמויות לפי מסנני האפליקציה',accent:AQUA})
+  addKpi(slide,{x:6.9,y:1.8,w:5.55,h:1.35,label:'עלות קבלן בתקופה',value:summary.contractorCost?money(summary.contractorCost):'—',note:'חשבון הקבלן מספק עלות בלבד',accent:PURPLE})
   slide.addShape('roundRect',{x:0.85,y:3.65,w:11.6,h:1.55,fill:{color:'FFF7E6'},line:{color:'F6D58A'}})
   slide.addText('כלל ניהולי להצגה',{x:8.6,y:3.95,w:3.2,h:0.3,fontSize:18,bold:true,color:'9A6700',...rtl()})
-  slide.addText('תפוקת IML משמשת למדידת ביצוע תפעולי. תוצרת חשבון הקבלן משמשת לחישוב עלות. פער ביניהם יוצג במפורש וייבדק — לא יוסתר ולא יאוחד.',{x:1.25,y:4.32,w:10.55,h:0.52,fontSize:16,bold:true,...centered()})
-  slide.addText('הוסף ידנית: הסבר לפער · התאמות חודש · אישור גורם מוסמך',{x:2.0,y:5.75,w:9.3,h:0.35,fontSize:17,color:WHITE,...centered()})
+  slide.addText('כל כמות המוצגת כתפוקה, ביצוע, תמהיל או מכנה לעלות נלקחת מקובץ הכמויות. חשבון הקבלן משמש אך ורק לסכום העלות.',{x:1.25,y:4.32,w:10.55,h:0.52,fontSize:16,bold:true,...centered()})
+  slide.addText('בקרה חודשית: קובץ כמויות מאושר · חשבון קבלן מאושר · נעילת התקופה',{x:2.0,y:5.75,w:9.3,h:0.35,fontSize:17,color:NAVY,...centered()})
   addFooter(slide,'IML CONTROL · ממשל נתונים')
 
   // Editable management action plan
