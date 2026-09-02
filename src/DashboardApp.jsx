@@ -1484,7 +1484,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             setStatus(`טוען ${kind} ברקע...`)
             const dataset = kind === 'targets'
               ? await loadCloudDatasetOnce(kind)
-              : await loadCloudDatasetHistory(kind, { maxVersions:60, maxMonths:36 })
+              // Quality workbooks are substantially larger than production.
+              // The operational dashboard needs the current and recent
+              // months, so avoid downloading years of archived QA chunks.
+              : await loadCloudDatasetHistory(kind, kind === 'quality'
+                ? { maxVersions:12, maxMonths:3 }
+                : { maxVersions:24, maxMonths:12 })
             loadedRows += applyDataset(kind, dataset)
             setPerformance(current => ({ ...current, queries:current.queries + 1, phase:`נטען ${kind}` }))
             await new Promise(resolve => setTimeout(resolve, 0))

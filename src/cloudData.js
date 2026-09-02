@@ -324,7 +324,16 @@ export async function loadCloudDatasetHistory(kind, { maxVersions = 60, maxMonth
 
   return {
     rows:historyRows,
-    meta:{ source:'cloud-history', valid:true, rows:historyRows.length, months:[...claimedMonths].sort(), versions:usedVersions }
+    meta:{
+      source:'cloud-history', valid:true, rows:historyRows.length,
+      months:[...claimedMonths].sort(), versions:usedVersions,
+      // Preserve the active server signature in IndexedDB. Without it every
+      // application start treats the same archive as changed and downloads
+      // all historical chunks again.
+      versionId:versions[0]?.id || '',
+      version:versions[0]?.version_no || 0,
+      loadedAt:versions[0]?.activated_at || versions[0]?.created_at || '',
+    }
   }
 }
 
