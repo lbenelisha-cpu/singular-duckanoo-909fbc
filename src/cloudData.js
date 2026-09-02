@@ -272,6 +272,62 @@ export async function loadCloudDataset(kind, onProgress) {
   }
 }
 
+// Load the newest saved snapshot for every calendar month from the versioned
+// dataset archive. This keeps historical quantity months available even when
+// the active production upload contains only the current month-to-date file.
+export async function loadCloudDatasetHistory(kind, { maxVersions = 60, maxMonths = 36 } = {}, onProgress) {
+  requireClient()
+  const capability = await detectCloudSchema()
+  if (!capability.versioned) return loadCloudDataset(kind, onProgress)
+
+  const versions = await withRetry(async () => {
+    const { data, error } = await supabase
+      .from('iml_dataset_versions')
+      .select('id,version_no,chunk_count,status,created_at,activated_at')
+      .eq('kind', kind)
+      .in('status', ['active', 'archived'])
+      .order('version_no', { ascending:false })
+      .limit(maxVersions)
+    if (error) throw error
+    return data || []
+  }, `קריאת היסטוריית גרסאות ${kind}`)
+
+  const claimedMonths = new Set()
+  const historyRows = []
+  const usedVersions = []
+  for (let index = 0; index < versions.length && claimedMonths.size < maxMonths; index += 1) {
+    const version = versions[index]
+    const rows = await readChunkPages({
+      table:'iml_dataset_chunks', filterColumn:'version_id', filterValue:version.id,
+      expectedChunks:Number(version.chunk_count || 0), kind:`${kind} — היסטוריה`,
+    })
+    const byMonth = new Map()
+    rows.forEach(row => {
+      const raw = row?.productionDay || row?.finishDate || row?.date || row?.Date || ''
+      const text = raw instanceof Date ? raw.toISOString() : String(raw || '')
+      const match = text.match(/(20\d{2})[-/.](\d{1,2})/)
+      if (!match) return
+      const month = `${match[1]}-${String(match[2]).padStart(2, '0')}`
+      if (!byMonth.has(month)) byMonth.set(month, [])
+      byMonth.get(month).push(row)
+    })
+    let used = false
+    for (const [month, monthRows] of byMonth) {
+      if (claimedMonths.has(month) || claimedMonths.size >= maxMonths) continue
+      claimedMonths.add(month)
+      historyRows.push(...monthRows)
+      used = true
+    }
+    if (used) usedVersions.push(version.id)
+    emit(onProgress, 'history', index + 1, versions.length || 1, `משחזר היסטוריית ${kind}`, { months:claimedMonths.size, downloadedRows:historyRows.length })
+  }
+
+  return {
+    rows:historyRows,
+    meta:{ source:'cloud-history', valid:true, rows:historyRows.length, months:[...claimedMonths].sort(), versions:usedVersions }
+  }
+}
+
 
 async function readChunkPagesMatching({ table, filterColumn, filterValue, expectedChunks = 0, matcher, onProgress, kind }) {
   const matches = []

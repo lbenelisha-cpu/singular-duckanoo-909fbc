@@ -4,7 +4,7 @@ import {
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, Archive, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
-import { loadCloudDatasetOnce, loadCloudDatasetMatching, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
+import { loadCloudDatasetOnce, loadCloudDatasetMatching, loadCloudDatasetHistory, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
@@ -73,7 +73,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.23.4 — Quantities Source + Light Executive Deck'
+const BUILD_LABEL = 'Sprint 11.23.5 — Quantity History Recovery'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1429,7 +1429,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               return Number.isFinite(ms) && ms >= cutoff.getTime()
             }))
           } else {
-            loadedRows += applyDataset('production', await loadCloudDatasetOnce('production'))
+            loadedRows += applyDataset('production', await loadCloudDatasetHistory('production', { maxVersions:60, maxMonths:36 }))
           }
           setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'הדשבורד זמין' }))
           await new Promise(resolve => setTimeout(resolve, 0))
@@ -1710,9 +1710,13 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               selectableFacilitySet.has(String(r.facility)) &&
               (r.qty || r.order || r.batch)
             ), productionRowKey)
-          storedCount = compact.length
-          rowsForCloud = compact
+          // The uploaded file contains the current month from day 1 through today.
+          // Preserve quantity-only history already restored from Supabase and replace
+          // matching rows with the newest file, instead of replacing older months.
+          rowsForCloud = dedupeRows([...compact, ...(production || [])], productionRowKey)
+          storedCount = rowsForCloud.length
           lastFileUniqueRows = compact.length
+          setStatus(`${displayDatasetName('production')}: ${fmt(compact.length)} שורות בקובץ החדש + היסטוריית כמויות שמורה`)
         }
         else if (kind === 'quality') {
           const compact = dedupeRows(rows.map(r => ({
