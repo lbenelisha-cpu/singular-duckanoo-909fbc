@@ -1749,7 +1749,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               getField(r, ['Sample Time', 'Sampling Time', 'Time of Sample', 'Time of Sampling', 'שעת דגימה', 'Inspection Time', 'Start Time of Inspection', 'Time']),
               getField(r, ['Sample Date Time', 'Sampling Date Time', 'Sample Datetime', 'Sampling Datetime', 'תאריך ושעת דגימה'])
             ),
-            batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, [
+            batch: normalize(getField(r, ['Batch', 'Batch Number', 'Batch No.', 'Batch No', 'Batch ID'])), material: normalize(getField(r, [
   'Material #',
   'Material Number',
   'Material No.',
@@ -1758,7 +1758,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   'מק״ט',
   'Material'
 ])),
-            order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])), status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
+            order: normalize(getField(r, ['Process Order', 'Process Order #', 'Process Order Number', 'Process Order No.', 'Process Order No', 'Order'])), status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
             approval: normalize(getField(r, ['QA Approval'])), inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
             sampleNo: normalize(getField(r, ['Sample #', 'Sample Number', 'Sample'])),
             operationActivity: normalize(getField(r, ['Operation Activity', 'Operation activity', 'Operation'])),
@@ -2029,7 +2029,7 @@ const materialByBatchDescription = useMemo(() => {
       getField(r, ['Sample Time', 'Sampling Time', 'Time of Sample', 'Time of Sampling', 'שעת דגימה', 'Inspection Time', 'Start Time of Inspection', 'Time']),
       getField(r, ['Sample Date Time', 'Sampling Date Time', 'Sample Datetime', 'Sampling Datetime', 'תאריך ושעת דגימה'])
     ),
-    batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, [
+    batch: normalize(getField(r, ['Batch', 'Batch Number', 'Batch No.', 'Batch No', 'Batch ID'])), material: normalize(getField(r, [
   'Material #',
   'Material Number',
   'Material No.',
@@ -2038,7 +2038,7 @@ const materialByBatchDescription = useMemo(() => {
   'מק״ט',
   'Material'
 ])),
- order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])),
+ order: normalize(getField(r, ['Process Order', 'Process Order #', 'Process Order Number', 'Process Order No.', 'Process Order No', 'Order'])),
 status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
 inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
 udCode: normalize(getField(r, ['UD Code', 'Usage Decision', 'Usage decision', 'החלטת שימוש']))
@@ -2213,7 +2213,11 @@ material: normalize(getField(r, [
       const rowOrder = normalizeSapId(row.order)
       const materialMatches = !material || !rowMaterial || rowMaterial === material
       if (rowBatch && rowBatch === batch && materialMatches) return true
-      return !rowBatch && rowOrder && productionOrders.has(rowOrder) && materialMatches
+      // In SAP quality exports Batch may refer to a sample/raw-material batch
+      // rather than the finished-goods batch shown in production. Process
+      // Order is therefore the authoritative fallback even when rowBatch is
+      // populated with a different value.
+      return rowOrder && productionOrders.has(rowOrder) && materialMatches
     })
     const qualityForBatchMaterial = indexedQuality.length
       ? indexedQuality
