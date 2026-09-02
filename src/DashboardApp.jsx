@@ -1408,6 +1408,12 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         const changed = kind => {
           const remote = remoteMeta[kind]
           const local = cached?.dataMeta?.[kind]
+          // Older builds cached only the active production snapshot.  Its
+          // version id can still match the server after this build is
+          // installed, which would otherwise skip the new history loader and
+          // leave the previous month invisible.  Force one migration load
+          // until the cache explicitly identifies itself as cloud-history.
+          if (!IS_MOBILE_DEVICE && kind === 'production' && local?.source !== 'cloud-history') return true
           if (!remote) return !local
           const remoteId = remote.active_version_id || remote.updated_at || remote.loaded_at
           const localId = local?.versionId || local?.loadedAt
