@@ -19,6 +19,28 @@ import './styles.css'
 // the external script is blocked or slow to load.
 const XLSX = window.XLSX || XLSXCore
 
+let pptxGenLoaderPromise = null
+const ensurePptxGenJS = () => {
+  if (window.PptxGenJS) return Promise.resolve(window.PptxGenJS)
+  if (pptxGenLoaderPromise) return pptxGenLoaderPromise
+  pptxGenLoaderPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-iml-pptxgen]')
+    if (existing) {
+      existing.addEventListener('load', () => window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error('PptxGenJS לא נטען')))
+      existing.addEventListener('error', () => reject(new Error('טעינת מנוע PowerPoint נכשלה')))
+      return
+    }
+    const script = document.createElement('script')
+    script.src = '/pptxgen.bundle.js'
+    script.async = true
+    script.dataset.imlPptxgen = '1'
+    script.onload = () => window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error('PptxGenJS לא נטען'))
+    script.onerror = () => reject(new Error('טעינת מנוע PowerPoint נכשלה'))
+    document.head.appendChild(script)
+  })
+  return pptxGenLoaderPromise
+}
+
 const LEGACY_DAILY_TARGETS = {
   '1519': 80000, '1521': 60000, '1523': 40000, '1524': 6000,
   '1525': 130000, '1528': 80000, '1540': 18000, '1541': 210000,
@@ -51,7 +73,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.19.0 — Management Cloud Data Center'
+const BUILD_LABEL = 'Sprint 11.22.3 — August Contractor Account'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -559,110 +581,6 @@ async function readTargetWorkbook(file) {
   return output
 }
 
-// Large SAP quality exports can expand to >512 MiB inside the XLSX archive.
-// SheetJS must materialize the full worksheet XML and may run out of browser memory.
-// This reader inflates sheet1.xml as a stream and keeps only columns used by IML CONTROL.
-const LARGE_QUALITY_XLSX_BYTES = 42 * 1024 * 1024
-
-const xmlText = value => String(value || '')
-  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-  .replace(/&apos;/g, "'").replace(/&amp;/g, '&')
-
-const xlsxColumn = ref => {
-  const letters = String(ref || '').match(/^[A-Z]+/i)?.[0]?.toUpperCase() || ''
-  let n = 0
-  for (const ch of letters) n = n * 26 + ch.charCodeAt(0) - 64
-  return n - 1
-}
-
-async function xlsxEntryStream(file, wantedName) {
-  const tailSize = Math.min(file.size, 70000)
-  const tail = new Uint8Array(await file.slice(file.size - tailSize).arrayBuffer())
-  const dv = new DataView(tail.buffer, tail.byteOffset, tail.byteLength)
-  let eocd = -1
-  for (let i = tail.length - 22; i >= 0; i--) {
-    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break }
-  }
-  if (eocd < 0) throw new Error('מבנה XLSX לא תקין (ZIP directory לא נמצא)')
-  const centralSize = dv.getUint32(eocd + 12, true)
-  const centralOffset = dv.getUint32(eocd + 16, true)
-  const central = new Uint8Array(await file.slice(centralOffset, centralOffset + centralSize).arrayBuffer())
-  const cdv = new DataView(central.buffer, central.byteOffset, central.byteLength)
-  const decoder = new TextDecoder()
-  let pos = 0, found = null
-  while (pos + 46 <= central.length && cdv.getUint32(pos, true) === 0x02014b50) {
-    const method = cdv.getUint16(pos + 10, true)
-    const compressedSize = cdv.getUint32(pos + 20, true)
-    const nameLen = cdv.getUint16(pos + 28, true)
-    const extraLen = cdv.getUint16(pos + 30, true)
-    const commentLen = cdv.getUint16(pos + 32, true)
-    const localOffset = cdv.getUint32(pos + 42, true)
-    const name = decoder.decode(central.subarray(pos + 46, pos + 46 + nameLen))
-    if (name === wantedName) { found = { method, compressedSize, localOffset }; break }
-    pos += 46 + nameLen + extraLen + commentLen
-  }
-  if (!found) throw new Error(`לא נמצא ${wantedName} בתוך קובץ ה-XLSX`)
-  const localHead = new Uint8Array(await file.slice(found.localOffset, found.localOffset + 30).arrayBuffer())
-  const ldv = new DataView(localHead.buffer, localHead.byteOffset, localHead.byteLength)
-  if (ldv.getUint32(0, true) !== 0x04034b50) throw new Error('מבנה XLSX לא תקין (local header)')
-  const nameLen = ldv.getUint16(26, true), extraLen = ldv.getUint16(28, true)
-  const dataStart = found.localOffset + 30 + nameLen + extraLen
-  const compressed = file.slice(dataStart, dataStart + found.compressedSize).stream()
-  if (found.method === 0) return compressed
-  if (found.method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('הדפדפן אינו תומך בקריאה חסכונית של קובץ XLSX גדול')
-  return compressed.pipeThrough(new DecompressionStream('deflate-raw'))
-}
-
-async function readLargeQualityWorkbook(file, allowedFacilities, onProgress) {
-  const stream = await xlsxEntryStream(file, 'xl/worksheets/sheet1.xml')
-  const reader = stream.getReader(), decoder = new TextDecoder()
-  let pending = '', header = [], rows = [], rowCount = 0
-  const keep = new Set([
-    'Material #','Material Number','Material No.','Material','Batch','Batch Number','Inspection Lot','Inspection Lot #',
-    'Sample #','Sample Number','Sample','Operation Activity','Operation activity','Operation','Operation short text','Operation Short Text',
-    'Process Order','Process Order #','Order','Process Order Confirmed Release Date','Process Order Storage Location',
-    'Master Insp Charactristic','Master Inspection Characteristic','Arithmetic Mean of Valid Measured Values','Lower Specif Limit','Lower Spec Limit',
-    'Upper Specif Limit','Upper Spec Limit','Unit of Measurement','Result Status','QA Approval','Status','Inspection Lot Storage Location',
-    'Start Date of Inspection','Date of Lot Creation','End Date of Inspection','Inspection Lot UD Date','Process Order Delivered Date',
-    'Production Line','UD Code','Usage Decision','Usage decision','Charactristic Remarks','Characteristic Remarks','Batch Remarks','Qualitative'
-  ].map(normKey))
-  const parseRow = xml => {
-    const cells = []
-    const cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>/g
-    let m
-    while ((m = cellRe.exec(xml))) {
-      const ref = m[1].match(/\br="([A-Z]+\d+)"/i)?.[1] || ''
-      const idx = xlsxColumn(ref)
-      const body = m[2]
-      const inline = body.match(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/)
-      const numeric = body.match(/<v>([\s\S]*?)<\/v>/)
-      cells[idx] = xmlText(inline ? inline[1] : numeric ? numeric[1] : '')
-    }
-    if (!header.length) { header = cells.map(normalize); return }
-    const obj = { __sheet:'Sheet1' }
-    for (let i=0; i<header.length; i++) if (header[i] && keep.has(normKey(header[i]))) obj[header[i]] = cells[i] ?? ''
-    const facility = canonicalFacility(getField(obj, ['Inspection Lot Storage Location','Process Order Storage Location','Storage Location','Facility','Production Line']))
-    if (allowedFacilities?.size && !allowedFacilities.has(String(facility || ''))) return
-    if (getField(obj, ['Batch','Batch Number','Inspection Lot','Inspection Lot #']) === '') return
-    rows.push(obj)
-  }
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    pending += decoder.decode(value, { stream:true })
-    let end
-    while ((end = pending.indexOf('</row>')) >= 0) {
-      const start = pending.lastIndexOf('<row', end)
-      if (start >= 0) parseRow(pending.slice(start, end + 6))
-      pending = pending.slice(end + 6)
-      rowCount++
-      if (rowCount % 5000 === 0) { onProgress?.(rowCount); await new Promise(r=>setTimeout(r,0)) }
-    }
-  }
-  pending += decoder.decode()
-  return rows
-}
-
 async function readWorkbook(file) {
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array', cellDates: false, dense: true })
@@ -1063,140 +981,19 @@ const MANAGEMENT_PLAN_OVERRIDES = {
     },
   },
 }
-
-const loadPermanentManagementPlanHistory = async (baseHistory) => {
-  const history = {
-    ...(baseHistory || {}),
-    planActual: { ...((baseHistory || {}).planActual || {}) },
-  }
-  if (!supabase) return { history, rows:0, error:'' }
-
-  const { data, error } = await supabase
-    .from('iml_management_monthly_history')
-    .select('month_key,source_system,facility_label,facility_group,line_code,plan_normalized,production_normalized,updated_at')
-    .order('month_key', { ascending:true })
-
-  if (error) return { history, rows:0, error:error.message || String(error) }
-  if (!Array.isArray(data) || !data.length) return { history, rows:0, error:'' }
-
-  // FMS is the primary source for packaging facilities. AIMS remains available
-  // as a fallback for facilities that do not have an FMS row in the same month.
-  const priority = { AIMS:1, FMS:2 }
-  const chosen = new Map()
-  data.forEach(row => {
-    const monthKey = String(row.month_key || '').slice(0,7)
-    const facility = String(row.facility_group || '').trim()
-    if (!monthKey || !facility) return
-    const key = `${monthKey}|${facility}`
-    const existing = chosen.get(key)
-    if (!existing || (priority[String(row.source_system || '').toUpperCase()] || 0) >= (priority[String(existing.source_system || '').toUpperCase()] || 0)) {
-      if (!existing || String(existing.source_system || '').toUpperCase() !== String(row.source_system || '').toUpperCase()) {
-        chosen.set(key, { source_system:row.source_system, rows:[row] })
-      } else {
-        existing.rows.push(row)
-      }
-    }
-  })
-
-  // Rebuild each permanent month/facility from the stored source rows.
-  // This overrides old embedded/cloud snapshots only where the new permanent
-  // history actually contains data; all other historical months remain intact.
-  const grouped = new Map()
-  data.forEach(row => {
-    const monthKey = String(row.month_key || '').slice(0,7)
-    const facility = String(row.facility_group || '').trim()
-    if (!monthKey || !facility) return
-    const winner = chosen.get(`${monthKey}|${facility}`)
-    if (!winner || String(winner.source_system || '').toUpperCase() !== String(row.source_system || '').toUpperCase()) return
-    const key = `${monthKey}|${facility}`
-    if (!grouped.has(key)) grouped.set(key, { monthKey, facility, rows:[] })
-    grouped.get(key).rows.push(row)
-  })
-
-  grouped.forEach(({monthKey,facility,rows}) => {
-    const month = { ...(history.planActual[monthKey] || {}) }
-    const groups = {}
-    let plan = 0
-    let actual = 0
-    rows.forEach((row, index) => {
-      const rowPlan = Number(row.plan_normalized || 0)
-      const rowActual = Number(row.production_normalized || 0)
-      plan += rowPlan
-      actual += rowActual
-      const groupKey = String(row.line_code || row.facility_label || `${facility}-${index+1}`).trim()
-      groups[groupKey] = {
-        plan: rowPlan,
-        actual: rowActual,
-        label: row.facility_label || groupKey,
-        source: row.source_system || '',
-      }
-    })
-    month[facility] = { plan, actual, groups, source:'permanent-supabase' }
-    history.planActual[monthKey] = month
-  })
-
-  return { history, rows:data.length, error:'' }
-}
-
-const loadManagementHistoryWithPermanentPlan = async () => {
-  const legacy = await loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY)
-  const base = legacy.history || EMBEDDED_MANAGEMENT_HISTORY
-  const permanent = await loadPermanentManagementPlanHistory(base)
-  return {
-    history: permanent.history || base,
-    source: permanent.rows > 0 ? 'supabase' : (legacy.source || 'embedded'),
-    permanentRows: permanent.rows,
-    error: permanent.error || legacy.error || '',
-  }
-}
-
 const managementPlanForFacility = (history, monthKey, facilityId) => {
   const month = history?.planActual?.[monthKey] || {}
   const wanted = String(facilityId || '')
   const direct = month[wanted]
   let plan = Number(direct?.plan || 0)
   let actual = Number(direct?.actual || 0)
-
-  // Historical uploads did not always use the same facility key. In several
-  // older FMS files (especially Facility 42) the monthly total can be zero
-  // while the line-level rows still contain the real Plan / Production values.
-  // Recover those line values before treating the month as missing.
-  const directGroups = Object.entries(direct?.groups || {})
-  if (direct && actual <= 0 && directGroups.length) {
-    const groupActual = directGroups.reduce((sum,[,vals])=>sum + Number(vals?.actual || 0),0)
-    if (groupActual > 0) actual = groupActual
-  }
-  if (direct && plan <= 0 && directGroups.length) {
-    const groupPlan = directGroups.reduce((sum,[,vals])=>sum + Number(vals?.plan || 0),0)
-    if (groupPlan > 0) plan = groupPlan
-  }
-
   // Fallback for legacy snapshots where the facility column and resource prefix differ.
-  // For Facility 42 also recognise its historical FMS line names (LQ / ISO),
-  // because some source files were uploaded without a leading "42-" resource id.
-  if (!direct || actual <= 0 || plan <= 0) {
-    let fallbackPlan = 0
-    let fallbackActual = 0
-    Object.entries(month).forEach(([recKey,rec]) => {
-      Object.entries(rec?.groups || {}).forEach(([group,vals]) => {
-        const raw = `${recKey} ${group} ${vals?.label || ''}`.toUpperCase()
-        const groupId=String(group || '').match(/^(\d{2})[-_]/)?.[1] || ''
-        const belongs42 = wanted === '42' && (
-          /(^|[^0-9])42([^0-9]|$)/.test(raw) ||
-          /\bLQ\b/.test(raw) ||
-          /SHAKED\s*ISO/.test(raw) ||
-          /GALIGAN\s*ISO/.test(raw)
-        )
-        const belongs = groupId === wanted || belongs42
-        if (belongs) {
-          fallbackPlan += Number(vals?.plan || 0)
-          fallbackActual += Number(vals?.actual || 0)
-        }
-      })
+  if (!direct) Object.values(month).forEach(rec => {
+    Object.entries(rec.groups || {}).forEach(([group,vals]) => {
+      const groupId=String(group || '').match(/^(\d{2})[-_]/)?.[1] || ''
+      if (groupId === wanted) { plan += Number(vals.plan || 0); actual += Number(vals.actual || 0) }
     })
-    if (plan <= 0 && fallbackPlan > 0) plan = fallbackPlan
-    if (actual <= 0 && fallbackActual > 0) actual = fallbackActual
-  }
+  })
   const override = MANAGEMENT_PLAN_OVERRIDES[`${monthKey}|${wanted}`]
   if (override?.plan != null) plan = Number(override.plan)
   if (override?.actual != null) actual = Number(override.actual)
@@ -1257,27 +1054,24 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [managementUploadMessage, setManagementUploadMessage] = useState('')
   const [managementUploadHistory, setManagementUploadHistory] = useState([])
   const [managementUploadProgress, setManagementUploadProgress] = useState(null)
-  const [managementPptBusy, setManagementPptBusy] = useState(false)
-  const [managementPptMessage, setManagementPptMessage] = useState('')
+  const [managementPresentationBusy, setManagementPresentationBusy] = useState(false)
+  const [managementPresentationMessage, setManagementPresentationMessage] = useState('')
   const refreshManagementHistory = async () => {
-    const result = await loadManagementHistoryWithPermanentPlan()
+    const result = await loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY)
     setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
     setManagementHistorySource(result.source || 'embedded')
     setManagementHistoryError(result.error || '')
-    const legacyStatus = await getManagementCloudStatus()
-    setManagementCloudStatus({ ...legacyStatus, permanentRows:Number(result.permanentRows || 0) })
+    setManagementCloudStatus(await getManagementCloudStatus())
     try { setManagementUploadHistory(await getManagementUploadHistory(30)) } catch {}
   }
   useEffect(() => {
     let cancelled = false
-    loadManagementHistoryWithPermanentPlan().then(result => {
+    loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY).then(result => {
       if (cancelled) return
       setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
       setManagementHistorySource(result.source || 'embedded')
       setManagementHistoryError(result.error || '')
-      getManagementCloudStatus().then(status => {
-        if (!cancelled) setManagementCloudStatus({ ...status, permanentRows:Number(result.permanentRows || 0) })
-      })
+      getManagementCloudStatus().then(setManagementCloudStatus)
     })
     return () => { cancelled = true }
   }, [])
@@ -1874,12 +1668,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           }
           await idbSetKey(TARGET_FILE_KEY, targetWorkbookOriginal)
         }
-        const useLargeQualityReader = forcedKind === 'quality' && file.size >= LARGE_QUALITY_XLSX_BYTES
-        const rows = forcedKind === 'targets'
-          ? await readTargetWorkbook(file)
-          : useLargeQualityReader
-            ? await readLargeQualityWorkbook(file, selectableFacilitySet, count => setStatus(`${displayDatasetName('quality')}: קורא קובץ גדול... ${fmt(count)} שורות`))
-            : await readWorkbook(file)
+        const rows = forcedKind === 'targets' ? await readTargetWorkbook(file) : await readWorkbook(file)
         const detected = forcedKind === 'targets' ? 'targets' : classifyFile(rows)
         const kind = forcedKind || detected
         const missing = validateRows(kind, rows)
@@ -2872,80 +2661,13 @@ material: normalize(getField(r, [
     let rows = baseFiltered.filter(r => r.facility === id)
     if (id === '1542') rows = rows.filter(r => r.orderType.toUpperCase().includes('ZFIN'))
     const actual = rows.reduce((s, r) => s + r.qty, 0)
-
     const plans = planningRows.filter(x => (x.facilities || [x.facility]).includes(id))
-    const monthlyTarget = plans.reduce((sum, row) => sum + row.target, 0)
+    const target = plans.reduce((sum, row) => sum + row.target, 0)
     const forecast = plans.reduce((sum, row) => sum + row.forecast, 0)
-
-    // "ביצועים לפי מתקן בטווח המסונן" חייב להשוות תפוקה של הטווח
-    // לתכנון של אותו הטווח — לא ליעד של החודש האחרון בלבד.
-    const logicalMap = {
-      '1542':'42', '1142':'42',
-      '1519':'19', '1119':'19',
-      '1523':'23', '1123':'23',
-      '1528':'28',
-      '1524':'24'
-    }
-    const logicalId = logicalMap[String(id)] || String(id)
-    const startDate = from ? new Date(`${from}T12:00:00`) : null
-    const endDate = to ? new Date(`${to}T12:00:00`) : null
-
-    let periodTarget = 0
-    let permanentPlanFound = false
-
-    if (startDate && endDate && !Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime())) {
-      const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1, 12)
-      const lastMonth = new Date(endDate.getFullYear(), endDate.getMonth(), 1, 12)
-
-      while (cursor <= lastMonth) {
-        const monthKey = `${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,'0')}`
-        const rec = managementPlanForFacility(managementHistory, monthKey, logicalId)
-        const fullMonthPlan = num(rec?.plan)
-
-        if (fullMonthPlan > 0) {
-          permanentPlanFound = true
-
-          // אם נבחר חלק מחודש, מחשבים רק את חלק ימי העבודה שנמצא בטווח.
-          const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1, 12)
-          const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth()+1, 0, 12)
-          const overlapStart = startDate > monthStart ? startDate : monthStart
-          const overlapEnd = endDate < monthEnd ? endDate : monthEnd
-
-          let workdaysMonth = 0
-          let workdaysSelected = 0
-          const d = new Date(monthStart)
-          while (d <= monthEnd) {
-            const dow = d.getDay()
-            if (dow !== 5 && dow !== 6) {
-              workdaysMonth++
-              if (d >= overlapStart && d <= overlapEnd) workdaysSelected++
-            }
-            d.setDate(d.getDate()+1)
-          }
-
-          periodTarget += fullMonthPlan * (workdaysMonth ? workdaysSelected / workdaysMonth : 1)
-        }
-
-        cursor.setMonth(cursor.getMonth()+1)
-      }
-    }
-
-    const target = permanentPlanFound ? periodTarget : monthlyTarget
     const rank = { risk: 3, warning: 2, 'no-target': 1, good: 0, achieved: 0 }
-    const state = !target ? 'no-target' : actual / target * 100 >= 100 ? 'good' : actual / target * 100 >= 75 ? 'warning' : 'risk'
-
-    return {
-      id,
-      actual,
-      target,
-      monthlyTarget,
-      periodPlan: permanentPlanFound,
-      pct: target ? actual / target * 100 : 0,
-      orders: new Set(rows.map(r => r.order).filter(Boolean)).size,
-      state,
-      forecast
-    }
-  }), [facilities, baseFiltered, planningRows, managementHistory, from, to])
+    const state = plans.sort((a,b) => (rank[b.state] || 0) - (rank[a.state] || 0))[0]?.state || 'no-target'
+    return { id, actual, target, pct: target ? actual / target * 100 : 0, orders: new Set(rows.map(r => r.order).filter(Boolean)).size, state, forecast }
+  }), [facilities, baseFiltered, planningRows])
 
 
   const toggleFacility = (id) => setSelectedFacilities(current => current.includes(id) ? current.filter(x => x !== id) : [...current, id])
@@ -3157,18 +2879,10 @@ material: normalize(getField(r, [
         const day=row.productionDay||iso(row.date); if(!day||Number(day.slice(0,4))!==year||!months.includes(day.slice(5,7))) return false
         const logical=managementFacilityId(row.facility); return !uniqueLogical.length||uniqueLogical.includes(logical)
       }).reduce((sum,row)=>sum+num(row.qty),0)
-      // For the currently selected year use the SAME validated monthly IML totals
-      // shown in the management trend. This prevents facility 42 bulk / routing rows
-      // from being counted again by the broader dashboardProd annual scan.
-      const currentYearActual = year===currentYear
-        ? monthlyTrend.reduce((sum,row)=>sum+num(row.actual),0)
-        : 0
-      const actual = year===currentYear
-        ? currentYearActual
-        : (liveActual>0 ? liveActual : historicalActual)
+      const actual=liveActual>0?liveActual:historicalActual
       const costRows=uniqueLogical.length===1&&uniqueLogical[0]==='42'?months.map(mm=>managementHistory.contractor42?.[`${year}-${mm}`]).filter(Boolean):[]
       const cost=costRows.reduce((sum,row)=>sum+num(row.cost),0), packaged=costRows.reduce((sum,row)=>sum+num(row.packaged),0)
-      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:packaged?cost/packaged:0,source:year===currentYear?'IML':(liveActual>0?'IML':'Historical')}
+      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:packaged?cost/packaged:0,source:liveActual>0?'IML':'Historical'}
     })
     const comparableMonths=monthlyTrend.filter(r=>num(r.plan)>0||num(r.actual)>0)
     const peakMonth=comparableMonths.length?[...comparableMonths].sort((a,b)=>num(b.actual)-num(a.actual))[0]:null
@@ -3177,14 +2891,7 @@ material: normalize(getField(r, [
     const annualActualMax=Math.max(1,...annualRows.map(r=>num(r.actual)))
     const annualCostMax=Math.max(1,...annualRows.map(r=>num(r.costPerUnit)))
     const facilityRows=[...facilityMap.values()].sort((a,b)=>b.qty-a.qty)
-    const allMaterials=[...materialMap.values()].sort((a,b)=>b.qty-a.qty)
-    const topMaterials=allMaterials.slice(0,8)
-    const uniqueMaterials=allMaterials.filter(row=>row.material&&row.material!=='—').length
-    const top5Qty=allMaterials.slice(0,5).reduce((sum,row)=>sum+num(row.qty),0)
-    const top5SharePct=total?top5Qty/total*100:0
-    const topMaterial=allMaterials[0]||null
-    const topMaterialSharePct=total&&topMaterial?num(topMaterial.qty)/total*100:0
-    const topMaterialMax=Math.max(1,...topMaterials.map(row=>num(row.qty)))
+    const topMaterials=[...materialMap.values()].sort((a,b)=>b.qty-a.qty).slice(0,8)
     // RFT is calculated at Inspection-Lot level from the decision/deviation dataset,
     // not from individual characteristic result rows. A lot is first-pass-right when
     // no rejected characteristic was recorded and the final UD is not a reject/restricted decision.
@@ -3215,138 +2922,8 @@ material: normalize(getField(r, [
     if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`₪${fmt(contractorCost)} על ${fmt(contractorPackaged)} ליטר/יחידות מדווחות. מקור: חשבונות קבלן מתקן 42.`})
     else if (uniqueLogical.includes('42')) insights.push({state:'warning',title:'אין עלות קבלן בתקופה',text:`נתוני הקבלן שהועלו זמינים עד ${managementHistory.meta?.contractor2026Through || 'החודש האחרון בקובץ'}.`})
     if (!hasReliableRft && qualityLots.size) insights.push({state:'warning',title:'RFT ממתין למקור מאומת',text:`קיימים ${qualityLots.size.toLocaleString()} לוטים/רשומות איכות עם החלטות או חריגות, אך אין מכנה מלא ואמין לחישוב RFT.`})
-    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,uniqueMaterials,top5Qty,top5SharePct,topMaterial,topMaterialSharePct,topMaterialMax,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,peakMonth,weakMonth,bestPlanMonth,annualActualMax,annualCostMax,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
+    return { total,days:days.length,avgDaily,peakDaily,targetPct,forecastPct,facilityRows,topMaterials,fmsPlan,fmsActual,monthlyTrend,previousActual,previousPlan,yoyPct,currentYear,dailyPlanRate,dailyPacePct,yoyRows,contractorCost,contractorPackaged,contractorCostPerUnit,contractorMonths:contractorRows.length,previousContractorCostPerUnit,contractorYoyPct,annualRows,peakMonth,weakMonth,bestPlanMonth,annualActualMax,annualCostMax,rft,hasReliableRft,qualityLots:qualityLots.size,qualityGood:goodLots,qualityBadLots:badLots.size,insights:insights.slice(0,6),logicalFacilities:uniqueLogical }
   }, [filtered, dashboardProd, filteredQualityRows, filteredDeviationRows, qualityBad, selectedFacilities, from, to, targetTotal, targetActual, targetForecast, managementHistory])
-
-
-  const managementProgress = useMemo(() => {
-    const parseDay = value => {
-      const key = iso(value)
-      if (!key) return null
-      const [y,m,d] = key.split('-').map(Number)
-      return new Date(y, m-1, d, 12, 0, 0, 0)
-    }
-    const start = parseDay(from) || parseDay(filtered[0]?.date)
-    const end = parseDay(to) || parseDay(filtered[filtered.length-1]?.date)
-    if (!start || !end || end < start) return { points:[], mode:'none', title:'מגמה לפי ציר הזמן', subtitle:'אין נתונים בטווח שנבחר', actual:0, plan:0, pct:0 }
-
-    const dayMs = 86400000
-    const spanDays = Math.max(1, Math.round((end-start)/dayMs)+1)
-    const sameDay = spanDays === 1
-    const mode = sameDay ? 'hour' : spanDays <= 14 ? 'day' : spanDays <= 93 ? 'week' : 'month'
-    const modeTitle = sameDay ? 'התקדמות יומית' : spanDays <= 14 ? 'התקדמות שבועית' : spanDays <= 93 ? 'התקדמות חודשית' : 'התקדמות רב־חודשית'
-    const subtitle = sameDay
-      ? 'צבירת תפוקה במהלך היום מול קצב התכנון היומי'
-      : mode === 'day'
-        ? 'צבירה יום־אחר־יום מול התכנון לתקופה שנבחרה'
-        : mode === 'week'
-          ? 'צבירה שבועית מול התכנון היחסי של אותם שבועות'
-          : 'צבירה חודשית מול תכנון FMS לכל חודש'
-
-    const logicalFacilities = managementSummary.logicalFacilities || []
-    const monthPlan = key => logicalFacilities.reduce((sum,facility)=>sum + num(managementPlanForFacility(managementHistory,key,facility).plan),0)
-    const workdaysInMonth = key => {
-      const [y,m] = key.split('-').map(Number)
-      const last = new Date(y,m,0).getDate()
-      let count=0
-      for(let d=1; d<=last; d++){
-        const dow = new Date(y,m-1,d,12).getDay()
-        if(dow>=0 && dow<=4) count++
-      }
-      return Math.max(1,count)
-    }
-    const plannedForDate = date => {
-      const key = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`
-      const dow = date.getDay()
-      if(dow===5 || dow===6) return 0
-      return monthPlan(key)/workdaysInMonth(key)
-    }
-
-    const rows = filtered
-      .map(row=>({ row, dt: row.date instanceof Date ? row.date : new Date(row.date) }))
-      .filter(x=>x.dt && !Number.isNaN(x.dt.getTime()) && x.dt>=new Date(start.getFullYear(),start.getMonth(),start.getDate(),0,0,0) && x.dt<=new Date(end.getFullYear(),end.getMonth(),end.getDate(),23,59,59))
-
-    const raw=[]
-    if(mode==='hour'){
-      const dailyPlan = plannedForDate(start)
-      for(let h=0; h<24; h+=2){
-        const until = h===22 ? 24 : h+2
-        const actual = rows.filter(x=>x.dt.getHours()<until).reduce((s,x)=>s+num(x.row.qty),0)
-        const plan = dailyPlan*(until/24)
-        raw.push({ key:`${String(until).padStart(2,'0')}:00`, label:`${String(until).padStart(2,'0')}:00`, actual, plan })
-      }
-    } else {
-      const bucketMap = new Map()
-      const cursor = new Date(start)
-      while(cursor<=end){
-        let key,label
-        if(mode==='day'){
-          key=iso(cursor); label=`${String(cursor.getDate()).padStart(2,'0')}/${String(cursor.getMonth()+1).padStart(2,'0')}`
-        } else if(mode==='week'){
-          const diff=Math.floor((cursor-start)/dayMs)
-          const idx=Math.floor(diff/7)+1
-          key=`W${idx}`; label=`שבוע ${idx}`
-        } else {
-          key=`${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,'0')}`; label=monthLabelHe(key)
-        }
-        if(!bucketMap.has(key)) bucketMap.set(key,{key,label,actualStep:0,planStep:0})
-        bucketMap.get(key).planStep += mode==='month' ? 0 : plannedForDate(cursor)
-        cursor.setDate(cursor.getDate()+1)
-      }
-      rows.forEach(x=>{
-        let key
-        if(mode==='day') key=iso(x.dt)
-        else if(mode==='week'){
-          const d0=new Date(x.dt.getFullYear(),x.dt.getMonth(),x.dt.getDate(),12)
-          const diff=Math.floor((d0-start)/dayMs)
-          key=`W${Math.floor(diff/7)+1}`
-        } else key=`${x.dt.getFullYear()}-${String(x.dt.getMonth()+1).padStart(2,'0')}`
-        if(bucketMap.has(key)) bucketMap.get(key).actualStep += num(x.row.qty)
-      })
-      if(mode==='month'){
-        for(const item of bucketMap.values()) item.planStep = monthPlan(item.key)
-      }
-      let actualCum=0, planCum=0
-      for(const item of bucketMap.values()){
-        actualCum += item.actualStep
-        planCum += item.planStep
-        raw.push({key:item.key,label:item.label,actual:actualCum,plan:planCum})
-      }
-    }
-
-    const final = raw[raw.length-1] || {actual:0,plan:0}
-    const max = Math.max(1,...raw.flatMap(p=>[p.actual,p.plan]))
-    const width=1000, height=300, padX=48, padTop=26, padBottom=54
-    const innerW=width-padX*2, innerH=height-padTop-padBottom
-    const points = raw.map((p,i)=>{
-      const x = raw.length===1 ? width/2 : padX + (i/(raw.length-1))*innerW
-      const yActual = padTop + innerH - (p.actual/max)*innerH
-      const yPlan = padTop + innerH - (p.plan/max)*innerH
-      return {...p,x,yActual,yPlan}
-    })
-    return {
-      points, mode, title:modeTitle, subtitle,
-      actual:final.actual, plan:final.plan, pct:final.plan ? final.actual/final.plan*100 : 0,
-      max, width, height, padX, padTop, padBottom
-    }
-  }, [filtered, from, to, managementSummary.logicalFacilities, managementHistory])
-
-  const handleExportManagementPresentation = async () => {
-    if (managementPptBusy) return
-    try {
-      setManagementPptBusy(true)
-      setManagementPptMessage('מכין מצגת הנהלה...')
-      const { exportManagementPresentation } = await import('./utils/managementPresentation')
-      await exportManagementPresentation({ summary: managementSummary, from, to })
-      setManagementPptMessage('המצגת הופקה בהצלחה')
-    } catch (error) {
-      console.error('management ppt export failed', error)
-      setManagementPptMessage(`שגיאה בהפקת המצגת: ${error?.message || 'שגיאה לא ידועה'}`)
-    } finally {
-      setManagementPptBusy(false)
-      window.setTimeout(() => setManagementPptMessage(''), 5000)
-    }
-  }
 
   const parseManagementWorkbook = async (file, kind) => {
     const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type:'array', cellDates:true })
@@ -3398,6 +2975,131 @@ material: normalize(getField(r, [
       await refreshManagementHistory()
       setManagementUploadMessage(`הטעינה הסתיימה · ${ok} קבצים נקלטו · ${failed} נכשלו · ${totalRows} רשומות נשמרו · ${updated} עודכנו · ${created} חדשות${errors.length?` · ${errors.slice(0,2).join(' | ')}`:''}`)
     } finally { setManagementUploadBusy(false); setManagementUploadProgress(null) }
+  }
+
+
+  const buildManagementPresentationSlides = () => {
+    const periodLabel = `${from || 'תחילת הנתונים'} עד ${to || 'סוף הנתונים'}`
+    const facilityLabel = managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים'
+    const fmsText = managementSummary.fmsPlan ? `${managementSummary.targetPct.toFixed(1)}% (${fmt(managementSummary.fmsActual)} / ${fmt(managementSummary.fmsPlan)})` : 'אין FMS לטווח'
+    const yoyText = managementSummary.previousActual ? `${managementSummary.yoyPct >= 0 ? '+' : ''}${managementSummary.yoyPct.toFixed(1)}% מול ${managementSummary.currentYear - 1}` : 'אין תקופת השוואה'
+    const costText = managementSummary.contractorCostPerUnit ? `₪${managementSummary.contractorCostPerUnit.toFixed(3)} לליטר` : 'אין נתוני קבלן בטווח'
+    const bestMonth = managementSummary.bestPlanMonth?.label ? `${managementSummary.bestPlanMonth.label} · ${managementSummary.bestPlanMonth.pct.toFixed(1)}%` : 'אין נתון'
+    const peakMonth = managementSummary.peakMonth?.label ? `${managementSummary.peakMonth.label} · ${fmt(managementSummary.peakMonth.actual)}` : 'אין נתון'
+    const weakMonth = managementSummary.weakMonth?.label ? `${managementSummary.weakMonth.label} · ${fmt(managementSummary.weakMonth.actual)}` : 'אין נתון'
+    return [
+      {title:'שער', bullets:[`תקציר מנהלים · ${facilityLabel}`, periodLabel, `תפוקה בפועל: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
+      {title:'תמונת מצב', bullets:[`ימי פעילות: ${managementSummary.days}`, `ממוצע ליום: ${fmt(managementSummary.avgDaily)}`, `שיא יומי: ${fmt(managementSummary.peakDaily)}`, `שנה מול שנה: ${yoyText}`]},
+      {title:'תכנון מול ביצוע', bullets:[`תכנון לתקופה: ${fmt(managementSummary.fmsPlan)}`, `ביצוע IML: ${fmt(managementSummary.fmsActual)}`, `פער: ${managementSummary.fmsPlan ? `${managementSummary.fmsActual - managementSummary.fmsPlan >= 0 ? '+' : ''}${fmt(managementSummary.fmsActual - managementSummary.fmsPlan)}` : '—'}`, `חודש עמידה טוב ביותר: ${bestMonth}`]},
+      {title:'מגמות 2024–2026', bullets:[`חודש שיא: ${peakMonth}`, `חודש חלש: ${weakMonth}`, `השוואה לאותה תקופה: ${yoyText}`, `מקור היסטורי: ${managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}`]},
+      {title:'עלויות ויעילות', bullets:[`עלות קבלן משוקללת: ${costText}`, `חודשי קבלן בטווח: ${managementSummary.contractorMonths || 0}`, `תוצרת בחשבונות קבלן: ${managementSummary.contractorPackaged ? fmt(managementSummary.contractorPackaged) : '—'}`, `תשלום לקבלן: ${managementSummary.contractorCost ? `₪${fmt(managementSummary.contractorCost)}` : '—'}`]},
+      {title:'איכות ומגמות', bullets:[`RFT: ${managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : 'ממתין למקור RFT מאומת'}`, `לוטים עם החלטה/חריגה: ${managementSummary.qualityLots || 0}`, `לוטים עם דחייה/Restricted: ${managementSummary.qualityBadLots || 0}`, `חריגות פתוחות: ${openDeviations.length}`]},
+      {title:'תובנות והמלצות', bullets:managementSummary.insights.slice(0,4).map(item => `${item.title}: ${item.text}`)}
+    ]
+  }
+
+  const downloadManagementPresentation = async () => {
+    setManagementPresentationBusy(true)
+    setManagementPresentationMessage('מכין קובץ PowerPoint אמיתי (.pptx)...')
+    try {
+      const slides = buildManagementPresentationSlides()
+      const PptxGenJS = await ensurePptxGenJS()
+      const pptx = new PptxGenJS()
+      pptx.layout = 'LAYOUT_WIDE'
+      pptx.author = 'IML CONTROL'
+      pptx.company = 'ADAMA'
+      pptx.subject = 'Management Summary'
+      pptx.title = 'תקציר מנהלים — IML CONTROL'
+      pptx.lang = 'he-IL'
+      pptx.theme = {
+        headFontFace: 'Arial',
+        bodyFontFace: 'Arial',
+        lang: 'he-IL'
+      }
+      pptx.defineSlideMaster({
+        title: 'IML_MASTER',
+        background: { color: 'F4F8FB' },
+        objects: [
+          { text: { text: 'IML CONTROL', options: { x: 0.55, y: 0.18, w: 2.1, h: 0.3, fontFace: 'Arial', fontSize: 11, bold: true, color: 'FFFFFF', margin: 0 } } },
+          { text: { text: '', options: { x: 0, y: 0, w: 13.333, h: 0.68, fill: { color: '0B2239' }, line: { color: '0B2239' }, margin: 0 } } },
+          { text: { text: 'נוצר אוטומטית מתוך תקציר מנהלים', options: { x: 0.55, y: 7.12, w: 4.0, h: 0.2, fontFace: 'Arial', fontSize: 8, color: '7890A6', margin: 0 } } }
+        ],
+        slideNumber: { x: 12.35, y: 7.05, w: 0.45, h: 0.2, color: '7890A6', fontFace: 'Arial', fontSize: 8, align: 'center' }
+      })
+
+      const periodLabel = `${from || 'תחילת הנתונים'} עד ${to || 'סוף הנתונים'}`
+      const facilityLabel = managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים'
+      const addRtlText = (slide, text, x, y, w, h, extra={}) => slide.addText(String(text ?? ''), {
+        x, y, w, h, fontFace: 'Arial', fontSize: 18, color: '10233A',
+        rtlMode: true, align: 'right', valign: 'mid', margin: 0.06,
+        breakLine: false, fit: 'shrink', ...extra
+      })
+
+      slides.forEach((data, index) => {
+        if (index === 0) {
+          const slide = pptx.addSlide()
+          slide.background = { color: '0B2239' }
+          addRtlText(slide, 'IML CONTROL', 0.65, 0.42, 2.4, 0.35, { fontSize: 15, bold: true, color: 'FFFFFF', align: 'left', rtlMode: false })
+          addRtlText(slide, 'תקציר מנהלים', 6.2, 1.25, 6.2, 0.8, { fontSize: 34, bold: true, color: 'FFFFFF' })
+          addRtlText(slide, `${facilityLabel} · ${periodLabel}`, 5.0, 2.05, 7.4, 0.45, { fontSize: 17, color: 'D6E8EE' })
+          ;(data.bullets || []).slice(2, 6).forEach((bullet, i) => {
+            addRtlText(slide, bullet, 6.4, 3.0 + i * 0.72, 5.8, 0.55, {
+              fontSize: 19, bold: true, color: 'FFFFFF',
+              fill: { color: '163A4B', transparency: 8 },
+              line: { color: '6FA6B2', transparency: 55, width: 1 },
+              margin: 0.14
+            })
+          })
+          addRtlText(slide, '2024 · 2025 · 2026', 0.65, 6.6, 3.0, 0.35, { fontSize: 13, color: 'A7CBD2', align: 'left', rtlMode: false })
+          return
+        }
+
+        const slide = pptx.addSlide('IML_MASTER')
+        addRtlText(slide, data.title, 5.4, 0.88, 7.1, 0.55, { fontSize: 28, bold: true, color: '0B2239' })
+        addRtlText(slide, `${facilityLabel} · ${periodLabel}`, 5.4, 1.42, 7.1, 0.34, { fontSize: 12, color: '64748B' })
+
+        const bullets = (data.bullets || []).slice(0, 7)
+        bullets.forEach((bullet, i) => {
+          const y = 1.95 + i * 0.7
+          addRtlText(slide, String(i + 1).padStart(2, '0'), 0.75, y + 0.07, 0.52, 0.38, { fontSize: 14, bold: true, color: '0F766E', align: 'center', rtlMode: false })
+          addRtlText(slide, bullet, 1.35, y, 11.1, 0.55, {
+            fontSize: 17, bold: true,
+            fill: { color: 'FFFFFF' },
+            line: { color: 'D9E7EF', width: 1 },
+            margin: 0.13
+          })
+        })
+
+        if (index === 2 && managementSummary.monthlyTrend?.length) {
+          const rows = managementSummary.monthlyTrend.slice(-6)
+          const max = Math.max(1, ...rows.flatMap(row => [Number(row.plan)||0, Number(row.actual)||0]))
+          const chartY = 5.55
+          const chartH = 1.1
+          const baseX = 1.55
+          rows.forEach((row, i) => {
+            const groupX = baseX + i * 1.65
+            const planH = Math.max(0.08, ((Number(row.plan)||0) / max) * chartH)
+            const actualH = Math.max(0.08, ((Number(row.actual)||0) / max) * chartH)
+            slide.addText('', { x: groupX, y: chartY + chartH - planH, w: 0.22, h: planH, fill: { color: '94A3B8' }, line: { color: '94A3B8' }, margin: 0 })
+            slide.addText('', { x: groupX + 0.28, y: chartY + chartH - actualH, w: 0.22, h: actualH, fill: { color: '0F766E' }, line: { color: '0F766E' }, margin: 0 })
+            addRtlText(slide, row.key?.slice(5) || '', groupX - 0.12, 6.7, 0.85, 0.22, { fontSize: 9, color: '64748B', align: 'center', rtlMode: false })
+          })
+          addRtlText(slide, 'תכנון', 10.4, 6.7, 0.7, 0.22, { fontSize: 9, color: '64748B' })
+          slide.addText('', { x: 11.15, y: 6.72, w: 0.13, h: 0.13, fill: { color: '94A3B8' }, line: { color: '94A3B8' }, margin: 0 })
+          addRtlText(slide, 'ביצוע', 11.45, 6.7, 0.7, 0.22, { fontSize: 9, color: '64748B' })
+          slide.addText('', { x: 12.2, y: 6.72, w: 0.13, h: 0.13, fill: { color: '0F766E' }, line: { color: '0F766E' }, margin: 0 })
+        }
+      })
+
+      const fileName = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.pptx`
+      await pptx.writeFile({ fileName })
+      setManagementPresentationMessage(`המצגת נוצרה בהצלחה: ${fileName}`)
+    } catch (error) {
+      console.error('PPTX generation failed', error)
+      setManagementPresentationMessage(`לא ניתן ליצור מצגת PPTX: ${error?.message || error}`)
+    } finally {
+      setManagementPresentationBusy(false)
+    }
   }
 
   const setManagementPeriodPreset = preset => {
@@ -4589,16 +4291,16 @@ material: normalize(getField(r, [
         </tbody></table></div>
       </section>}
       {activeTab === 'management-summary' && <section className="details management-summary">
-        <div className="management-summary-hero"><div><small>MANAGEMENT SUMMARY · HISTORICAL BI</small><h2>תקציר מנהלים</h2><p>{from || 'תחילת הנתונים'} עד {to || 'סוף הנתונים'} · {managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים'}</p></div><div className="management-summary-actions"><button type="button" className="management-ppt-button" onClick={handleExportManagementPresentation} disabled={managementPptBusy}><Download size={18}/><span>{managementPptBusy?'מפיק מצגת...':'הפק מצגת הנהלה'}</span></button><div className="management-summary-badge"><TrendingUp size={24}/><span>2024 · 2025 · 2026</span></div></div></div>
-        {managementPptMessage&&<div className={`management-ppt-message ${managementPptMessage.startsWith('שגיאה')?'error':''}`}>{managementPptMessage}</div>}
+        <div className="management-summary-hero"><div><small>MANAGEMENT SUMMARY · HISTORICAL BI</small><h2>תקציר מנהלים</h2><p>{from || 'תחילת הנתונים'} עד {to || 'סוף הנתונים'} · {managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים'}</p></div><div className="management-summary-badge"><TrendingUp size={24}/><span>2024 · 2025 · 2026</span></div></div>
         <div className="management-view-tabs">
           <button className={managementView==='overview'?'active':''} onClick={()=>setManagementView('overview')}>תמונת מצב</button>
           <button className={managementView==='plan'?'active':''} onClick={()=>setManagementView('plan')}>תכנון מול ביצוע</button>
           <button className={managementView==='costs'?'active':''} onClick={()=>setManagementView('costs')}>עלויות ויעילות</button>
           <button className={managementView==='quality'?'active':''} onClick={()=>setManagementView('quality')}>איכות ומגמות</button>
+          <button className={managementView==='presentation'?'active':''} onClick={()=>setManagementView('presentation')}>מצגת הנהלה</button>
         </div>
         <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
-        {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>היסטוריית תכנון קבועה</span><b>{Number(managementCloudStatus.permanentRows||0).toLocaleString()}</b><small>רשומות Supabase</small></article><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות קודמות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadProgress&&<div className="management-batch-progress"><b>{managementUploadProgress.current}/{managementUploadProgress.total}</b><span>{managementUploadProgress.fileName}</span></div>}{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementUploadHistory.length>0&&<div className="management-upload-history"><h4>היסטוריית טעינות אחרונות</h4><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>קובץ</th><th>רשומות</th><th>סטטוס</th></tr></thead><tbody>{managementUploadHistory.slice(0,10).map((h,i)=><tr key={h.id||i}><td>{h.uploaded_at?new Date(h.uploaded_at).toLocaleString('he-IL'):'—'}</td><td>{h.data_kind==='plan'?'Plan Vs Actual':'עלויות קבלן'}</td><td>{h.file_name}</td><td>{Number(h.rows_written||0).toLocaleString()}</td><td><span className={`upload-status ${h.status}`}>{h.status==='success'?'נקלט':'שגיאה'}</span></td></tr>)}</tbody></table></div></div>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
+        {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadProgress&&<div className="management-batch-progress"><b>{managementUploadProgress.current}/{managementUploadProgress.total}</b><span>{managementUploadProgress.fileName}</span></div>}{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementUploadHistory.length>0&&<div className="management-upload-history"><h4>היסטוריית טעינות אחרונות</h4><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>קובץ</th><th>רשומות</th><th>סטטוס</th></tr></thead><tbody>{managementUploadHistory.slice(0,10).map((h,i)=><tr key={h.id||i}><td>{h.uploaded_at?new Date(h.uploaded_at).toLocaleString('he-IL'):'—'}</td><td>{h.data_kind==='plan'?'Plan Vs Actual':'עלויות קבלן'}</td><td>{h.file_name}</td><td>{Number(h.rows_written||0).toLocaleString()}</td><td><span className={`upload-status ${h.status}`}>{h.status==='success'?'נקלט':'שגיאה'}</span></td></tr>)}</tbody></table></div></div>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
         <div className="management-kpi-grid management-kpi-grid-six">
           <article><span>תפוקה בפועל IML</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
           <article><span>ממוצע ליום</span><b>{fmt(managementSummary.avgDaily)}</b><small>שיא {fmt(managementSummary.peakDaily)}</small></article>
@@ -4608,59 +4310,19 @@ material: normalize(getField(r, [
           <article className={managementSummary.hasReliableRft?'good':managementSummary.qualityLots?'warning':''}><span>RFT</span><b>{managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : '—'}</b><small>{managementSummary.hasReliableRft ? 'מקור RFT מאומת' : 'נדרש מקור RFT/UD מלא'}</small></article>
         </div>
         {(managementView==='overview'||managementView==='plan') && <div className="management-history-card">
-          <div className="management-section-title"><div><TrendingUp/><span><b>{managementProgress.title}</b><small>{managementProgress.subtitle}</small></span></div><span>{from||'—'} ← {to||'—'}</span></div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:12,margin:'10px 0 14px'}}>
-            <div style={{padding:'12px 14px',border:'1px solid rgba(20,184,166,.24)',borderRadius:16,background:'linear-gradient(135deg,rgba(20,184,166,.10),rgba(20,184,166,.025))'}}><small style={{color:'#64748b'}}>ביצוע מצטבר</small><b style={{display:'block',fontSize:24,color:'#0f766e',marginTop:4}}>{fmt(managementProgress.actual)}</b></div>
-            <div style={{padding:'12px 14px',border:'1px solid rgba(59,130,246,.22)',borderRadius:16,background:'linear-gradient(135deg,rgba(59,130,246,.09),rgba(59,130,246,.02))'}}><small style={{color:'#64748b'}}>תכנון מצטבר</small><b style={{display:'block',fontSize:24,color:'#2563eb',marginTop:4}}>{managementProgress.plan?fmt(managementProgress.plan):'—'}</b></div>
-            <div style={{padding:'12px 14px',border:'1px solid rgba(139,92,246,.22)',borderRadius:16,background:'linear-gradient(135deg,rgba(139,92,246,.09),rgba(139,92,246,.02))'}}><small style={{color:'#64748b'}}>עמידה בתכנון</small><b style={{display:'block',fontSize:24,color:managementProgress.pct>=100?'#059669':managementProgress.pct>=90?'#d97706':'#dc2626',marginTop:4}}>{managementProgress.plan?`${managementProgress.pct.toFixed(1)}%`:'—'}</b></div>
-          </div>
-          {managementProgress.points.length ? <div style={{overflowX:'auto',padding:'4px 0 2px'}}>
-            <svg viewBox={`0 0 ${managementProgress.width} ${managementProgress.height}`} role="img" aria-label="גרף התקדמות מול תכנון" style={{width:'100%',minWidth:managementProgress.points.length>18?820:620,height:'auto',display:'block'}}>
-              <defs>
-                <linearGradient id="mgmtActualFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#14b8a6" stopOpacity=".28"/><stop offset="100%" stopColor="#14b8a6" stopOpacity=".02"/></linearGradient>
-                <filter id="mgmtGlow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-              </defs>
-              {[0,.25,.5,.75,1].map((ratio,i)=>{const y=managementProgress.padTop+(1-ratio)*(managementProgress.height-managementProgress.padTop-managementProgress.padBottom);return <g key={i}><line x1={managementProgress.padX} x2={managementProgress.width-managementProgress.padX} y1={y} y2={y} stroke="rgba(148,163,184,.22)" strokeDasharray={i===0?'0':'5 7'}/><text x={managementProgress.padX-8} y={y+4} textAnchor="end" fontSize="11" fill="#94a3b8">{fmt(managementProgress.max*ratio)}</text></g>})}
-              <polygon points={`${managementProgress.points[0].x},${managementProgress.height-managementProgress.padBottom} ${managementProgress.points.map(p=>`${p.x},${p.yActual}`).join(' ')} ${managementProgress.points[managementProgress.points.length-1].x},${managementProgress.height-managementProgress.padBottom}`} fill="url(#mgmtActualFill)"/>
-              <polyline points={managementProgress.points.map(p=>`${p.x},${p.yPlan}`).join(' ')} fill="none" stroke="#3b82f6" strokeWidth="3" strokeDasharray="10 7" strokeLinecap="round" strokeLinejoin="round"/>
-              <polyline points={managementProgress.points.map(p=>`${p.x},${p.yActual}`).join(' ')} fill="none" stroke="#14b8a6" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" filter="url(#mgmtGlow)"/>
-              {managementProgress.points.map((p,i)=><g key={p.key}>
-                <circle cx={p.x} cy={p.yPlan} r="4" fill="#fff" stroke="#3b82f6" strokeWidth="2"><title>{`${p.label} · תכנון ${fmt(p.plan)}`}</title></circle>
-                <circle cx={p.x} cy={p.yActual} r="5" fill="#14b8a6" stroke="#fff" strokeWidth="2"><title>{`${p.label} · ביצוע ${fmt(p.actual)} · ${p.plan?`${(p.actual/p.plan*100).toFixed(1)}%`:'ללא תכנון'}`}</title></circle>
-                {(managementProgress.points.length<=14 || i===0 || i===managementProgress.points.length-1 || i%Math.ceil(managementProgress.points.length/8)===0) && <text x={p.x} y={managementProgress.height-25} textAnchor="middle" fontSize="11" fill="#64748b">{p.label}</text>}
-              </g>)}
-            </svg>
-          </div> : <div className="empty">אין נתוני תפוקה להצגת מגמה בטווח שנבחר.</div>}
-          <div className="management-legend" style={{justifyContent:'center',gap:22}}>
-            <span><i style={{background:'#14b8a6'}}/>ביצוע IML מצטבר</span>
-            <span><i style={{background:'#3b82f6'}}/>תכנון FMS מצטבר</span>
-          </div>
+          <div className="management-section-title"><div><BarChart3/><span><b>מגמה חודשית — FMS</b><small>תכנון מה-FMS מול ביצוע חי מנתוני IML הטעונים באפליקציה</small></span></div><span>{managementSummary.monthlyTrend.length} חודשים</span></div>
+          <div className="management-month-chart">{managementSummary.monthlyTrend.slice(-12).map(row=>{const max=Math.max(1,...managementSummary.monthlyTrend.slice(-12).flatMap(x=>[x.plan,x.actual]));return <div className="management-month-col" key={row.key}><div className="management-bars"><i className="plan" style={{height:`${Math.max(3,row.plan/max*100)}%`}} title={`תכנון ${fmt(row.plan)}`}/><i className="actual" style={{height:`${Math.max(3,row.actual/max*100)}%`}} title={`ביצוע ${fmt(row.actual)}`}/></div><b>{row.pct?`${row.pct.toFixed(0)}%`:'—'}</b><small>{row.key.slice(5)}</small></div>})}{!managementSummary.monthlyTrend.length&&<div className="empty">אין נתוני FMS לתקופה שנבחרה.</div>}</div>
+          <div className="management-legend"><span><i className="plan"/>תכנון</span><span><i className="actual"/>ביצוע</span></div>
         </div>}
         {managementView==='overview' && <>
           <div className="management-summary-grid">
             <article className="management-panel"><h3>תפוקה לפי מתקן ניהולי</h3>{managementSummary.facilityRows.slice(0,10).map(row=><div className="management-rank-row" key={row.facility}><span><b>מתקן {row.facility}</b><small>{row.records.toLocaleString()} רשומות</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.facilityRows.length&&<p className="empty">אין נתוני תפוקה בטווח.</p>}</article>
-            <article className="management-panel management-products-panel">
-              <div className="management-section-title"><div><BarChart3/><span><b>מוצרים ומגוון ייצור</b><small>תמהיל המוצרים משתנה אוטומטית לפי הטווח והמתקנים שנבחרו</small></span></div></div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:10,margin:'10px 0 16px'}}>
-                <div style={{padding:'11px 12px',borderRadius:14,background:'rgba(20,184,166,.08)',border:'1px solid rgba(20,184,166,.20)'}}><small>חומרים שונים</small><b style={{display:'block',fontSize:22,marginTop:3}}>{managementSummary.uniqueMaterials.toLocaleString()}</b></div>
-                <div style={{padding:'11px 12px',borderRadius:14,background:'rgba(59,130,246,.07)',border:'1px solid rgba(59,130,246,.18)'}}><small>Top 5 מכלל התפוקה</small><b style={{display:'block',fontSize:22,marginTop:3}}>{managementSummary.top5SharePct.toFixed(1)}%</b></div>
-                <div style={{padding:'11px 12px',borderRadius:14,background:'rgba(139,92,246,.07)',border:'1px solid rgba(139,92,246,.18)'}}><small>המוצר המוביל</small><b style={{display:'block',fontSize:18,marginTop:3}}>{managementSummary.topMaterial?`${managementSummary.topMaterialSharePct.toFixed(1)}%`:'—'}</b><small>מתפוקת התקופה</small></div>
-              </div>
-              <div style={{display:'grid',gap:11}}>
-                {managementSummary.topMaterials.map((row,i)=>{const share=managementSummary.total?num(row.qty)/managementSummary.total*100:0;const width=Math.max(2,num(row.qty)/managementSummary.topMaterialMax*100);return <div key={`${row.material}-${i}`} style={{display:'grid',gridTemplateColumns:'minmax(180px,1.35fr) minmax(180px,2fr) 92px',alignItems:'center',gap:12}}>
-                  <div style={{minWidth:0}}><b style={{display:'block',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>#{i+1} · {row.desc||row.material}</b><small style={{color:'#64748b'}}>{row.material} · {share.toFixed(1)}% מהתפוקה</small></div>
-                  <div style={{height:18,borderRadius:999,background:'rgba(148,163,184,.13)',overflow:'hidden',position:'relative'}}><i style={{display:'block',height:'100%',width:`${width}%`,borderRadius:999,background:i===0?'linear-gradient(90deg,#0f766e,#14b8a6)':i<3?'linear-gradient(90deg,#2563eb,#60a5fa)':'linear-gradient(90deg,#7c3aed,#a78bfa)'}}/></div>
-                  <strong style={{fontSize:16,textAlign:'left'}}>{fmt(row.qty)}</strong>
-                </div>})}
-                {!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}
-              </div>
-              <p className="management-explain" style={{marginTop:14}}>הפסים מציגים את נפח הייצור היחסי של שמונת המוצרים המובילים. בשלב הבא ניתן לחבר לכל מק״ט גם יעד מוצר היסטורי ולהציג ביצוע מול תכנון.</p>
-            </article>
+            <article className="management-panel"><h3>מוצרים מובילים</h3>{managementSummary.topMaterials.map((row,i)=><div className="management-rank-row management-material-row" key={`${row.material}-${i}`}><span><b>#{i+1} · {row.desc || row.material}</b><small>{row.material}</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}</article>
           </div>
           <div className="management-trend-highlights"><article><span>חודש שיא</span><b>{managementSummary.peakMonth?.label||'—'}</b><small>{managementSummary.peakMonth?fmt(managementSummary.peakMonth.actual):'אין נתונים'}</small></article><article><span>חודש חלש</span><b>{managementSummary.weakMonth?.label||'—'}</b><small>{managementSummary.weakMonth?fmt(managementSummary.weakMonth.actual):'אין נתונים'}</small></article><article><span>עמידה מיטבית בתכנון</span><b>{managementSummary.bestPlanMonth?.label||'—'}</b><small>{managementSummary.bestPlanMonth?.plan?`${managementSummary.bestPlanMonth.pct.toFixed(1)}%`:'אין תכנון'}</small></article></div>
           <article className="management-panel management-wide-panel management-annual-panel"><h3>מגמה רב־שנתית 2024–2026</h3><p className="management-explain">אותם חודשי בחירה מושווים בין שלוש השנים. ביצוע חי מ-IML מקבל עדיפות; כשאינו טעון נעשה שימוש בהיסטוריה.</p><div className="management-annual-grid">{managementSummary.annualRows.map(row=><div className="management-annual-card" key={row.year}><div><strong>{row.year}</strong><small>{row.source==='IML'?'ביצוע IML':'היסטוריה'}</small></div><b>{fmt(row.actual)}</b><span>תכנון {fmt(row.plan)}</span><em className={row.pct>=100?'good':row.pct>=90?'warning':'risk'}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</em>{row.costPerUnit>0&&<small>עלות/ליטר ₪{row.costPerUnit.toFixed(3)}</small>}</div>)}</div><div className="management-year-bars">{managementSummary.annualRows.map(row=><div className="management-year-bar" key={`annual-bar-${row.year}`}><div className="management-year-track"><i style={{height:`${Math.max(4,row.actual/managementSummary.annualActualMax*100)}%`}}/></div><b>{row.year}</b><small>{fmt(row.actual)}</small></div>)}</div></article>
           {managementSummary.logicalFacilities.length===1&&managementSummary.logicalFacilities[0]==='42'&&<article className="management-panel management-wide-panel"><h3>מגמת עלות קבלן 2024–2026</h3><p className="management-explain">עלות משוקללת לליטר באותם חודשים שנבחרו. שנים ללא חשבון קבלן זמין מוצגות ללא ערך.</p><div className="management-cost-year-grid">{managementSummary.annualRows.map(row=><div key={`cost-year-${row.year}`}><span>{row.year}</span><b>{row.costPerUnit?`₪${row.costPerUnit.toFixed(3)}`:'—'}</b><div><i style={{width:`${row.costPerUnit?Math.max(4,row.costPerUnit/managementSummary.annualCostMax*100):0}%`}}/></div></div>)}</div></article>}
-          <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע של השנה הנוכחית והקודמת נלקח מנתוני IML כאשר הם טעונים; אחרת נעשה שימוש ב-Plan Vs Actual ההיסטורי.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{row.previous?fmt(row.previous):'אין נתון'}</td><td className={row.previous?(row.delta>=0?'positive-text':'negative-text'):''}>{row.previous?`${row.delta>=0?'+':''}${fmt(row.delta)}`:'—'}</td><td><span className={`management-pct-chip ${row.previous?(row.pct>=0?'good':'warning'):''}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
+          <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע של השנה הנוכחית והקודמת נלקח מנתוני IML כאשר הם טעונים; אחרת נעשה שימוש ב-Plan Vs Actual ההיסטורי.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{fmt(row.previous)}</td><td className={row.delta>=0?'positive-text':'negative-text'}>{row.delta>=0?'+':''}{fmt(row.delta)}</td><td><span className={`management-pct-chip ${row.pct>=0?'good':'warning'}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
         </>}
         {managementView==='plan' && <>
           <div className="management-cost-strip"><article><span>תכנון לתקופה</span><b>{fmt(managementSummary.fmsPlan)}</b></article><article><span>ביצוע IML</span><b>{fmt(managementSummary.fmsActual)}</b></article><article><span>פער מול תכנון</span><b>{managementSummary.fmsPlan?`${managementSummary.fmsActual-managementSummary.fmsPlan>=0?'+':''}${fmt(managementSummary.fmsActual-managementSummary.fmsPlan)}`:'—'}</b></article></div>
@@ -4671,11 +4333,12 @@ material: normalize(getField(r, [
         {managementView==='costs' && <>
           <div className="management-cost-strip"><article><span>סה״כ תשלום לקבלן</span><b>{managementSummary.contractorCost?`₪${fmt(managementSummary.contractorCost)}`:'—'}</b></article><article><span>תוצרת בחשבונות קבלן</span><b>{managementSummary.contractorPackaged?fmt(managementSummary.contractorPackaged):'—'}</b></article><article><span>עלות משוקללת</span><b>{managementSummary.contractorCostPerUnit?`₪${managementSummary.contractorCostPerUnit.toFixed(3)}`:'—'}</b></article></div>
           {managementSummary.previousContractorCostPerUnit>0&&managementSummary.contractorCostPerUnit>0&&<div className="management-cost-strip"><article><span>עלות/ליטר {managementSummary.currentYear}</span><b>₪{managementSummary.contractorCostPerUnit.toFixed(3)}</b></article><article><span>אותם חודשים {managementSummary.currentYear-1}</span><b>₪{managementSummary.previousContractorCostPerUnit.toFixed(3)}</b></article><article><span>שינוי בעלות לליטר</span><b>{managementSummary.contractorYoyPct>=0?'+':''}{managementSummary.contractorYoyPct.toFixed(1)}%</b></article></div>}
-          <article className="management-panel management-wide-panel"><h3>עלות קבלן מתקן 42 — היסטוריה</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תוצרת</th><th>תשלום לקבלן</th><th>עלות / ליטר</th></tr></thead><tbody>{managementSummary.monthlyTrend.filter(r=>r.cost).map(row=><tr key={`cost-${row.key}`}><td>{row.label}</td><td>{fmt(row.packaged)}</td><td>₪{fmt(row.cost)}</td><td><b>₪{row.costPerUnit.toFixed(3)}</b></td></tr>)}{!managementSummary.monthlyTrend.some(r=>r.cost)&&<tr><td colSpan="4" className="empty">אין נתוני קבלן בטווח שנבחר. ב-2026 הנתונים שהועלו מגיעים עד יולי.</td></tr>}</tbody></table></div></article>
-          <div className="management-summary-grid"><article className="management-panel"><h3>מה מודדים כאן?</h3><p className="management-explain">המסך מחבר תשלום לקבלן לתוצרת הארוזה ומציג עלות משוקללת לליטר. בתקופה של חודש בודד מוצג גם תמהיל 1L / 5L / 10L / 20L וחלוקת תפוקה ועלות לפי משמרת, כאשר הנתונים קיימים בחשבון הקבלן.</p></article><article className="management-panel"><h3>זמינות נתוני עלות</h3><p className="management-explain">לשנת 2026 חשבונות הקבלן שהועלו זמינים עד <b>יולי 2026</b>. בחירת אוגוסט בלבד לא תציג עלות; בחירת ינואר–אוגוסט תציג YTD עד יולי ותסמן שאוגוסט טרם זמין.</p></article></div>
+          <article className="management-panel management-wide-panel"><h3>עלות קבלן מתקן 42 — היסטוריה</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תוצרת</th><th>תשלום לקבלן</th><th>עלות / ליטר</th></tr></thead><tbody>{managementSummary.monthlyTrend.filter(r=>r.cost).map(row=><tr key={`cost-${row.key}`}><td>{row.label}</td><td>{fmt(row.packaged)}</td><td>₪{fmt(row.cost)}</td><td><b>₪{row.costPerUnit.toFixed(3)}</b></td></tr>)}{!managementSummary.monthlyTrend.some(r=>r.cost)&&<tr><td colSpan="4" className="empty">אין נתוני קבלן בטווח שנבחר. ב-2026 הנתונים שהועלו מגיעים עד אוגוסט.</td></tr>}</tbody></table></div></article>
+          <div className="management-summary-grid"><article className="management-panel"><h3>מה מודדים כאן?</h3><p className="management-explain">המסך מחבר תשלום לקבלן לתוצרת הארוזה ומציג עלות משוקללת לליטר. בתקופה של חודש בודד מוצג גם תמהיל 1L / 5L / 10L / 20L וחלוקת תפוקה ועלות לפי משמרת, כאשר הנתונים קיימים בחשבון הקבלן.</p></article><article className="management-panel"><h3>זמינות נתוני עלות</h3><p className="management-explain">לשנת 2026 חשבונות הקבלן שהועלו זמינים עד <b>אוגוסט 2026</b>. בחירת אוגוסט בלבד תציג את החשבון הסופי; בחירת ינואר–אוגוסט תציג YTD מלא עד אוגוסט.</p></article></div>
           {managementSummary.monthlyTrend.filter(r=>r.cost).slice(-1).map(row=>{const rec=managementHistory.contractor42?.[row.key];return <div className="management-summary-grid" key={`mix-${row.key}`}><article className="management-panel"><h3>תמהיל אריזה — {row.label}</h3>{Object.entries(rec?.lines||{}).map(([line,qty])=><div className="management-rank-row" key={line}><span><b>{line}</b></span><strong>{fmt(qty)}</strong></div>)}</article><article className="management-panel"><h3>יעילות לפי משמרת — {row.label}</h3>{(rec?.shiftQty||[]).map((qty,i)=><div className="management-rank-row" key={i}><span><b>משמרת {i+1}</b><small>{rec?.shiftCost?.[i]?`עלות ₪${fmt(rec.shiftCost[i])}`:''}</small></span><strong>{rec?.shiftCost?.[i]&&qty?`₪${(rec.shiftCost[i]/qty).toFixed(3)} / ל׳`:'—'}</strong></div>)}</article></div>})}
         </>}
         {managementView==='quality' && <div className="management-summary-grid"><article className="management-panel"><h3>איכות בתקופה</h3><div className="management-quality-big"><b>{managementSummary.hasReliableRft?`${managementSummary.rft.toFixed(1)}%`:'—'}</b><span>RFT</span><small>{managementSummary.hasReliableRft?'יעד ייחוס: 98%':'ממתין למקור RFT מאומת'}</small></div><div className="management-rank-row"><span><b>לוטים עם החלטה/חריגה שנמצאו</b></span><strong>{managementSummary.qualityLots||0}</strong></div><div className="management-rank-row"><span><b>לוטים עם דחייה / Restricted</b></span><strong>{managementSummary.qualityBadLots||0}</strong></div><div className="management-rank-row"><span><b>חריגות פתוחות</b></span><strong>{openDeviations.length}</strong></div></article><article className="management-panel"><h3>מה נדרש כדי לחשב RFT נכון?</h3><p className="management-explain">צריך מקור שבו קיימת אוכלוסיית כל ה-Inspection Lots בתקופה, לא רק לוטים חריגים: Inspection Lot, חומר, אצווה, מתקן/תחנה, תאריך, והחלטת שימוש או סטטוס First Pass לכל לוט.</p><p className="management-explain">אם קיים דוח RFT חודשי מוכן, מספיקים גם: חודש, מתקן, מספר לוטים שנבדקו, מספר שעברו בפעם הראשונה ו-RFT%. ל-COPQ נדרש דוח עלות אי-איכות לפי חודש ומתקן.</p></article></div>}
+        {managementView==='presentation' && <div className="management-summary-grid presentation-builder-grid"><article className="management-panel management-presentation-card"><h3>מצגת הנהלה אוטומטית</h3><p className="management-explain">המצגת נוצרת לפי התקופה והמתקנים שנבחרו בתקציר המנהלים, ומשתמשת באותם נתוני Supabase/IML: תפוקה, FMS, מגמות, עלויות, איכות ותובנות.</p><button type="button" className="management-ppt-button" onClick={downloadManagementPresentation} disabled={managementPresentationBusy}>{managementPresentationBusy ? <RefreshCw size={18}/> : <Download size={18}/>}<span>{managementPresentationBusy ? 'מכין מצגת...' : 'הפק PowerPoint'}</span></button>{managementPresentationMessage&&<p className="management-upload-message">{managementPresentationMessage}</p>}</article><article className="management-panel"><h3>שקופיות שייכנסו למצגת</h3><div className="presentation-slide-list">{buildManagementPresentationSlides().map((slide,i)=><div key={`${slide.title}-${i}`}><b>{String(i+1).padStart(2,'0')}</b><span>{slide.title}</span><small>{(slide.bullets||[]).slice(0,2).join(' · ')}</small></div>)}</div></article></div>}
         <article className="management-panel management-insights"><h3>תובנות אוטומטיות מהנתונים</h3><div className="management-insight-grid">{managementSummary.insights.map((item,i)=><div className={`management-insight ${item.state}`} key={`${item.title}-${i}`}><strong>{item.title}</strong><p>{item.text}</p></div>)}{!managementSummary.insights.length&&<div className="management-insight good"><strong>אין מספיק נתונים להשוואה</strong><p>בחר תקופה הכוללת חודשים 2024–2026 ומתקן ניהולי כדי לקבל השוואות.</p></div>}</div></article>
         <div className="management-source-note"><Database size={18}/><div><b>מקורות מחוברים</b><span>כמות ואיכות מ-IML CONTROL · Plan Vs Actual היסטורי 2024–2026 · חשבונות קבלן מתקן 42 לשנים 2024–2026. הנתונים מחושבים לפי התקופה והמתקנים שנבחרו. מקור היסטורי: <b>{managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}</b>{managementHistoryError ? ` · ${managementHistoryError}` : ''}.</span></div></div>
       </section>}
@@ -5000,7 +4663,7 @@ function ForecastCard({ facility, facilities, resource, packagingType, routingGr
     <div className="forecast-metrics"><div><span>ימים נותרו</span><b>{remainingWorkdays}</b></div><div><span>נדרש ליום</span><b>{fmt(requiredDaily)}</b></div><div><span>7 ימים</span><b>{fmt(recentAverage)}</b></div><div><span>שיא מוכח</span><b>{fmt(provenMax)}</b></div></div>
   </article>
 }
-function Facility({ id, actual, target, pct, orders, selected, onClick, periodPlan }) {
+function Facility({ id, actual, target, pct, orders, selected, onClick }) {
   const state = !target ? 'no-target' : pct >= 100 ? 'good' : pct >= 75 ? 'warning' : 'risk'
-  return <article className={`facility ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0"><div className="facility-top"><div><small>מתקן</small><h3>{id}</h3></div><b>{target ? pctFmt(pct) : '—'}</b></div><div className="bar"><i style={{width:`${Math.min(100,pct)}%`}}/></div><div className="facility-numbers"><span>בפועל<strong>{fmt(actual)}</strong></span><span>{periodPlan ? 'תכנון בטווח' : 'יעד חודשי'}<strong>{fmt(target)}</strong></span><span>הזמנות<strong>{orders}</strong></span></div></article>
+  return <article className={`facility ${state} ${selected ? 'selected' : ''}`} onClick={onClick} role="button" tabIndex="0"><div className="facility-top"><div><small>מתקן</small><h3>{id}</h3></div><b>{target ? pctFmt(pct) : '—'}</b></div><div className="bar"><i style={{width:`${Math.min(100,pct)}%`}}/></div><div className="facility-numbers"><span>בפועל<strong>{fmt(actual)}</strong></span><span>יעד חודשי<strong>{fmt(target)}</strong></span><span>הזמנות<strong>{orders}</strong></span></div></article>
 }
