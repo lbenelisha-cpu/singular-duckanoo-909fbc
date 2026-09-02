@@ -197,9 +197,17 @@ const idbClear = async () => {
 }
 
 const normalize = (v) => String(v ?? '').trim()
+// Excel/Supabase can represent the same SAP identifier as 000123, 123 or
+// 123.0.  Use a canonical comparison value while preserving the original
+// value for display.
+const normalizeSapId = (v) => normalize(v)
+  .replace(/\s+/g, '')
+  .replace(/\.0+$/, '')
+  .replace(/^0+(?=\d)/, '')
+  .toUpperCase()
 const batchMaterialKey = (batch, material) => {
-  const b = normalize(batch)
-  const m = normalize(material)
+  const b = normalizeSapId(batch)
+  const m = normalizeSapId(material)
   return b && m ? `${b}|${m}` : ''
 }
 const normalizeRouting = (v) => normalize(v).toUpperCase()
@@ -2088,11 +2096,11 @@ material: normalize(getField(r, [
   // dataset can exceed 800K result rows, so building full arrays for every Batch during
   // initial render is unnecessary and can make Chrome report "Page Unresponsive".
   const selectedQualityKey = useMemo(() => {
-    const batch = normalize(selectedBatch)
+    const batch = normalizeSapId(selectedBatch)
     if (!batch) return ''
-    const requestedMaterial = normalize(selectedBatchMaterial)
+    const requestedMaterial = normalizeSapId(selectedBatchMaterial)
     if (requestedMaterial) return batchMaterialKey(batch, requestedMaterial)
-    const materials = [...new Set(dashboardProd.filter(row => normalize(row.batch) === batch).map(row => normalize(row.material)).filter(Boolean))]
+    const materials = [...new Set(dashboardProd.filter(row => normalizeSapId(row.batch) === batch).map(row => normalizeSapId(row.material)).filter(Boolean))]
     return materials.length === 1 ? batchMaterialKey(batch, materials[0]) : ''
   }, [selectedBatch, selectedBatchMaterial, dashboardProd])
 
@@ -2185,22 +2193,31 @@ material: normalize(getField(r, [
   // Plant rule: a quality record is uniquely identified by exact Batch + Material.
   // Order, facility, routing group and inspection lot remain display fields only.
   const selectedBatchData = useMemo(() => {
-    const batch = normalize(selectedBatch)
-    const requestedMaterial = normalize(selectedBatchMaterial)
+    const batch = normalizeSapId(selectedBatch)
+    const requestedMaterial = normalizeSapId(selectedBatchMaterial)
     if (!batch) return null
 
-    const batchProductionRows = dashboardProd.filter(row => normalize(row.batch) === batch)
-    const batchMaterials = [...new Set(batchProductionRows.map(row => normalize(row.material)).filter(Boolean))]
+    const batchProductionRows = dashboardProd.filter(row => normalizeSapId(row.batch) === batch)
+    const batchMaterials = [...new Set(batchProductionRows.map(row => normalizeSapId(row.material)).filter(Boolean))]
     const material = requestedMaterial || (batchMaterials.length === 1 ? batchMaterials[0] : '')
     const key = batchMaterialKey(batch, material)
     const productionRows = material
-      ? batchProductionRows.filter(row => normalize(row.material) === material)
+      ? batchProductionRows.filter(row => normalizeSapId(row.material) === material)
       : batchProductionRows
 
     const indexedQuality = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
+    const productionOrders = new Set(productionRows.map(row => normalizeSapId(row.order)).filter(Boolean))
+    const fallbackQuality = qualityRows.filter(row => {
+      const rowBatch = normalizeSapId(row.batch)
+      const rowMaterial = normalizeSapId(row.material)
+      const rowOrder = normalizeSapId(row.order)
+      const materialMatches = !material || !rowMaterial || rowMaterial === material
+      if (rowBatch && rowBatch === batch && materialMatches) return true
+      return !rowBatch && rowOrder && productionOrders.has(rowOrder) && materialMatches
+    })
     const qualityForBatchMaterial = indexedQuality.length
       ? indexedQuality
-      : (key ? qualityRows.filter(row => batchMaterialKey(row.batch, row.material) === key) : [])
+      : fallbackQuality
     const deviationForBatchMaterial = key
       ? enrichedDeviationRows.filter(row => batchMaterialKey(row.batch, row.material) === key)
       : []
