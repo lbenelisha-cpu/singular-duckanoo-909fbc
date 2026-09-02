@@ -1,3 +1,5 @@
+import pptxGenBundleUrl from '../vendor/pptxgen.bundle.js?url'
+
 const PPTX_CDN = 'https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@4.0.1/dist/pptxgen.bundle.js'
 
 async function getPptxGenJS() {
@@ -10,7 +12,7 @@ async function getPptxGenJS() {
       return
     }
     const script = document.createElement('script')
-    script.src = PPTX_CDN
+    script.src = pptxGenBundleUrl || PPTX_CDN
     script.async = true
     script.dataset.imlPptxgen = '1'
     script.onload = resolve

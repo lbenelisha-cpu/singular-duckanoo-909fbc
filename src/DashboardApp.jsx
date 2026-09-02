@@ -11,6 +11,7 @@ import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
 import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, inspectManagementRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
+import pptxGenBundleUrl from './vendor/pptxgen.bundle.js?url'
 import * as XLSXCore from 'xlsx'
 import './styles.css'
 
@@ -20,24 +21,22 @@ import './styles.css'
 const XLSX = window.XLSX || XLSXCore
 
 let pptxGenLoaderPromise = null
-const ensurePptxGenJS = () => {
+const ensurePptxGenJS = async () => {
   if (window.PptxGenJS) return Promise.resolve(window.PptxGenJS)
   if (pptxGenLoaderPromise) return pptxGenLoaderPromise
-  pptxGenLoaderPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector('script[data-iml-pptxgen]')
-    if (existing) {
-      existing.addEventListener('load', () => window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error('PptxGenJS לא נטען')))
-      existing.addEventListener('error', () => reject(new Error('טעינת מנוע PowerPoint נכשלה')))
-      return
-    }
+  const loadScript = src => new Promise((resolve, reject) => {
+    document.querySelectorAll('script[data-iml-pptxgen]').forEach(node => node.remove())
     const script = document.createElement('script')
-    script.src = '/pptxgen.bundle.js'
+    script.src = src
     script.async = true
     script.dataset.imlPptxgen = '1'
     script.onload = () => window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error('PptxGenJS לא נטען'))
     script.onerror = () => reject(new Error('טעינת מנוע PowerPoint נכשלה'))
     document.head.appendChild(script)
   })
+  pptxGenLoaderPromise = loadScript(pptxGenBundleUrl)
+    .catch(() => loadScript('https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@4.0.1/dist/pptxgen.bundle.js'))
+    .catch(error => { pptxGenLoaderPromise = null; throw error })
   return pptxGenLoaderPromise
 }
 
@@ -73,7 +72,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.23.2 — 32-inch Hebrew Display Fix'
+const BUILD_LABEL = 'Sprint 11.23.3 — Embedded PowerPoint Engine'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
