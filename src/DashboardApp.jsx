@@ -73,7 +73,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.23.1 — Facility 42 Management Data Fix'
+const BUILD_LABEL = 'Sprint 11.23.2 — 32-inch Hebrew Display Fix'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -4003,6 +4003,31 @@ material: normalize(getField(r, [
   </div>
 
   return <div className={`dashboard ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${managementMode ? 'management-mode' : ''} ${IS_MOBILE_DEVICE && activeTab === 'quality' ? 'mobile-quality-landscape' : ''}`} dir="rtl">
+    <style>{`
+      /* Stable Hebrew rendering on large Windows displays and non-integer DPI scaling. */
+      .management-summary,
+      .management-summary button,
+      .management-summary input,
+      .management-summary select {
+        font-family: "Segoe UI", Arial, "Noto Sans Hebrew", sans-serif !important;
+        font-optical-sizing: none;
+        font-kerning: normal;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+      }
+      .management-summary h1,
+      .management-summary h2,
+      .management-summary h3,
+      .management-summary h4,
+      .management-summary b,
+      .management-summary strong {
+        font-family: "Segoe UI", Arial, "Noto Sans Hebrew", sans-serif !important;
+        letter-spacing: 0 !important;
+      }
+      .management-summary-hero h2 { font-weight: 800; line-height: 1.2; }
+      .management-view-tabs button,
+      .management-period-presets button { line-height: 1.35; }
+    `}</style>
     <aside className="side filter-side">
       <button type="button" className="side-collapse-button" onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'פתיחת מסננים' : 'כיווץ מסננים'}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}</button>
       <div className="brand branded"><img src="/iml-logo.png" alt="IML" onError={(e)=>{e.currentTarget.style.display="none"}}/><div>IML<span>CONTROL</span></div></div>
