@@ -318,6 +318,19 @@ const canonicalFacility = (value) => {
   const digits = clean.match(/15\d{2}/)?.[0]
   return digits || clean
 }
+const qualityFacility = row => {
+  const candidates = [
+    getField(row, ['Inspection Lot Storage Location']),
+    getField(row, ['Process Order Storage Location']),
+    getField(row, ['Storage Location', 'Facility', 'Production Line']),
+  ]
+  const invalid = new Set(['', 'N/A', 'NA', '-', 'NULL', 'UNDEFINED'])
+  const normalized = candidates
+    .map(value => normalize(value).toUpperCase())
+    .filter(value => !invalid.has(value))
+    .map(canonicalFacility)
+  return normalized.find(value => Object.prototype.hasOwnProperty.call(FACILITY_ALIASES, value)) || normalized[0] || ''
+}
 
 // Production rows mapped to facility 1542 must actually belong to one of the
 // approved Facility 42 packaging routings. Storage aliases such as T42A are
@@ -1743,7 +1756,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         else if (kind === 'quality') {
           const compact = dedupeRows(rows.map(r => ({
             __compactQuality: true,
-            facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
+            facility: qualityFacility(r),
             date: combineExcelDateTime(
               getField(r, ['Sample Date', 'Sampling Date', 'Date of Sample', 'Date of Sampling', 'תאריך דגימה', 'Start Date of Inspection', 'Date of Lot Creation', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date']),
               getField(r, ['Sample Time', 'Sampling Time', 'Time of Sample', 'Time of Sampling', 'שעת דגימה', 'Inspection Time', 'Start Time of Inspection', 'Time']),
@@ -2023,7 +2036,7 @@ const materialByBatchDescription = useMemo(() => {
   }
 
   return ({
-    facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
+    facility: qualityFacility(r),
     date: combineExcelDateTime(
       getField(r, ['Sample Date', 'Sampling Date', 'Date of Sample', 'Date of Sampling', 'תאריך דגימה', 'Start Date of Inspection', 'Date of Lot Creation', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date']),
       getField(r, ['Sample Time', 'Sampling Time', 'Time of Sample', 'Time of Sampling', 'שעת דגימה', 'Inspection Time', 'Start Time of Inspection', 'Time']),
@@ -2205,23 +2218,10 @@ material: normalize(getField(r, [
       ? batchProductionRows.filter(row => normalizeSapId(row.material) === material)
       : batchProductionRows
 
-    const indexedQuality = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
-    const productionOrders = new Set(productionRows.map(row => normalizeSapId(row.order)).filter(Boolean))
-    const fallbackQuality = qualityRows.filter(row => {
-      const rowBatch = normalizeSapId(row.batch)
-      const rowMaterial = normalizeSapId(row.material)
-      const rowOrder = normalizeSapId(row.order)
-      const materialMatches = !material || !rowMaterial || rowMaterial === material
-      if (rowBatch && rowBatch === batch && materialMatches) return true
-      // In SAP quality exports Batch may refer to a sample/raw-material batch
-      // rather than the finished-goods batch shown in production. Process
-      // Order is therefore the authoritative fallback even when rowBatch is
-      // populated with a different value.
-      return rowOrder && productionOrders.has(rowOrder) && materialMatches
-    })
-    const qualityForBatchMaterial = indexedQuality.length
-      ? indexedQuality
-      : fallbackQuality
+    // The business key is strictly Batch + Material. The source workbooks
+    // confirm that this composite is unique and directly shared by production
+    // and laboratory results; never fall back to Batch alone.
+    const qualityForBatchMaterial = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
     const deviationForBatchMaterial = key
       ? enrichedDeviationRows.filter(row => batchMaterialKey(row.batch, row.material) === key)
       : []
