@@ -1,12 +1,13 @@
 {
   "name": "iml-control-center",
   "private": true,
-  "version": "11.22.3",
+  "version": "11.9.25",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:september-targets": "node scripts/verify-september-targets.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "4.3.4",
