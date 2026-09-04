@@ -1,4 +1,4 @@
-import { mappingMatchesTarget, stationFamily, targetMappingKey } from './mappingEngine'
+import { mappingMatchesTarget, stationFamily, targetMappingKey } from './mappingEngine.js'
 const text = value => String(value ?? '').trim()
 const upper = value => text(value).toUpperCase()
 const isoDate = value => {
@@ -234,57 +234,10 @@ const latestDate = monthRows.reduce((latest, row) => {
   const elapsedWorkdays = workdayCount(planningMonth, 1, Math.max(0, asOfDay))
   const totalWorkdays = workdayCount(planningMonth)
   const remainingWorkdays = Math.max(0, totalWorkdays - elapsedWorkdays)
-  const monthTargets = targets.filter(target => target.month === planningMonth)
-  const baseSourceRows = monthTargets.length ? [...monthTargets] : fallbackFacilities.map(facility => ({ facility, facilities:[facility], resource:`מתקן ${facility}`, target:0, capacity:0, descriptionTokens:[] }))
-  // Always surface the separately managed Pilot/Shaked stations when production exists,
-  // even when the monthly SUM file has no dedicated target row for them.
-  const standaloneStations = [
-    { facility:'1521', resource:'Pilot (1521)' },
-    { facility:'1142', resource:'Shaked iso 42' },
-    { facility:'1123', resource:'Shaked iso 23' },
-  ]
-  const sourceRows = [...baseSourceRows]
-  standaloneStations.forEach(item => {
-    const hasProduction = item.facility === '1142'
-      ? monthRows.some(row => upper(row.facility) === '1142' && !/(^|\D)999(\D|$)/.test(upper(`${row.desc || ''} ${row.routingDescription || ''}`)))
-      : monthRows.some(row => upper(row.facility) === item.facility)
-    const alreadyExists = sourceRows.some(row => upper(row.resource) === upper(item.resource) || (row.facilities || [row.facility]).includes(item.facility))
-    if (hasProduction && !alreadyExists) sourceRows.push({ facility:item.facility, facilities:[item.facility], resource:item.resource, target:0, capacity:0, descriptionTokens:[], station:item.facility, lineName:item.resource })
-  })
-
-  // Sprint 11.9.15 — automatically surface newly reported materials that are not
-  // present in the monthly target workbook yet. They appear as zero-target rows
-  // so production is never hidden while waiting for the next target-file update.
-  // Facility 42 (1542) and Facility 19 (1519) keep their approved line/family logic.
-  const autoMaterialExcludedFacilities = new Set(['1542', '1519'])
-  const unmatchedMaterialGroups = new Map()
-  monthRows.forEach(row => {
-    const facility = upper(row.facility)
-    const material = text(row.material)
-    if (!facility || !material || autoMaterialExcludedFacilities.has(facility)) return
-    const alreadyMatched = sourceRows.some(targetRow => matchProductionToTarget(row, targetRow, manualMappings))
-    if (alreadyMatched) return
-    const key = `${facility}::${upper(material)}`
-    if (!unmatchedMaterialGroups.has(key)) unmatchedMaterialGroups.set(key, row)
-  })
-  unmatchedMaterialGroups.forEach(row => {
-    const facility = text(row.facility)
-    const material = text(row.material)
-    const description = text(row.desc) || text(row.routingDescription) || material
-    sourceRows.push({
-      facility, facilities:[facility],
-      resource:description,
-      target:0, capacity:0,
-      materials:[material],
-      descriptionTokens:[],
-      station:facility,
-      lineName:description,
-      activity:'ייצור / אריזה',
-      mappingStatus:'auto-new-material',
-      mappingReason:'חומר חדש שדווח בתפוקה ואינו קיים עדיין בקובץ היעדים',
-      notes:`נוסף אוטומטית מהתפוקה · מק״ט ${material}`,
-    })
-  })
+  // The selected month's approved target rows are the sole source of planning
+  // cards. Production that has no target must not create a card or borrow a
+  // neighbouring target by row order / partial matching.
+  const sourceRows = targets.filter(target => target.month === planningMonth)
 
   return sourceRows.map((targetRow, index) => {
     const rows = monthRows.filter(row => matchProductionToTarget(row, targetRow, manualMappings))

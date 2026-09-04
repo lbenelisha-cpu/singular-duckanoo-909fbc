@@ -12,6 +12,7 @@ import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLine
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
 import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, inspectManagementRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
 import { exportManagementPresentation } from './utils/managementPresentation'
+import { importedTargetValues, isApprovedTargetResource, parseTargetNumber } from './targetRules'
 import pptxGenBundleUrl from './vendor/pptxgen.bundle.js?url'
 import * as XLSXCore from 'xlsx'
 import './styles.css'
@@ -425,30 +426,11 @@ const targetDescriptionTokens = (resource) => {
   const generic = new Set(['EC','SC','WG','CS','LQ','24F'])
   return !clean || generic.has(clean) ? [] : [clean]
 }
-const APPROVED_TARGET_RESOURCES = new Set([
-  'EC (23)','SHAKED ISO 42','SHAKED ISO 23','LQ 1LT (42)','LQ 5 LT (42)','LQ 10/20 LT (42)','LQ 43','SC (28)','WG (19)','WG SMALL PACKS (19)',
-  '24F128','24F','EC (25)','DIURON (40)','TOLUREX (40)','CS (25,40)','BROMACIL (25,40)','GALIGAN (25,40)',
-  'PROPA PREMIX (25,40)','FLUOROCHLORIDON (25,40)','SAFLUFENACIL TECH (25,40)','METAZACHLOR (41)',
-  'ATRALONE (41)','NANA (41)','D. DAMASCONE (41)'
-])
-const isApprovedTargetResource = value => APPROVED_TARGET_RESOURCES.has(normalize(value).toUpperCase())
-
-const parseTargetNumber = (value) => {
-  if (value === null || value === undefined || value === '' || /^\s*-+\s*$/.test(String(value)) || /DIV\/0/i.test(String(value))) return 0
-  const text = String(value).trim(); const negative = /^\(.*\)$/.test(text)
-  const n = Number(text.replace(/[(),%\s]/g,'').replace(/,/g,''))
-  return Number.isFinite(n) ? (negative ? -n : n) : 0
-}
-
-// Sprint 11.9.0 Trial 4 — normalize legacy monthly targets.
-// SUM targets are expressed in thousands (t / m³), while production rows are L / kg.
-// New uploads are already multiplied by 1000; old cloud/cache rows are normalized here once in memory.
+// Target rows are persisted in production units (L / kg). Scaling belongs only to
+// the workbook-import boundary; applying a value-based legacy heuristic here can
+// multiply a valid small stored target (for example 8,000) a second time.
 const normalizeStoredTargetRow = row => {
-  const scaleLegacy = value => {
-    const n = Number(value) || 0
-    return n > 0 && n < 10000 ? n * 1000 : n
-  }
-  return { ...row, target:scaleLegacy(row?.target), capacity:scaleLegacy(row?.capacity) }
+  return { ...row, target:Number(row?.target) || 0, capacity:Number(row?.capacity) || 0 }
 }
 const isLegacyCombinedTarget = value => {
   const text = normalize(value).toUpperCase().replace(/\s+/g,' ')
@@ -1804,6 +1786,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             const makeTarget = (resource, overrides = {}) => {
               const facilities = targetFacilityIds(resource)
               const facility = facilities[0] || canonicalFacility(getField(r, ['Storage Location','Facility','מתקן']))
+              const { capacity, target } = importedTargetValues(
+                getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target']),
+                getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])
+              )
               return {
                 resource, facility, facilities: facilities.length ? facilities : (facility ? [facility] : []),
                 facilityLabel:(resource.match(/\(([^)]+)\)/)?.[1]||'').trim(), descriptionTokens:targetDescriptionTokens(resource),
@@ -1812,8 +1798,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
                 station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
                 month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,
                 activity:normalize(getField(r,['Activity','Type','סוג פעילות','Production/Packaging']))||'ייצור / אריזה',
-                capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])) * 1000,
-                target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])) * 1000,
+                capacity,
+                target,
                 fileProduction:parseTargetNumber(getField(r,['Production','ייצור'])), fileAchievement:parseTargetNumber(getField(r,['% Achievement','Achievement'])),
                 requiredPerDay:parseTargetNumber(getField(r,['Req. t/d','Required t/d'])), lastDay:parseTargetNumber(getField(r,['Last day'])),
                 adjustedRequiredPerDay:parseTargetNumber(getField(r,['Adjusted Req. t/d'])), actualPerDay:parseTargetNumber(getField(r,['Actual t/d'])),
@@ -1832,7 +1818,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               ]
             }
             return [makeTarget(sourceResource)]
-          }).filter(r => r.resource && (r.target > 0 || r.capacity > 0))
+          }).filter(r => r.resource && isApprovedTargetResource(r.resource) && (r.target > 0 || r.capacity > 0))
             .map(targetRow => {
               // Dynamic Targets v1: the monthly workbook is the source of truth.
               // New rows are never blocked by a hard-coded resource whitelist.
