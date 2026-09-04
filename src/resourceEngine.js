@@ -257,8 +257,9 @@ const latestDate = monthRows.reduce((latest, row) => {
     const average = dailyValues.length ? actual / dailyValues.length : 0
     const recent = dailyValues.slice(-7)
     const recentAverage = recent.length ? recent.reduce((sum, value) => sum + value, 0) / recent.length : average
-    const target = Number(targetRow.target) || 0
     const capacity = Number(targetRow.capacity) || 0
+    const storedTarget = Number(targetRow.target) || 0
+    const target = storedTarget > 0 ? storedTarget : capacity
     const provenMax = dailyValues.length ? Math.max(...dailyValues) : (capacity ? capacity / Math.max(1, totalWorkdays) : 0)
     const remaining = Math.max(0, target - actual)
     const requiredDaily = remainingWorkdays ? remaining / remainingWorkdays : remaining

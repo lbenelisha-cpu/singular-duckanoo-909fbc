@@ -430,7 +430,9 @@ const targetDescriptionTokens = (resource) => {
 // the workbook-import boundary; applying a value-based legacy heuristic here can
 // multiply a valid small stored target (for example 8,000) a second time.
 const normalizeStoredTargetRow = row => {
-  return { ...row, target:Number(row?.target) || 0, capacity:Number(row?.capacity) || 0 }
+  const capacity = Number(row?.capacity) || 0
+  const storedTarget = Number(row?.target) || 0
+  return { ...row, capacity, target:storedTarget > 0 ? storedTarget : capacity }
 }
 const isLegacyCombinedTarget = value => {
   const text = normalize(value).toUpperCase().replace(/\s+/g,' ')
