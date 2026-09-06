@@ -1,10 +1,11 @@
+import { calculateUploadStats, uploadDay } from './uploadStats'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, Archive, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
-import { loadCloudDatasetOnce, loadCloudDatasetMatching, loadCloudDatasetHistory, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
+import { loadCloudDataset, loadCloudDatasetOnce, loadCloudDatasetMatching, loadCloudDatasetHistory, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
@@ -74,7 +75,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.23.5 — Quantity History Recovery'
+const BUILD_LABEL = 'IML 2026.09.06 — Full Cloud Sync v1'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -450,11 +451,11 @@ const stableDateKey = value => {
   return Number.isNaN(date.getTime()) ? normalize(value) : date.toISOString()
 }
 
-// Stable row identities used to prevent duplicate records when a file is loaded again.
+// Quantities are mutable values, not row identity. New uploads take precedence over stored history.
 const productionRowKey = row => [
   normalize(row?.facility), normalize(row?.productionDay), stableDateKey(row?.finishDate || row?.date),
   normalize(row?.order), normalize(row?.batch), normalize(row?.material), normalize(row?.routingGroup), normalize(row?.prodLine),
-  normalize(row?.orderType), String(Number(row?.qty) || 0), String(Number(row?.plannedQty) || 0)
+  normalize(row?.orderType)
 ].join('|')
 
 const qualityBusinessRowKey = row => [
@@ -463,7 +464,7 @@ const qualityBusinessRowKey = row => [
 ].join('|')
 const qualityLegacyRowKey = row => [
   normalize(row?.inspectionLot), normalize(row?.batch), normalize(row?.material),
-  normalize(row?.characteristic), stableDateKey(row?.date), normalize(row?.value), normalize(row?.qualitative)
+  normalize(row?.characteristic), stableDateKey(row?.date)
 ].join('|')
 const qualityRowKey = row => (normalize(row?.sampleNo) || normalize(row?.operationActivity)) ? qualityBusinessRowKey(row) : qualityLegacyRowKey(row)
 
@@ -471,8 +472,8 @@ const deviationRawRowKey = row => [
   normalize(getField(row, ['Inspection Lot','Inspection Lot #'])),
   normalize(getField(row, ['Batch','Batch Number'])),
   normalize(getField(row, ['Material #','Material Number','Material No.','מקט','מק"ט','מק״ט','Material'])),
-  normalize(getField(row, ['UD Code','Usage Decision','Usage decision','החלטת שימוש'])),
-  stableDateKey(excelDate(getField(row, ['Inspection Lot UD Date','Date of Lot Creation','Process Order Delivered Date','Start Date of Inspection'])))
+  // Decision/status/date of decision can change when an existing deviation is resolved.
+  normalize(getField(row, ['Inspection Lot','Inspection Lot #'])) ? '' : stableDateKey(excelDate(getField(row, ['Date of Lot Creation','Start Date of Inspection'])))
 ].join('|')
 
 const dedupeRows = (rows, keyFn) => {
@@ -1413,12 +1414,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         const changed = kind => {
           const remote = remoteMeta[kind]
           const local = cached?.dataMeta?.[kind]
-          // Older builds cached only the active production snapshot.  Its
-          // version id can still match the server after this build is
-          // installed, which would otherwise skip the new history loader and
-          // leave the previous month invisible.  Force one migration load
-          // until the cache explicitly identifies itself as cloud-history.
-          if (!IS_MOBILE_DEVICE && ['production', 'quality', 'deviations'].includes(kind) && local?.source !== 'cloud-history') return true
+          // Reload once even when the active version ID matches an older archive-based cache.
+          if (!IS_MOBILE_DEVICE && ['production', 'quality', 'deviations'].includes(kind) && local?.syncRevision !== 'active-full-v1') return true
           if (!remote) return !local
           const remoteId = remote.active_version_id || remote.updated_at || remote.loaded_at
           const localId = local?.versionId || local?.loadedAt
@@ -1440,7 +1437,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               return Number.isFinite(ms) && ms >= cutoff.getTime()
             }))
           } else {
-            loadedRows += applyDataset('production', await loadCloudDatasetHistory('production', { maxVersions:60, maxMonths:36 }))
+            const dataset = await loadCloudDataset('production')
+            loadedRows += applyDataset('production', { ...dataset, meta:{ ...dataset.meta, syncRevision:'active-full-v1' } })
           }
           setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'הדשבורד זמין' }))
           await new Promise(resolve => setTimeout(resolve, 0))
@@ -1487,14 +1485,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             if (!active) return
             if (!changed(kind)) continue
             setStatus(`טוען ${kind} ברקע...`)
-            const dataset = kind === 'targets'
-              ? await loadCloudDatasetOnce(kind)
-              // Quality workbooks are substantially larger than production.
-              // The operational dashboard needs the current and recent
-              // months, so avoid downloading years of archived QA chunks.
-              : await loadCloudDatasetHistory(kind, kind === 'quality'
-                ? { maxVersions:12, maxMonths:3 }
-                : { maxVersions:24, maxMonths:12 })
+            // The active version is the same complete snapshot shown after upload.
+            // Do not reconstruct it from archived versions or drop older months.
+            const dataset = await loadCloudDataset(kind)
+            if (kind !== 'targets') dataset.meta = { ...dataset.meta, syncRevision:'active-full-v1' }
             loadedRows += applyDataset(kind, dataset)
             setPerformance(current => ({ ...current, queries:current.queries + 1, phase:`נטען ${kind}` }))
             await new Promise(resolve => setTimeout(resolve, 0))
@@ -1648,7 +1642,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     const checks = {
       production: [
         ['מתקן / Storage Location / PROD LINE', present('Storage Location', 'Storage location', 'PROD LINE', 'Prod Line', 'Production Line')],
-        ['כמות', present('Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity')],
+        ['כמות / Delivered quantity (GMEIN)', present('Delivered quantity (GMEIN)')],
         ['Order או Batch', present('Order', 'Process Order', 'Batch', 'Batch Number')],
       ],
       quality: [
@@ -1692,6 +1686,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         const kind = forcedKind || detected
         const missing = validateRows(kind, rows)
         if (missing.length) throw new Error(`${file.name}: חסרות עמודות חובה — ${missing.join(', ')}`)
+        const tracked = ['production','quality','deviations'].includes(kind)
+        // Read the complete active dataset, never a filtered/mobile cache, for cloud counts.
+        const baseline = tracked ? await loadCloudDataset(kind) : null
         let storedCount = rows.length
         let rowsForCloud = rows
         let lastFileUniqueRows = rows.length
@@ -1715,7 +1712,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     getField(r, ['Release date (actual)', 'Time Stamp'])
   )
 ),
-            qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
+            qty: num(getField(r, ['Delivered quantity (GMEIN)'])),
             plannedQty: num(getField(r, ['Order quantity (GMEIN)', 'Order Quantity (GMEIN)', 'Order quantity', 'Planned quantity', 'Planned Quantity'])),
             order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
             batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -1732,7 +1729,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           // The uploaded file contains the current month from day 1 through today.
           // Preserve quantity-only history already restored from Supabase and replace
           // matching rows with the newest file, instead of replacing older months.
-          rowsForCloud = dedupeRows([...compact, ...(production || [])], productionRowKey)
+          rowsForCloud = dedupeRows([...compact, ...(baseline?.rows || []), ...(production || [])], productionRowKey)
           storedCount = rowsForCloud.length
           lastFileUniqueRows = compact.length
           setStatus(`${displayDatasetName('production')}: ${fmt(compact.length)} שורות בקובץ החדש + היסטוריית כמויות שמורה`)
@@ -1770,15 +1767,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             selectableFacilitySet.has(String(r.facility || '')) &&
             (r.batch || r.inspectionLot)
           ), qualityRowKey)
-          // 11.9.47: QUALITY is rebuilt from the uploaded source file after
-          // filtering to selectable facilities. Do not append to the historical
-          // unfiltered cloud dataset, otherwise inactive facilities remain forever.
+          // New data wins; rows absent from this upload remain in the cloud history.
           lastFileUniqueRows = compact.length
-          storedCount = compact.length
-          rowsForCloud = compact
-          setStatus(`${displayDatasetName('quality')}: נשמרות ${fmt(compact.length)} רשומות ממתקנים פעילים בלבד`)
+          rowsForCloud = dedupeRows([...compact, ...(baseline?.rows || [])], qualityRowKey)
+          storedCount = rowsForCloud.length
+          setStatus(`${displayDatasetName('quality')}: ${fmt(compact.length)} רשומות בקובץ החדש + היסטוריה שמורה`)
         } else if (kind === 'deviations') {
-          rowsForCloud = dedupeRows(rows, deviationRawRowKey)
+          const compact = dedupeRows(rows, deviationRawRowKey)
+          lastFileUniqueRows = compact.length
+          rowsForCloud = dedupeRows([...compact, ...(baseline?.rows || [])], deviationRawRowKey)
           storedCount = rowsForCloud.length
         }
         else if (kind === 'targets') {
@@ -1880,6 +1877,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           setUploadProgress({ fileName:displayName, kind, ...progress })
           setStatus(`${displayName}: ${progress.message} (${progress.percent}%)`)
         }
+        if (tracked) {
+          const auditKey = kind === 'production' ? productionRowKey : kind === 'quality' ? qualityRowKey : deviationRawRowKey
+          nextMeta.uploadStats = calculateUploadStats(baseline.rows, rowsForCloud, auditKey, baseline.meta?.uploadStats)
+        }
         const savedMeta = await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progressHandler)
         if (kind === 'production') setProduction(rowsForCloud)
         else if (kind === 'quality') setQuality(rowsForCloud)
@@ -1974,7 +1975,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       prodLineTool: assignment.mapping?.tool || '',
       productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
       date: productionDateFromDay(localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date']))) || finish,
-      qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
+      qty: num(getField(r, ['Delivered quantity (GMEIN)'])),
       plannedQty: num(getField(r, ['Order quantity (GMEIN)', 'Order Quantity (GMEIN)', 'Order quantity', 'Planned quantity', 'Planned Quantity'])),
       order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
       batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -4197,9 +4198,9 @@ material: normalize(getField(r, [
         <div className="panel-head"><div><ShieldCheck/><h2>מרכז נתונים</h2></div><span>4 מקורות מידע</span></div>
         <p className="data-center-help">כל קובץ נבדק בדפדפן ולאחר מכן נשמר ב־Supabase. מרגע שהטעינה מסתיימת, אותו מידע זמין לכל המשתמשים המחוברים.</p>
         <div className="data-source-grid">
-          <DataSource title="תפוקות" icon={<Factory/>} meta={dataMeta.production} count={production.length} acceptLabel="טען קובץ תפוקות" busy={busy} onFiles={files => loadFiles(files, 'production')} canManage={canManageData}/>
-          <DataSource title="תוצאות איכות" icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} rows={quality} showYearBreakdown acceptLabel="הוסף תוצאות איכות חדשות" busy={busy} onFiles={files => loadFiles(files, 'quality')} canManage={canManageData}/>
-          <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
+          <DataSource title="תפוקות" datasetKind="production" showUploadStats icon={<Factory/>} meta={dataMeta.production} count={production.length} acceptLabel="טען קובץ תפוקות" busy={busy} onFiles={files => loadFiles(files, 'production')} canManage={canManageData}/>
+          <DataSource title="תוצאות איכות" datasetKind="quality" showUploadStats icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} rows={quality} showYearBreakdown acceptLabel="הוסף תוצאות איכות חדשות" busy={busy} onFiles={files => loadFiles(files, 'quality')} canManage={canManageData}/>
+          <DataSource title="חריגות איכות" datasetKind="deviations" showUploadStats icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
           <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')} canManage={canManageData}/>
         </div>
       </section>}
@@ -4608,9 +4609,24 @@ function BatchControlCard({ data, onClose }) {
 }
 function BatchMetric({label,value}) { return <div className="batch-metric"><span>{label}</span><b>{value}</b></div> }
 
-function DataSource({ title, icon, meta, count, rows = [], showYearBreakdown = false, acceptLabel, busy, onFiles, canManage }) {
+function DataSource({ title, datasetKind, showUploadStats = false, icon, meta, count, rows = [], showYearBreakdown = false, acceptLabel, busy, onFiles, canManage }) {
   const [breakdownOpen, setBreakdownOpen] = useState(false)
   const [selectedYear, setSelectedYear] = useState(null)
+  const [today, setToday] = useState(uploadDay)
+  useEffect(() => { const timer = setInterval(() => setToday(uploadDay()), 30000); return () => clearInterval(timer) }, [])
+  const [cloudSummary, setCloudSummary] = useState(null)
+  const [summaryError, setSummaryError] = useState(false)
+  useEffect(() => {
+    if (!datasetKind) return
+    let active = true
+    const refresh = () => getCloudDatasetMeta(datasetKind).then(value => { if (active) { setCloudSummary(value); setSummaryError(false) } }).catch(() => { if (active) setSummaryError(true) })
+    refresh()
+    const timer = setInterval(refresh, 30000)
+    return () => { active = false; clearInterval(timer) }
+  }, [datasetKind, meta?.versionId, meta?.loadedAt])
+  const stats = cloudSummary?.uploadStats ?? meta?.uploadStats
+  const cloudTotal = cloudSummary?.row_count ?? meta?.rows
+  const summaryLoadedAt = cloudSummary?.loaded_at || cloudSummary?.updated_at || meta?.loadedAt
   const loaded = Boolean(meta || count)
   const loadedAt = meta?.loadedAt ? new Date(meta.loadedAt).toLocaleString('he-IL') : 'טרם נטען'
   const yearBreakdown = useMemo(() => {
@@ -4644,9 +4660,17 @@ function DataSource({ title, icon, meta, count, rows = [], showYearBreakdown = f
   return <>
     <article className={`data-source ${loaded ? 'ready' : ''}`}>
       <div className="data-source-head"><div className="data-source-icon">{icon}</div><div><h3>{title}</h3><span>{loaded ? 'תקין וזמין' : 'ממתין לקובץ'}</span></div></div>
-      <div className="data-source-count"><b>{fmt(count)}</b><span>רשומות ייחודיות במאגר</span></div>{meta?.lastFileRows ? <div className="data-source-last-file"><b>{fmt(meta.lastFileRows)}</b><span>רשומות בקובץ האחרון</span>{meta?.lastFileUniqueRows != null && <small>ייחודיות בקובץ: {fmt(meta.lastFileUniqueRows)}</small>}</div> : null}
+      <div className="data-source-count"><b>{showUploadStats ? (cloudTotal == null ? '—' : fmt(cloudTotal)) : fmt(count)}</b><span>{showUploadStats ? 'רשומות במאגר הפעיל בענן' : 'רשומות ייחודיות במאגר'}</span></div>{meta?.lastFileRows ? <div className="data-source-last-file"><b>{fmt(meta.lastFileRows)}</b><span>רשומות בקובץ האחרון</span>{meta?.lastFileUniqueRows != null && <small>ייחודיות בקובץ: {fmt(meta.lastFileUniqueRows)}</small>}</div> : null}
+      {showUploadStats && <div style={{display:'grid',gap:8,padding:'12px 0',fontSize:14}}>
+        {summaryError && <small>לא ניתן לרענן את נתוני הענן כרגע; מוצגים הנתונים האחרונים שהתקבלו.</small>}
+        {stats ? <>
+          <div>נוספו היום: <b>{fmt(stats.day === today ? stats.addedToday : 0)}</b> · עודכנו היום: <b>{fmt(stats.day === today ? stats.updatedToday : 0)}</b></div>
+          <small>בטעינה האחרונה: {fmt(stats.lastAdded)} חדשות · {fmt(stats.lastUpdated)} עודכנו · {fmt(stats.lastRemoved)} הוסרו</small>
+          <small>סיכום יומי לפי שעון ישראל; כל מזהה נספר פעם אחת בכל קטגוריה.</small>
+        </> : <small>ספירת תוספות ועדכונים תתחיל בטעינה הראשונה לאחר התקנת העדכון.</small>}
+      </div>}
       {showYearBreakdown && loaded && <button type="button" className="source-breakdown-btn" onClick={()=>setBreakdownOpen(true)}>פירוט מאגר לפי שנה</button>}
-      <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
+      <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{showUploadStats && summaryLoadedAt ? `טעינה אחרונה: ${new Date(summaryLoadedAt).toLocaleString('he-IL', {timeZone:'Asia/Jerusalem'})}` : loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
       {canManage ? <label className={`source-upload ${busy ? 'disabled' : ''}`}><RefreshCw size={16}/>{acceptLabel}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; onFiles(files) }}/></label> : <div className="viewer-lock"><ShieldCheck size={16}/> צפייה בלבד</div>}
     </article>
     {breakdownOpen && <div className="year-breakdown-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setBreakdownOpen(false)}}>

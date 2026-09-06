@@ -181,6 +181,11 @@ export async function getCloudDatasetMeta(kind) {
     return result
   }, `קריאת מטא-דאטה ${kind}`)
   if (error) throw error
+  if (data?.active_version_id) {
+    const result = await supabase.from('iml_dataset_versions').select('*').eq('id', data.active_version_id).single()
+    if (result.error) throw result.error
+    data.uploadStats = result.data?.upload_stats || null
+  }
   return data || null
 }
 
@@ -214,7 +219,7 @@ export async function loadCloudDataset(kind, onProgress) {
     const version = await withRetry(async () => {
       const { data, error } = await supabase
         .from('iml_dataset_versions')
-        .select('id,version_no,chunk_count,status,created_at,activated_at')
+        .select('*')
         .eq('id', source.active_version_id)
         .single()
       if (error) throw error
@@ -243,6 +248,7 @@ export async function loadCloudDataset(kind, onProgress) {
         source: 'cloud',
         version: version.version_no,
         versionId: version.id,
+        uploadStats: version.upload_stats || null,
       },
     }
   }
@@ -678,6 +684,7 @@ export async function uploadCloudDataset(kind, rows, meta, user, onProgress) {
         uploaded_by: user?.id || null,
         uploaded_by_email: user?.email || '',
         status: 'uploading',
+        ...(meta.uploadStats ? { upload_stats:meta.uploadStats } : {}),
       })
       .select('id,version_no')
       .single()
