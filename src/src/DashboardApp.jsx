@@ -1414,12 +1414,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         const changed = kind => {
           const remote = remoteMeta[kind]
           const local = cached?.dataMeta?.[kind]
-          // Older builds cached only the active production snapshot.  Its
-          // version id can still match the server after this build is
-          // installed, which would otherwise skip the new history loader and
-          // leave the previous month invisible.  Force one migration load
-          // until the cache explicitly identifies itself as cloud-history.
-          if (!IS_MOBILE_DEVICE && ['production', 'quality', 'deviations'].includes(kind) && local?.source !== 'cloud-history') return true
+          // Reload once even when the active version ID matches an older archive-based cache.
+          if (!IS_MOBILE_DEVICE && ['production', 'quality', 'deviations'].includes(kind) && local?.syncRevision !== 'active-full-v1') return true
           if (!remote) return !local
           const remoteId = remote.active_version_id || remote.updated_at || remote.loaded_at
           const localId = local?.versionId || local?.loadedAt
@@ -1441,7 +1437,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               return Number.isFinite(ms) && ms >= cutoff.getTime()
             }))
           } else {
-            loadedRows += applyDataset('production', await loadCloudDatasetHistory('production', { maxVersions:60, maxMonths:36 }))
+            const dataset = await loadCloudDataset('production')
+            loadedRows += applyDataset('production', { ...dataset, meta:{ ...dataset.meta, syncRevision:'active-full-v1' } })
           }
           setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'הדשבורד זמין' }))
           await new Promise(resolve => setTimeout(resolve, 0))
@@ -1488,14 +1485,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             if (!active) return
             if (!changed(kind)) continue
             setStatus(`טוען ${kind} ברקע...`)
-            const dataset = kind === 'targets'
-              ? await loadCloudDatasetOnce(kind)
-              // Quality workbooks are substantially larger than production.
-              // The operational dashboard needs the current and recent
-              // months, so avoid downloading years of archived QA chunks.
-              : await loadCloudDatasetHistory(kind, kind === 'quality'
-                ? { maxVersions:12, maxMonths:3 }
-                : { maxVersions:24, maxMonths:12 })
+            // The active version is the same complete snapshot shown after upload.
+            // Do not reconstruct it from archived versions or drop older months.
+            const dataset = await loadCloudDataset(kind)
+            if (kind !== 'targets') dataset.meta = { ...dataset.meta, syncRevision:'active-full-v1' }
             loadedRows += applyDataset(kind, dataset)
             setPerformance(current => ({ ...current, queries:current.queries + 1, phase:`נטען ${kind}` }))
             await new Promise(resolve => setTimeout(resolve, 0))
