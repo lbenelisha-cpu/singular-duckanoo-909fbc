@@ -430,7 +430,9 @@ const targetDescriptionTokens = (resource) => {
 // the workbook-import boundary; applying a value-based legacy heuristic here can
 // multiply a valid small stored target (for example 8,000) a second time.
 const normalizeStoredTargetRow = row => {
-  return { ...row, target:Number(row?.target) || 0, capacity:Number(row?.capacity) || 0 }
+  const capacity = Number(row?.capacity) || 0
+  const storedTarget = Number(row?.target) || 0
+  return { ...row, capacity, target:storedTarget > 0 ? storedTarget : capacity }
 }
 const isLegacyCombinedTarget = value => {
   const text = normalize(value).toUpperCase().replace(/\s+/g,' ')
@@ -1646,7 +1648,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     const checks = {
       production: [
         ['מתקן / Storage Location / PROD LINE', present('Storage Location', 'Storage location', 'PROD LINE', 'Prod Line', 'Production Line')],
-        ['כמות', present('Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity')],
+        ['כמות / Delivered quantity (GMEIN)', present('Delivered quantity (GMEIN)')],
         ['Order או Batch', present('Order', 'Process Order', 'Batch', 'Batch Number')],
       ],
       quality: [
@@ -1713,7 +1715,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     getField(r, ['Release date (actual)', 'Time Stamp'])
   )
 ),
-            qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
+            qty: num(getField(r, ['Delivered quantity (GMEIN)'])),
             plannedQty: num(getField(r, ['Order quantity (GMEIN)', 'Order Quantity (GMEIN)', 'Order quantity', 'Planned quantity', 'Planned Quantity'])),
             order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
             batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -1972,7 +1974,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       prodLineTool: assignment.mapping?.tool || '',
       productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
       date: productionDateFromDay(localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date']))) || finish,
-      qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
+      qty: num(getField(r, ['Delivered quantity (GMEIN)'])),
       plannedQty: num(getField(r, ['Order quantity (GMEIN)', 'Order Quantity (GMEIN)', 'Order quantity', 'Planned quantity', 'Planned Quantity'])),
       order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
       batch: normalize(getField(r, ['Batch', 'Batch Number'])),
