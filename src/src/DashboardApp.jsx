@@ -75,7 +75,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.23.5 — Quantity History Recovery'
+const BUILD_LABEL = 'IML 2026.09.06 — Full Cloud Sync v1'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
