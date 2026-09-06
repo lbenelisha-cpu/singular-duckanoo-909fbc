@@ -450,11 +450,11 @@ const stableDateKey = value => {
   return Number.isNaN(date.getTime()) ? normalize(value) : date.toISOString()
 }
 
-// Stable row identities used to prevent duplicate records when a file is loaded again.
+// Quantities are mutable values, not row identity. New uploads take precedence over stored history.
 const productionRowKey = row => [
   normalize(row?.facility), normalize(row?.productionDay), stableDateKey(row?.finishDate || row?.date),
   normalize(row?.order), normalize(row?.batch), normalize(row?.material), normalize(row?.routingGroup), normalize(row?.prodLine),
-  normalize(row?.orderType), String(Number(row?.qty) || 0), String(Number(row?.plannedQty) || 0)
+  normalize(row?.orderType)
 ].join('|')
 
 const qualityBusinessRowKey = row => [
