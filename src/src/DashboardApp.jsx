@@ -1,3 +1,4 @@
+import { productionDailyQuantities } from './productionDailyQuantities'
 import { calculateUploadStats, uploadDay } from './uploadStats'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -75,7 +76,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'IML 2026.09.06 — Full Cloud Sync v1'
+const BUILD_LABEL = 'IML 2026.09.07 — Daily Quantity Delta v2'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -1415,7 +1416,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           const remote = remoteMeta[kind]
           const local = cached?.dataMeta?.[kind]
           // Reload once even when the active version ID matches an older archive-based cache.
-          if (!IS_MOBILE_DEVICE && ['production', 'quality', 'deviations'].includes(kind) && local?.syncRevision !== 'active-full-v1') return true
+          if (kind === 'production' && local?.syncRevision !== 'daily-delta-v2') return true
+          if (!IS_MOBILE_DEVICE && ['quality', 'deviations'].includes(kind) && local?.syncRevision !== 'active-full-v1') return true
           if (!remote) return !local
           const remoteId = remote.active_version_id || remote.updated_at || remote.loaded_at
           const localId = local?.versionId || local?.loadedAt
@@ -1425,21 +1427,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         let loadedRows = 0
         if (changed('production')) {
           setStatus('טוען נתוני ייצור מעודכנים...')
-          if (IS_IOS_DEVICE) {
-            const cutoff = new Date()
-            cutoff.setHours(0, 0, 0, 0)
-            cutoff.setDate(cutoff.getDate() - 45)
-            loadedRows += applyDataset('production', await loadCloudDatasetMatching('production', row => {
-              const rawDate = row?.finishDate ?? row?.date ?? row?.Date
-              if (!rawDate) return false
-              const parsed = rawDate instanceof Date ? rawDate : new Date(rawDate)
-              const ms = parsed?.getTime?.()
-              return Number.isFinite(ms) && ms >= cutoff.getTime()
-            }))
-          } else {
-            const dataset = await loadCloudDataset('production')
-            loadedRows += applyDataset('production', { ...dataset, meta:{ ...dataset.meta, syncRevision:'active-full-v1' } })
-          }
+          const dataset = await loadCloudDataset('production')
+          loadedRows += applyDataset('production', { ...dataset, meta:{ ...dataset.meta, syncRevision:'daily-delta-v2' } })
           setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'הדשבורד זמין' }))
           await new Promise(resolve => setTimeout(resolve, 0))
         }
@@ -1936,7 +1925,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const handleFiles = (files) => loadFiles(files)
 
 
-  const prod = useMemo(() => production.map(r => {
+  const prod = useMemo(() => productionDailyQuantities(production.map(r => {
     if (r?.__compactProduction) {
       const assignment = productionAssignment(r.facility, r.routingGroup, r.routingDescription, r.prodLine)
       return {
@@ -1946,6 +1935,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         prodLineTool: normalize(r.prodLineTool || assignment.mapping?.tool),
         productionDay: normalize(r.productionDay) || iso(r.finishDate),
         date: productionDateFromDay(r.productionDay) || (r.finishDate ? new Date(r.finishDate) : null),
+        snapshotTime: r.finishDate || r.date || '',
         qty: num(r.qty),
         plannedQty: num(r.plannedQty),
         order: normalize(r.order),
@@ -1975,6 +1965,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       prodLineTool: assignment.mapping?.tool || '',
       productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
       date: productionDateFromDay(localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date']))) || finish,
+      snapshotTime: localDateTimeString(finish),
       qty: num(getField(r, ['Delivered quantity (GMEIN)'])),
       plannedQty: num(getField(r, ['Order quantity (GMEIN)', 'Order Quantity (GMEIN)', 'Order quantity', 'Planned quantity', 'Planned Quantity'])),
       order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
@@ -1995,7 +1986,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       hour: finish ? finish.getHours() : null,
       shift: shiftInfo(finish),
     }
-  }).filter(r => r.facility), [production])
+  }).filter(r => r.facility)), [production])
 const materialByBatchDescription = useMemo(() => {
   const map = new Map()
 
