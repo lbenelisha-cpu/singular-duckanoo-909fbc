@@ -1,3 +1,4 @@
+import { parseContractorWorkbook } from './contractorWorkbook'
 import { productionDailyQuantities } from './productionDailyQuantities'
 import { calculateUploadStats, uploadDay } from './uploadStats'
 import { useEffect, useMemo, useState } from 'react'
@@ -76,7 +77,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'IML 2026.09.07 — Daily Quantity Delta v2'
+const BUILD_LABEL = 'IML 2026.09.07 — Contractor Import v3'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -2945,6 +2946,10 @@ material: normalize(getField(r, [
 
   const parseManagementWorkbook = async (file, kind) => {
     const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type:'array', cellDates:true })
+    if (kind === 'contractor') {
+      const contractorRows = parseContractorWorkbook(wb, file.name, XLSX)
+      if (contractorRows !== null) return contractorRows
+    }
     const rows=[]
     const keyOf=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ')
     const val=(obj,names)=>{const entries=Object.entries(obj||{});for(const name of names){const hit=entries.find(([k])=>keyOf(k).includes(keyOf(name)));if(hit&&hit[1]!==''&&hit[1]!=null)return hit[1]}return ''}
