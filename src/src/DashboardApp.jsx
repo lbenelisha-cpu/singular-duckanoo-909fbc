@@ -3012,7 +3012,7 @@ material: normalize(getField(r, [
     const peakMonth = managementSummary.peakMonth?.label ? `${managementSummary.peakMonth.label} · ${fmt(managementSummary.peakMonth.actual)}` : 'אין נתון'
     const weakMonth = managementSummary.weakMonth?.label ? `${managementSummary.weakMonth.label} · ${fmt(managementSummary.weakMonth.actual)}` : 'אין נתון'
     return [
-      {title:'שער', bullets:[`תקציר מנהלים · ${facilityLabel}`, periodLabel]},
+      {title:'שער', bullets:[`סיכום מתקן 42 · ${facilityLabel}`, periodLabel]},
       {title:'בטיחות — משולש האירועים', bullets:['שדות פתוחים להשלמה ידנית', 'מסר מנהל היחידה']},
       {title:'תמונת מצב ניהולית', bullets:[`תפוקה מקובץ כמויות: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
       {title:'תכנון מול ביצוע', bullets:[`תכנון: ${fmt(managementSummary.fmsPlan)}`, `ביצוע מקובץ כמויות: ${fmt(managementSummary.fmsActual)}`]},
@@ -3030,11 +3030,11 @@ material: normalize(getField(r, [
 
   const downloadManagementPresentation = async () => {
     setManagementPresentationBusy(true)
-    setManagementPresentationMessage('מכין קובץ PowerPoint אמיתי (.pptx)...')
+    setManagementPresentationMessage('מכין סיכום מתקן 42 אוטומטי (.pptx)...')
     try {
       await exportManagementPresentation({ summary: managementSummary, from, to })
       const exportedFileName = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.pptx`
-      setManagementPresentationMessage(`המצגת הבהירה נוצרה בהצלחה: ${exportedFileName}`)
+      setManagementPresentationMessage(`סיכום מתקן 42 נוצר בהצלחה: ${exportedFileName}`)
       return
       const slides = buildManagementPresentationSlides()
       const PptxGenJS = await ensurePptxGenJS()

@@ -41,6 +41,22 @@ const fmt = value => Math.round(num(value)).toLocaleString('he-IL')
 const money = value => `₪${fmt(value)}`
 const pct = value => Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)}%` : '—'
 
+async function loadPublicImageData(url) {
+  try {
+    const response = await fetch(url, { cache: 'no-store' })
+    if (!response.ok) return null
+    const blob = await response.blob()
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
+
 const rtl = (extra = {}) => ({ fontFace: 'Arial', lang: 'he-IL', rtlMode: true, align: 'right', valign: 'mid', color: DARK, ...extra })
 const centered = (extra = {}) => ({ fontFace: 'Arial', lang: 'he-IL', rtlMode: true, align: 'center', valign: 'mid', color: DARK, ...extra })
 
@@ -126,7 +142,7 @@ export async function exportManagementPresentation({ summary, from, to }) {
   pptx.author = 'IML CONTROL'
   pptx.company = 'ADAMA'
   pptx.subject = 'Management Summary'
-  pptx.title = 'תקציר מנהלים IML CONTROL'
+  pptx.title = 'סיכום מתקן 42 — IML CONTROL'
   pptx.lang = 'he-IL'
   pptx.theme = {
     headFontFace: 'Arial', bodyFontFace: 'Arial', lang: 'he-IL'
@@ -137,18 +153,30 @@ export async function exportManagementPresentation({ summary, from, to }) {
   const facilities = summary.logicalFacilities?.length ? summary.logicalFacilities.join(', ') : 'כל המתקנים'
   const period = `${from || 'תחילת הנתונים'} עד ${to || 'סוף הנתונים'}`
 
-  // 1 — cover
+  // 1 — cover — Facility 42 dynamic management summary
   let slide = pptx.addSlide()
   slide.background = { color: LIGHT }
   slide.addShape('rect', { x: 0, y: 0, w: 13.333, h: 0.16, fill: { color: AQUA }, line: { color: AQUA } })
-  slide.addShape('rect', { x: 0, y: 0.16, w: 3.35, h: 7.34, fill: { color: 'E3F4F2' }, line: { color: 'E3F4F2' } })
-  slide.addText('IML CONTROL', { x: 0.75, y: 0.65, w: 2.3, h: 0.4, fontSize: 18, bold: true, color: TEAL, fontFace: 'Arial', margin: 0 })
-  slide.addText('תקציר מנהלים', { x: 4.35, y: 1.45, w: 7.9, h: 1.0, fontSize: 50, bold: true, color: NAVY, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
-  slide.addText(`${period} · מתקנים ${facilities}`, { x: 4.1, y: 2.55, w: 8.15, h: 0.45, fontSize: 18, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'right', margin: 0 })
-  addKpi(slide, { x: 0.85, y: 4.65, w: 2.75, label: 'תפוקה בפועל', value: fmt(summary.total), note: `${summary.days} ימי פעילות`, accent: AQUA })
-  addKpi(slide, { x: 3.85, y: 4.65, w: 2.75, label: 'FMS מול תכנון', value: summary.fmsPlan ? pct(summary.fmsActual / summary.fmsPlan * 100) : '—', note: `${fmt(summary.fmsActual)} / ${fmt(summary.fmsPlan)}`, accent: GREEN })
-  addKpi(slide, { x: 6.85, y: 4.65, w: 2.75, label: 'שנה מול שנה', value: summary.previousActual ? `${summary.yoyPct >= 0 ? '+' : ''}${pct(summary.yoyPct)}` : '—', note: `מול ${summary.currentYear - 1}`, accent: ORANGE })
-  addKpi(slide, { x: 9.85, y: 4.65, w: 2.75, label: 'עלות קבלן / ליטר', value: summary.contractorCostPerUnit ? `₪${summary.contractorCostPerUnit.toFixed(3)}` : '—', note: summary.contractorCostPerUnit ? `${summary.contractorMonths} חודשים` : 'אין נתון בתקופה', accent: PURPLE })
+  slide.addShape('rect', { x: 0, y: 0.16, w: 13.333, h: 1.05, fill: { color: 'E3F4F2' }, line: { color: 'E3F4F2' } })
+  slide.addText('IML CONTROL · PACKAGING FACILITIES', { x: 0.55, y: 0.42, w: 3.6, h: 0.34, fontSize: 14, bold: true, color: TEAL, fontFace: 'Arial', margin: 0 })
+
+  const adamaLogo = await loadPublicImageData('/icons/adama-mark-128.png')
+  if (adamaLogo) {
+    slide.addImage({ data: adamaLogo, x: 5.82, y: 0.40, w: 1.70, h: 1.70, transparency: 0 })
+  } else {
+    slide.addShape('ellipse', { x: 6.10, y: 0.58, w: 1.14, h: 1.14, fill: { color: 'DDE8B6' }, line: { color: TEAL, width: 2 } })
+    slide.addText('ADAMA', { x: 5.72, y: 0.96, w: 1.90, h: 0.28, fontSize: 13, bold: true, color: TEAL, align: 'center', margin: 0, fontFace: 'Arial' })
+  }
+
+  slide.addText('סיכום מתקן 42', { x: 2.25, y: 2.10, w: 8.83, h: 0.82, fontSize: 45, bold: true, color: NAVY, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
+  slide.addText(`התקופה: ${period}`, { x: 2.45, y: 3.00, w: 8.43, h: 0.42, fontSize: 18, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
+  slide.addText(`מתקן ${facilities || '42'}`, { x: 4.55, y: 3.46, w: 4.23, h: 0.34, fontSize: 14, bold: true, color: TEAL, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
+
+  addKpi(slide, { x: 0.85, y: 4.78, w: 2.75, label: 'תפוקה בפועל', value: fmt(summary.total), note: `${summary.days} ימי פעילות`, accent: AQUA })
+  addKpi(slide, { x: 3.85, y: 4.78, w: 2.75, label: 'FMS מול תכנון', value: summary.fmsPlan ? pct(summary.fmsActual / summary.fmsPlan * 100) : '—', note: `${fmt(summary.fmsActual)} / ${fmt(summary.fmsPlan)}`, accent: GREEN })
+  addKpi(slide, { x: 6.85, y: 4.78, w: 2.75, label: 'שנה מול שנה', value: summary.previousActual ? `${summary.yoyPct >= 0 ? '+' : ''}${pct(summary.yoyPct)}` : '—', note: `מול ${summary.currentYear - 1}`, accent: ORANGE })
+  addKpi(slide, { x: 9.85, y: 4.78, w: 2.75, label: 'עלות קבלן / ליטר', value: summary.contractorCostPerUnit ? `₪${summary.contractorCostPerUnit.toFixed(3)}` : '—', note: summary.contractorCostPerUnit ? `${summary.contractorMonths} חודשים` : 'אין נתון בתקופה', accent: PURPLE })
+  slide.addText('הופק אוטומטית מנתוני IML CONTROL · התקופה נקבעת לפי ציר הזמן באפליקציה', { x: 2.0, y: 6.62, w: 9.33, h: 0.28, fontSize: 10, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
 
   // 2 — editable safety pyramid (manual completion by the presenter)
   slide = pptx.addSlide(); addHeader(slide, 'בטיחות — משולש האירועים', 'שקופית ניהולית לעריכה ידנית לפני ההצגה')
