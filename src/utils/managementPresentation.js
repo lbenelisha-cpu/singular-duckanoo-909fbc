@@ -135,7 +135,7 @@ function addRankList(slide, title, rows, { x, y, w, valueKey = 'qty', labelFn })
   })
 }
 
-export async function exportManagementPresentation({ summary, from, to, safety = {} }) {
+export async function exportManagementPresentation({ summary, from, to, safety }) {
   const PptxGenJS = await getPptxGenJS()
   const pptx = new PptxGenJS()
   pptx.layout = 'LAYOUT_WIDE'
@@ -178,38 +178,29 @@ export async function exportManagementPresentation({ summary, from, to, safety =
   addKpi(slide, { x: 9.85, y: 4.78, w: 2.75, label: 'עלות קבלן / ליטר', value: summary.contractorCostPerUnit ? `₪${summary.contractorCostPerUnit.toFixed(3)}` : '—', note: summary.contractorCostPerUnit ? `${summary.contractorMonths} חודשים` : 'אין נתון בתקופה', accent: PURPLE })
   slide.addText('הופק אוטומטית מנתוני IML CONTROL · התקופה נקבעת לפי ציר הזמן באפליקציה', { x: 2.0, y: 6.62, w: 9.33, h: 0.28, fontSize: 10, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
 
-  // 2 — safety pyramid — monthly input from IML CONTROL
-  slide = pptx.addSlide(); addHeader(slide, 'תמונת מצב בטיחות – מתקן 42', `מצטבר שנתי ותקופת ${period}`)
-  const sp = safety.period || {}, sy = safety.ytd || {}
-  const safetyLevels = [
-    { key:'fatal', label:'מוות', color:'B91C1C' },
-    { key:'irreversible', label:'בלתי הפיך', color:'DC2626' },
-    { key:'lostDays', label:'ימי היעדרות', color:'EA580C' },
-    { key:'medical', label:'טיפול רפואי', color:'F59E0B' },
-    { key:'firstAid', label:'עזרה ראשונה', color:'EAB308' },
-    { key:'nearMiss', label:'כמעט ונפגע', color:'84CC16' },
-    { key:'unsafe', label:'מצב לא בטיחותי / מפגעים', color:'22C55E' },
+  // 2 — safety pyramid, populated automatically from the monthly safety input in IML CONTROL
+  slide = pptx.addSlide(); addHeader(slide, 'תמונת מצב בטיחות – מתקן 42', 'פירמידת הבטיחות: מצטבר שנתי והתקופה שנבחרה')
+  const safetyRows = [
+    ['fatal','מוות',RED], ['irreversible','בלתי הפיך','B91C1C'], ['lostDays','ימי היעדרות','DC2626'],
+    ['medical','טיפול רפואי',ORANGE], ['firstAid','עזרה ראשונה','EAB308'], ['nearMiss','כמעט ונפגע',PURPLE], ['unsafe','מצב לא בטיחותי / מפגעים',SKY]
   ]
-  slide.addText('שנתי',{x:1.05,y:1.45,w:1.0,h:0.3,fontSize:14,bold:true,...centered()})
-  slide.addText('התקופה',{x:2.15,y:1.45,w:1.0,h:0.3,fontSize:14,bold:true,...centered()})
-  safetyLevels.forEach((level,i)=>{
-    const y=1.85+i*0.62, w=3.1+i*0.55, x=8.9-w/2
-    slide.addShape('trapezoid',{x,y,w,h:0.48,fill:{color:level.color},line:{color:WHITE,width:0.8}})
-    slide.addText(level.label,{x:x+0.15,y:y+0.09,w:w-0.3,h:0.24,fontSize:11,bold:true,color:WHITE,...centered()})
-    slide.addText(String(Number(sy[level.key]||0)),{x:1.05,y:y+0.08,w:1.0,h:0.26,fontSize:14,bold:true,color:DARK,...centered()})
-    slide.addText(String(Number(sp[level.key]||0)),{x:2.15,y:y+0.08,w:1.0,h:0.26,fontSize:14,bold:true,color:DARK,...centered()})
+  const annualSafety=safety?.annual||{}, periodSafety=safety?.period||{}
+  slide.addText('שנתי',{x:2.05,y:1.28,w:1.0,h:.3,fontSize:14,bold:true,...centered()})
+  slide.addText('תקופה נבחרת',{x:3.15,y:1.28,w:1.45,h:.3,fontSize:14,bold:true,...centered()})
+  safetyRows.forEach(([key,label,color],i)=>{
+    const y=1.72+i*.58, width=2.35+i*.48, x=8.65-width/2
+    slide.addShape('trapezoid',{x,y,w:width,h:.48,fill:{color},line:{color:'FFFFFF',width:1}})
+    slide.addText(label,{x:x+.1,y:y+.10,w:width-.2,h:.22,fontSize:10,bold:true,color:WHITE,...centered()})
+    slide.addText(String(annualSafety[key]||0),{x:2.05,y:y+.08,w:1.0,h:.25,fontSize:13,bold:true,...centered()})
+    slide.addText(String(periodSafety[key]||0),{x:3.15,y:y+.08,w:1.45,h:.25,fontSize:13,bold:true,...centered()})
   })
-  const significant = Number(sp.lostDays||0)+Number(sp.medical||0)
-  const firstAid = Number(sp.firstAid||0)
-  const observations = Number(sp.nearMiss||0)+Number(sp.unsafe||0)
-  const ratio = d => significant>0 ? `1:${(d/significant).toFixed(d%significant?1:0)}` : '—'
-  slide.addShape('roundRect',{x:0.75,y:5.55,w:5.45,h:0.7,fill:{color:'FFF7E6'},line:{color:'F6D58A'}})
-  slide.addText('יחס אירועים משמעותיים / אירועי עזרה ראשונה',{x:2.3,y:5.66,w:3.65,h:0.22,fontSize:11,bold:true,...rtl()})
-  slide.addText(ratio(firstAid),{x:1.0,y:5.65,w:1.0,h:0.26,fontSize:18,bold:true,color:ORANGE,...centered()})
-  slide.addShape('roundRect',{x:6.55,y:5.55,w:5.95,h:0.7,fill:{color:'F0FDF4'},line:{color:'BBE7C7'}})
-  slide.addText('יחס אירועים משמעותיים / כמעט ונפגע ומפגעים',{x:8.15,y:5.66,w:4.05,h:0.22,fontSize:11,bold:true,...rtl()})
-  slide.addText(ratio(observations),{x:6.8,y:5.65,w:1.0,h:0.26,fontSize:18,bold:true,color:GREEN,...centered()})
-  slide.addText('נוסחה: אירועים משמעותיים = ימי היעדרות + טיפול רפואי',{x:3.4,y:6.48,w:6.5,h:0.22,fontSize:9,color:MUTED,...centered()})
+  const ratioText = r => r ? `1:${r.toFixed(1)}` : '—'
+  slide.addShape('roundRect',{x:.75,y:5.95,w:5.7,h:.82,fill:{color:WHITE},line:{color:'DCE6EE'}})
+  slide.addText('יחס אירועים משמעותיים / אירועי עזרה ראשונה',{x:1.0,y:6.08,w:3.8,h:.22,fontSize:11,bold:true,...rtl()})
+  slide.addText(ratioText(safety?.periodRatios?.firstAid),{x:4.95,y:6.04,w:1.1,h:.30,fontSize:18,bold:true,color:TEAL,...centered()})
+  slide.addShape('roundRect',{x:6.85,y:5.95,w:5.7,h:.82,fill:{color:WHITE},line:{color:'DCE6EE'}})
+  slide.addText('יחס אירועים משמעותיים / כמעט ונפגע ומפגעים',{x:7.1,y:6.08,w:3.9,h:.22,fontSize:11,bold:true,...rtl()})
+  slide.addText(ratioText(safety?.periodRatios?.near),{x:11.1,y:6.04,w:1.1,h:.30,fontSize:18,bold:true,color:TEAL,...centered()})
   addFooter(slide,'IML CONTROL · מתקן 42 · בטיחות')
 
   // 3 — executive snapshot

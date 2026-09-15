@@ -1065,6 +1065,24 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [managementUploadProgress, setManagementUploadProgress] = useState(null)
   const [managementPresentationBusy, setManagementPresentationBusy] = useState(false)
   const [managementPresentationMessage, setManagementPresentationMessage] = useState('')
+  const SAFETY_STORAGE_KEY = 'iml-management-safety-monthly-v1'
+  const [safetyMonth, setSafetyMonth] = useState(() => (to || iso(new Date())).slice(0,7))
+  const [safetyMonthly, setSafetyMonthly] = useState(() => { try { return JSON.parse(localStorage.getItem('iml-management-safety-monthly-v1') || '{}') } catch { return {} } })
+  const safetyFields = [
+    ['fatal','מוות','#7f1d1d'], ['irreversible','בלתי הפיך','#b91c1c'], ['lostDays','ימי היעדרות','#dc2626'],
+    ['medical','טיפול רפואי','#f97316'], ['firstAid','עזרה ראשונה','#eab308'], ['nearMiss','כמעט ונפגע','#8b5cf6'], ['unsafe','מצב לא בטיחותי / מפגעים','#38bdf8']
+  ]
+  const updateSafetyValue = (key, value) => setSafetyMonthly(prev => ({...prev, [safetyMonth]: {...(prev[safetyMonth]||{}), [key]: Math.max(0, Number(value)||0)}}))
+  useEffect(() => { localStorage.setItem(SAFETY_STORAGE_KEY, JSON.stringify(safetyMonthly)) }, [safetyMonthly])
+  const safetySummary = useMemo(() => {
+    const start=(from||`${new Date().getFullYear()}-01-01`).slice(0,7), end=(to||iso(new Date())).slice(0,7)
+    const keys=Object.keys(safetyMonthly).filter(k=>k>=start&&k<=end)
+    const year=(to||from||iso(new Date())).slice(0,4), annualKeys=Object.keys(safetyMonthly).filter(k=>k.startsWith(`${year}-`)&&k<=end)
+    const sum = list => safetyFields.reduce((o,[k]) => (o[k]=list.reduce((a,m)=>a+Number(safetyMonthly[m]?.[k]||0),0),o),{})
+    const period=sum(keys), annual=sum(annualKeys)
+    const ratios = vals => { const significant=vals.lostDays+vals.medical, near=vals.nearMiss+vals.unsafe; return { firstAid: significant>0&&vals.firstAid>0 ? vals.firstAid/significant : null, near: significant>0&&near>0 ? near/significant : null } }
+    return {period, annual, periodRatios:ratios(period), annualRatios:ratios(annual), months:keys, year}
+  }, [safetyMonthly, from, to])
   const refreshManagementHistory = async () => {
     const result = await loadManagementHistoryFromCloud(EMBEDDED_MANAGEMENT_HISTORY)
     setManagementHistory(result.history || EMBEDDED_MANAGEMENT_HISTORY)
@@ -3012,7 +3030,7 @@ material: normalize(getField(r, [
     const peakMonth = managementSummary.peakMonth?.label ? `${managementSummary.peakMonth.label} · ${fmt(managementSummary.peakMonth.actual)}` : 'אין נתון'
     const weakMonth = managementSummary.weakMonth?.label ? `${managementSummary.weakMonth.label} · ${fmt(managementSummary.weakMonth.actual)}` : 'אין נתון'
     return [
-      {title:'שער', bullets:[`סיכום מתקן 42 · ${facilityLabel}`, periodLabel]},
+      {title:'שער', bullets:[`תקציר מנהלים · ${facilityLabel}`, periodLabel]},
       {title:'בטיחות — משולש האירועים', bullets:['שדות פתוחים להשלמה ידנית', 'מסר מנהל היחידה']},
       {title:'תמונת מצב ניהולית', bullets:[`תפוקה מקובץ כמויות: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
       {title:'תכנון מול ביצוע', bullets:[`תכנון: ${fmt(managementSummary.fmsPlan)}`, `ביצוע מקובץ כמויות: ${fmt(managementSummary.fmsActual)}`]},
@@ -3030,11 +3048,11 @@ material: normalize(getField(r, [
 
   const downloadManagementPresentation = async () => {
     setManagementPresentationBusy(true)
-    setManagementPresentationMessage('מכין סיכום מתקן 42 אוטומטי (.pptx)...')
+    setManagementPresentationMessage('מכין קובץ PowerPoint אמיתי (.pptx)...')
     try {
-      await exportManagementPresentation({ summary: managementSummary, from, to })
+      await exportManagementPresentation({ summary: managementSummary, from, to, safety: safetySummary })
       const exportedFileName = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.pptx`
-      setManagementPresentationMessage(`סיכום מתקן 42 נוצר בהצלחה: ${exportedFileName}`)
+      setManagementPresentationMessage(`המצגת הבהירה נוצרה בהצלחה: ${exportedFileName}`)
       return
       const slides = buildManagementPresentationSlides()
       const PptxGenJS = await ensurePptxGenJS()
@@ -4356,6 +4374,7 @@ material: normalize(getField(r, [
           <button className={managementView==='plan'?'active':''} onClick={()=>setManagementView('plan')}>תכנון מול ביצוע</button>
           <button className={managementView==='costs'?'active':''} onClick={()=>setManagementView('costs')}>עלויות ויעילות</button>
           <button className={managementView==='quality'?'active':''} onClick={()=>setManagementView('quality')}>איכות ומגמות</button>
+          <button className={managementView==='safety'?'active':''} onClick={()=>setManagementView('safety')}>בטיחות</button>
           <button className={managementView==='presentation'?'active':''} onClick={()=>setManagementView('presentation')}>מצגת הנהלה</button>
         </div>
         <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
@@ -4395,6 +4414,7 @@ material: normalize(getField(r, [
           <article className="management-panel management-wide-panel"><h3>עלות קבלן מתקן 42 — היסטוריה</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תפוקה מקובץ כמויות</th><th>תשלום לקבלן</th><th>עלות / יחידת תפוקה</th></tr></thead><tbody>{managementSummary.monthlyTrend.filter(r=>r.cost).map(row=><tr key={`cost-${row.key}`}><td>{row.label}</td><td>{fmt(row.actual)}</td><td>₪{fmt(row.cost)}</td><td><b>{row.actual?`₪${row.costPerUnit.toFixed(3)}`:'—'}</b></td></tr>)}{!managementSummary.monthlyTrend.some(r=>r.cost)&&<tr><td colSpan="4" className="empty">אין נתוני קבלן בטווח שנבחר. ב-2026 הנתונים שהועלו מגיעים עד אוגוסט.</td></tr>}</tbody></table></div></article>
           <div className="management-summary-grid"><article className="management-panel"><h3>מה מודדים כאן?</h3><p className="management-explain">המסך מחבר את סכום התשלום מחשבון הקבלן לתפוקת האריזה מקובץ הכמויות. כל תמהיל, תפוקה וביצוע מחושבים רק מקובץ הכמויות.</p></article><article className="management-panel"><h3>זמינות נתוני עלות</h3><p className="management-explain">לשנת 2026 חשבונות הקבלן שהועלו זמינים עד <b>אוגוסט 2026</b>. ללא קובץ כמויות לא תחושב עלות ליחידת תפוקה.</p></article></div>
         </>}
+        {managementView==='safety' && <div className="management-summary-grid safety-management-grid"><article className="management-panel safety-entry-panel"><h3>הזנת נתוני בטיחות חודשיים</h3><p className="management-explain">בחר חודש והזן את הערכים. הנתונים נשמרים לפי חודש ומשמשים אוטומטית למצגת לפי ציר הזמן.</p><label className="safety-month-picker"><span>חודש להזנה</span><input type="month" value={safetyMonth} onChange={e=>setSafetyMonth(e.target.value)}/></label><div className="safety-input-list">{safetyFields.map(([key,label,color])=><label key={key} style={{'--safety-color':color}}><span>{label}</span><input type="number" min="0" step="1" value={safetyMonthly[safetyMonth]?.[key]??''} placeholder="0" onChange={e=>updateSafetyValue(key,e.target.value)}/></label>)}</div></article><article className="management-panel safety-preview-panel"><h3>סיכום לפי ציר הזמן</h3><div className="safety-preview-head"><b>{from} עד {to}</b><span>{safetySummary.months.length} חודשים עם נתונים</span></div><div className="safety-pyramid-preview">{safetyFields.map(([key,label,color],i)=><div key={key} style={{background:color,width:`${48+i*7}%`}}><span>{label}</span><b>{safetySummary.period[key]||0}</b></div>)}</div><div className="safety-ratio-cards"><div><span>אירועים משמעותיים / עזרה ראשונה</span><b>{safetySummary.periodRatios.firstAid?`1:${safetySummary.periodRatios.firstAid.toFixed(1)}`:'—'}</b><small>(ימי היעדרות + טיפול רפואי) ÷ עזרה ראשונה</small></div><div><span>אירועים משמעותיים / כמעט ונפגע ומפגעים</span><b>{safetySummary.periodRatios.near?`1:${safetySummary.periodRatios.near.toFixed(1)}`:'—'}</b><small>(ימי היעדרות + טיפול רפואי) ÷ (כמעט ונפגע + מפגעים)</small></div></div><p className="management-explain">המצטבר השנתי מחושב מתחילת {safetySummary.year} ועד סוף התקופה שנבחרה.</p></article></div>}
         {managementView==='quality' && <div className="management-summary-grid"><article className="management-panel"><h3>איכות בתקופה</h3><div className="management-quality-big"><b>{managementSummary.hasReliableRft?`${managementSummary.rft.toFixed(1)}%`:'—'}</b><span>RFT</span><small>{managementSummary.hasReliableRft?'יעד ייחוס: 98%':'ממתין למקור RFT מאומת'}</small></div><div className="management-rank-row"><span><b>לוטים עם החלטה/חריגה שנמצאו</b></span><strong>{managementSummary.qualityLots||0}</strong></div><div className="management-rank-row"><span><b>לוטים עם דחייה / Restricted</b></span><strong>{managementSummary.qualityBadLots||0}</strong></div><div className="management-rank-row"><span><b>חריגות פתוחות</b></span><strong>{openDeviations.length}</strong></div></article><article className="management-panel"><h3>מה נדרש כדי לחשב RFT נכון?</h3><p className="management-explain">צריך מקור שבו קיימת אוכלוסיית כל ה-Inspection Lots בתקופה, לא רק לוטים חריגים: Inspection Lot, חומר, אצווה, מתקן/תחנה, תאריך, והחלטת שימוש או סטטוס First Pass לכל לוט.</p><p className="management-explain">אם קיים דוח RFT חודשי מוכן, מספיקים גם: חודש, מתקן, מספר לוטים שנבדקו, מספר שעברו בפעם הראשונה ו-RFT%. ל-COPQ נדרש דוח עלות אי-איכות לפי חודש ומתקן.</p></article></div>}
         {managementView==='presentation' && <div className="management-summary-grid presentation-builder-grid"><article className="management-panel management-presentation-card"><h3>מצגת הנהלה אוטומטית</h3><p className="management-explain">המצגת נוצרת לפי התקופה והמתקנים שנבחרו בתקציר המנהלים, ומשתמשת באותם נתוני Supabase/IML: תפוקה, FMS, מגמות, עלויות, איכות ותובנות.</p><button type="button" className="management-ppt-button" onClick={downloadManagementPresentation} disabled={managementPresentationBusy}>{managementPresentationBusy ? <RefreshCw size={18}/> : <Download size={18}/>}<span>{managementPresentationBusy ? 'מכין מצגת...' : 'הפק PowerPoint'}</span></button>{managementPresentationMessage&&<p className="management-upload-message">{managementPresentationMessage}</p>}</article><article className="management-panel"><h3>שקופיות שייכנסו למצגת</h3><div className="presentation-slide-list">{buildManagementPresentationSlides().map((slide,i)=><div key={`${slide.title}-${i}`}><b>{String(i+1).padStart(2,'0')}</b><span>{slide.title}</span><small>{(slide.bullets||[]).slice(0,2).join(' · ')}</small></div>)}</div></article></div>}
         <article className="management-panel management-insights"><h3>תובנות אוטומטיות מהנתונים</h3><div className="management-insight-grid">{managementSummary.insights.map((item,i)=><div className={`management-insight ${item.state}`} key={`${item.title}-${i}`}><strong>{item.title}</strong><p>{item.text}</p></div>)}{!managementSummary.insights.length&&<div className="management-insight good"><strong>אין מספיק נתונים להשוואה</strong><p>בחר תקופה הכוללת חודשים 2024–2026 ומתקן ניהולי כדי לקבל השוואות.</p></div>}</div></article>
