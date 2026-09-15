@@ -1,16 +1,22 @@
+import { parseContractorWorkbook } from './contractorWorkbook'
+import { productionDailyQuantities } from './productionDailyQuantities'
+import { calculateUploadStats, uploadDay } from './uploadStats'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Upload, Database, Factory, FlaskConical, CalendarDays, Search, CheckCircle2,
   AlertTriangle, Clock3, X, BarChart3, Download, Trash2, Save, Target,
   Gauge, CalendarCheck, BellRing, TrendingUp, FileSpreadsheet, ShieldCheck, RefreshCw, ClipboardList, Activity, Archive, LogOut, UserCircle, Cloud, WifiOff, ArrowLeft, HeartPulse, Printer, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Home, ChevronLeft, Settings2, Volume2, VolumeX
 } from 'lucide-react'
-import { loadCloudDatasetOnce, loadCloudDatasetMatching, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
+import { loadCloudDataset, loadCloudDatasetOnce, loadCloudDatasetMatching, loadCloudDatasetHistory, getCloudDatasetMeta, uploadCloudDataset, uploadCloudDatasetIncremental, deleteAllCloudDatasets, getCloudHealth, saveActiveTargetWorkbook, loadActiveTargetWorkbook, saveMonthlyTargetDataset, loadAllMonthlyTargetDatasets, saveMonthlyTargetWorkbook, loadMonthlyTargetWorkbook } from './cloudData'
 import { supabase } from './supabase'
 import { buildResourceRows } from './resourceEngine'
 import { productionMappingKey, stationFamily } from './mappingEngine'
 import { prodLineInfo, isExcludedProdLine, excelFacilityLabel } from './prodLineMapping'
 import { MANAGEMENT_HISTORY as EMBEDDED_MANAGEMENT_HISTORY } from './data/managementHistory'
 import { loadManagementHistoryFromCloud, getManagementCloudStatus, upsertManagementPlanRows, upsertManagementContractorRows, inspectManagementRows, getManagementUploadHistory, logManagementUpload } from './data/managementHistoryCloud'
+import { exportManagementPresentation } from './utils/managementPresentation'
+import { importedTargetValues, isApprovedTargetResource, parseTargetNumber } from './targetRules'
+import pptxGenBundleUrl from './vendor/pptxgen.bundle.js?url'
 import * as XLSXCore from 'xlsx'
 import './styles.css'
 
@@ -20,24 +26,22 @@ import './styles.css'
 const XLSX = window.XLSX || XLSXCore
 
 let pptxGenLoaderPromise = null
-const ensurePptxGenJS = () => {
+const ensurePptxGenJS = async () => {
   if (window.PptxGenJS) return Promise.resolve(window.PptxGenJS)
   if (pptxGenLoaderPromise) return pptxGenLoaderPromise
-  pptxGenLoaderPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector('script[data-iml-pptxgen]')
-    if (existing) {
-      existing.addEventListener('load', () => window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error('PptxGenJS לא נטען')))
-      existing.addEventListener('error', () => reject(new Error('טעינת מנוע PowerPoint נכשלה')))
-      return
-    }
+  const loadScript = src => new Promise((resolve, reject) => {
+    document.querySelectorAll('script[data-iml-pptxgen]').forEach(node => node.remove())
     const script = document.createElement('script')
-    script.src = '/pptxgen.bundle.js'
+    script.src = src
     script.async = true
     script.dataset.imlPptxgen = '1'
     script.onload = () => window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error('PptxGenJS לא נטען'))
     script.onerror = () => reject(new Error('טעינת מנוע PowerPoint נכשלה'))
     document.head.appendChild(script)
   })
+  pptxGenLoaderPromise = loadScript(pptxGenBundleUrl)
+    .catch(() => loadScript('https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@4.0.1/dist/pptxgen.bundle.js'))
+    .catch(error => { pptxGenLoaderPromise = null; throw error })
   return pptxGenLoaderPromise
 }
 
@@ -73,7 +77,7 @@ const DB_STORE = 'dashboard-state'
 const DB_KEY = 'sprint1182-build2-batch-material'
 const TARGET_FILE_KEY = 'latest-monthly-target-workbook'
 const APP_VERSION = '11.11.0'
-const BUILD_LABEL = 'Sprint 11.23.0 — Facility 42 Business Unit'
+const BUILD_LABEL = 'IML 2026.09.07 — Production Summary v4'
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 // iPhone/iPad Safari can be terminated by iOS when a very large dashboard
@@ -197,9 +201,17 @@ const idbClear = async () => {
 }
 
 const normalize = (v) => String(v ?? '').trim()
+// Excel/Supabase can represent the same SAP identifier as 000123, 123 or
+// 123.0.  Use a canonical comparison value while preserving the original
+// value for display.
+const normalizeSapId = (v) => normalize(v)
+  .replace(/\s+/g, '')
+  .replace(/\.0+$/, '')
+  .replace(/^0+(?=\d)/, '')
+  .toUpperCase()
 const batchMaterialKey = (batch, material) => {
-  const b = normalize(batch)
-  const m = normalize(material)
+  const b = normalizeSapId(batch)
+  const m = normalizeSapId(material)
   return b && m ? `${b}|${m}` : ''
 }
 const normalizeRouting = (v) => normalize(v).toUpperCase()
@@ -293,6 +305,7 @@ const iso = (d) => {
 }
 const monthKey = (d) => iso(d).slice(0, 7)
 const fmt = (n) => Math.round(n || 0).toLocaleString('he-IL')
+const cumulativeQuantity = row => num(row?.cumulativeQty ?? row?.qty)
 const pctFmt = (n) => `${Math.round(n || 0)}%`
 const getField = (row, names) => {
   const map = new Map(Object.keys(row || {}).map(k => [normKey(k), row[k]]))
@@ -309,6 +322,19 @@ const canonicalFacility = (value) => {
   }
   const digits = clean.match(/15\d{2}/)?.[0]
   return digits || clean
+}
+const qualityFacility = row => {
+  const candidates = [
+    getField(row, ['Inspection Lot Storage Location']),
+    getField(row, ['Process Order Storage Location']),
+    getField(row, ['Storage Location', 'Facility', 'Production Line']),
+  ]
+  const invalid = new Set(['', 'N/A', 'NA', '-', 'NULL', 'UNDEFINED'])
+  const normalized = candidates
+    .map(value => normalize(value).toUpperCase())
+    .filter(value => !invalid.has(value))
+    .map(canonicalFacility)
+  return normalized.find(value => Object.prototype.hasOwnProperty.call(FACILITY_ALIASES, value)) || normalized[0] || ''
 }
 
 // Production rows mapped to facility 1542 must actually belong to one of the
@@ -404,30 +430,13 @@ const targetDescriptionTokens = (resource) => {
   const generic = new Set(['EC','SC','WG','CS','LQ','24F'])
   return !clean || generic.has(clean) ? [] : [clean]
 }
-const APPROVED_TARGET_RESOURCES = new Set([
-  'EC (23)','SHAKED ISO 42','SHAKED ISO 23','LQ 1LT (42)','LQ 5 LT (42)','LQ 10/20 LT (42)','LQ 43','SC (28)','WG (19)','WG SMALL PACKS (19)',
-  '24F128','24F','EC (25)','DIURON (40)','TOLUREX (40)','CS (25,40)','BROMACIL (25,40)','GALIGAN (25,40)',
-  'PROPA PREMIX (25,40)','FLUOROCHLORIDON (25,40)','SAFLUFENACIL TECH (25,40)','METAZACHLOR (41)',
-  'ATRALONE (41)','NANA (41)','D. DAMASCONE (41)'
-])
-const isApprovedTargetResource = value => APPROVED_TARGET_RESOURCES.has(normalize(value).toUpperCase())
-
-const parseTargetNumber = (value) => {
-  if (value === null || value === undefined || value === '' || /^\s*-+\s*$/.test(String(value)) || /DIV\/0/i.test(String(value))) return 0
-  const text = String(value).trim(); const negative = /^\(.*\)$/.test(text)
-  const n = Number(text.replace(/[(),%\s]/g,'').replace(/,/g,''))
-  return Number.isFinite(n) ? (negative ? -n : n) : 0
-}
-
-// Sprint 11.9.0 Trial 4 — normalize legacy monthly targets.
-// SUM targets are expressed in thousands (t / m³), while production rows are L / kg.
-// New uploads are already multiplied by 1000; old cloud/cache rows are normalized here once in memory.
+// Target rows are persisted in production units (L / kg). Scaling belongs only to
+// the workbook-import boundary; applying a value-based legacy heuristic here can
+// multiply a valid small stored target (for example 8,000) a second time.
 const normalizeStoredTargetRow = row => {
-  const scaleLegacy = value => {
-    const n = Number(value) || 0
-    return n > 0 && n < 10000 ? n * 1000 : n
-  }
-  return { ...row, target:scaleLegacy(row?.target), capacity:scaleLegacy(row?.capacity) }
+  const capacity = Number(row?.capacity) || 0
+  const storedTarget = Number(row?.target) || 0
+  return { ...row, capacity, target:storedTarget > 0 ? storedTarget : capacity }
 }
 const isLegacyCombinedTarget = value => {
   const text = normalize(value).toUpperCase().replace(/\s+/g,' ')
@@ -445,11 +454,11 @@ const stableDateKey = value => {
   return Number.isNaN(date.getTime()) ? normalize(value) : date.toISOString()
 }
 
-// Stable row identities used to prevent duplicate records when a file is loaded again.
+// Quantities are mutable values, not row identity. New uploads take precedence over stored history.
 const productionRowKey = row => [
   normalize(row?.facility), normalize(row?.productionDay), stableDateKey(row?.finishDate || row?.date),
   normalize(row?.order), normalize(row?.batch), normalize(row?.material), normalize(row?.routingGroup), normalize(row?.prodLine),
-  normalize(row?.orderType), String(Number(row?.qty) || 0), String(Number(row?.plannedQty) || 0)
+  normalize(row?.orderType)
 ].join('|')
 
 const qualityBusinessRowKey = row => [
@@ -458,7 +467,7 @@ const qualityBusinessRowKey = row => [
 ].join('|')
 const qualityLegacyRowKey = row => [
   normalize(row?.inspectionLot), normalize(row?.batch), normalize(row?.material),
-  normalize(row?.characteristic), stableDateKey(row?.date), normalize(row?.value), normalize(row?.qualitative)
+  normalize(row?.characteristic), stableDateKey(row?.date)
 ].join('|')
 const qualityRowKey = row => (normalize(row?.sampleNo) || normalize(row?.operationActivity)) ? qualityBusinessRowKey(row) : qualityLegacyRowKey(row)
 
@@ -466,8 +475,8 @@ const deviationRawRowKey = row => [
   normalize(getField(row, ['Inspection Lot','Inspection Lot #'])),
   normalize(getField(row, ['Batch','Batch Number'])),
   normalize(getField(row, ['Material #','Material Number','Material No.','מקט','מק"ט','מק״ט','Material'])),
-  normalize(getField(row, ['UD Code','Usage Decision','Usage decision','החלטת שימוש'])),
-  stableDateKey(excelDate(getField(row, ['Inspection Lot UD Date','Date of Lot Creation','Process Order Delivered Date','Start Date of Inspection'])))
+  // Decision/status/date of decision can change when an existing deviation is resolved.
+  normalize(getField(row, ['Inspection Lot','Inspection Lot #'])) ? '' : stableDateKey(excelDate(getField(row, ['Date of Lot Creation','Start Date of Inspection'])))
 ].join('|')
 
 const dedupeRows = (rows, keyFn) => {
@@ -1408,6 +1417,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         const changed = kind => {
           const remote = remoteMeta[kind]
           const local = cached?.dataMeta?.[kind]
+          // Reload once even when the active version ID matches an older archive-based cache.
+          if (kind === 'production' && local?.syncRevision !== 'daily-delta-v2') return true
+          if (!IS_MOBILE_DEVICE && ['quality', 'deviations'].includes(kind) && local?.syncRevision !== 'active-full-v1') return true
           if (!remote) return !local
           const remoteId = remote.active_version_id || remote.updated_at || remote.loaded_at
           const localId = local?.versionId || local?.loadedAt
@@ -1417,20 +1429,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         let loadedRows = 0
         if (changed('production')) {
           setStatus('טוען נתוני ייצור מעודכנים...')
-          if (IS_IOS_DEVICE) {
-            const cutoff = new Date()
-            cutoff.setHours(0, 0, 0, 0)
-            cutoff.setDate(cutoff.getDate() - 45)
-            loadedRows += applyDataset('production', await loadCloudDatasetMatching('production', row => {
-              const rawDate = row?.finishDate ?? row?.date ?? row?.Date
-              if (!rawDate) return false
-              const parsed = rawDate instanceof Date ? rawDate : new Date(rawDate)
-              const ms = parsed?.getTime?.()
-              return Number.isFinite(ms) && ms >= cutoff.getTime()
-            }))
-          } else {
-            loadedRows += applyDataset('production', await loadCloudDatasetOnce('production'))
-          }
+          const dataset = await loadCloudDataset('production')
+          loadedRows += applyDataset('production', { ...dataset, meta:{ ...dataset.meta, syncRevision:'daily-delta-v2' } })
           setPerformance(current => ({ ...current, queries:current.queries + 1, phase:'הדשבורד זמין' }))
           await new Promise(resolve => setTimeout(resolve, 0))
         }
@@ -1476,7 +1476,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             if (!active) return
             if (!changed(kind)) continue
             setStatus(`טוען ${kind} ברקע...`)
-            loadedRows += applyDataset(kind, await loadCloudDatasetOnce(kind))
+            // The active version is the same complete snapshot shown after upload.
+            // Do not reconstruct it from archived versions or drop older months.
+            const dataset = await loadCloudDataset(kind)
+            if (kind !== 'targets') dataset.meta = { ...dataset.meta, syncRevision:'active-full-v1' }
+            loadedRows += applyDataset(kind, dataset)
             setPerformance(current => ({ ...current, queries:current.queries + 1, phase:`נטען ${kind}` }))
             await new Promise(resolve => setTimeout(resolve, 0))
           }
@@ -1629,7 +1633,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     const checks = {
       production: [
         ['מתקן / Storage Location / PROD LINE', present('Storage Location', 'Storage location', 'PROD LINE', 'Prod Line', 'Production Line')],
-        ['כמות', present('Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity')],
+        ['כמות / Delivered quantity (GMEIN)', present('Delivered quantity (GMEIN)')],
         ['Order או Batch', present('Order', 'Process Order', 'Batch', 'Batch Number')],
       ],
       quality: [
@@ -1673,6 +1677,9 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         const kind = forcedKind || detected
         const missing = validateRows(kind, rows)
         if (missing.length) throw new Error(`${file.name}: חסרות עמודות חובה — ${missing.join(', ')}`)
+        const tracked = ['production','quality','deviations'].includes(kind)
+        // Read the complete active dataset, never a filtered/mobile cache, for cloud counts.
+        const baseline = tracked ? await loadCloudDataset(kind) : null
         let storedCount = rows.length
         let rowsForCloud = rows
         let lastFileUniqueRows = rows.length
@@ -1696,7 +1703,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
     getField(r, ['Release date (actual)', 'Time Stamp'])
   )
 ),
-            qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
+            qty: num(getField(r, ['Delivered quantity (GMEIN)'])),
             plannedQty: num(getField(r, ['Order quantity (GMEIN)', 'Order Quantity (GMEIN)', 'Order quantity', 'Planned quantity', 'Planned Quantity'])),
             order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
             batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -1710,20 +1717,24 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               selectableFacilitySet.has(String(r.facility)) &&
               (r.qty || r.order || r.batch)
             ), productionRowKey)
-          storedCount = compact.length
-          rowsForCloud = compact
+          // The uploaded file contains the current month from day 1 through today.
+          // Preserve quantity-only history already restored from Supabase and replace
+          // matching rows with the newest file, instead of replacing older months.
+          rowsForCloud = dedupeRows([...compact, ...(baseline?.rows || []), ...(production || [])], productionRowKey)
+          storedCount = rowsForCloud.length
           lastFileUniqueRows = compact.length
+          setStatus(`${displayDatasetName('production')}: ${fmt(compact.length)} שורות בקובץ החדש + היסטוריית כמויות שמורה`)
         }
         else if (kind === 'quality') {
           const compact = dedupeRows(rows.map(r => ({
             __compactQuality: true,
-            facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
+            facility: qualityFacility(r),
             date: combineExcelDateTime(
               getField(r, ['Sample Date', 'Sampling Date', 'Date of Sample', 'Date of Sampling', 'תאריך דגימה', 'Start Date of Inspection', 'Date of Lot Creation', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date']),
               getField(r, ['Sample Time', 'Sampling Time', 'Time of Sample', 'Time of Sampling', 'שעת דגימה', 'Inspection Time', 'Start Time of Inspection', 'Time']),
               getField(r, ['Sample Date Time', 'Sampling Date Time', 'Sample Datetime', 'Sampling Datetime', 'תאריך ושעת דגימה'])
             ),
-            batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, [
+            batch: normalize(getField(r, ['Batch', 'Batch Number', 'Batch No.', 'Batch No', 'Batch ID'])), material: normalize(getField(r, [
   'Material #',
   'Material Number',
   'Material No.',
@@ -1732,7 +1743,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   'מק״ט',
   'Material'
 ])),
-            order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])), status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
+            order: normalize(getField(r, ['Process Order', 'Process Order #', 'Process Order Number', 'Process Order No.', 'Process Order No', 'Order'])), status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
             approval: normalize(getField(r, ['QA Approval'])), inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
             sampleNo: normalize(getField(r, ['Sample #', 'Sample Number', 'Sample'])),
             operationActivity: normalize(getField(r, ['Operation Activity', 'Operation activity', 'Operation'])),
@@ -1747,15 +1758,15 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             selectableFacilitySet.has(String(r.facility || '')) &&
             (r.batch || r.inspectionLot)
           ), qualityRowKey)
-          // 11.9.47: QUALITY is rebuilt from the uploaded source file after
-          // filtering to selectable facilities. Do not append to the historical
-          // unfiltered cloud dataset, otherwise inactive facilities remain forever.
+          // New data wins; rows absent from this upload remain in the cloud history.
           lastFileUniqueRows = compact.length
-          storedCount = compact.length
-          rowsForCloud = compact
-          setStatus(`${displayDatasetName('quality')}: נשמרות ${fmt(compact.length)} רשומות ממתקנים פעילים בלבד`)
+          rowsForCloud = dedupeRows([...compact, ...(baseline?.rows || [])], qualityRowKey)
+          storedCount = rowsForCloud.length
+          setStatus(`${displayDatasetName('quality')}: ${fmt(compact.length)} רשומות בקובץ החדש + היסטוריה שמורה`)
         } else if (kind === 'deviations') {
-          rowsForCloud = dedupeRows(rows, deviationRawRowKey)
+          const compact = dedupeRows(rows, deviationRawRowKey)
+          lastFileUniqueRows = compact.length
+          rowsForCloud = dedupeRows([...compact, ...(baseline?.rows || [])], deviationRawRowKey)
           storedCount = rowsForCloud.length
         }
         else if (kind === 'targets') {
@@ -1765,6 +1776,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             const makeTarget = (resource, overrides = {}) => {
               const facilities = targetFacilityIds(resource)
               const facility = facilities[0] || canonicalFacility(getField(r, ['Storage Location','Facility','מתקן']))
+              const { capacity, target } = importedTargetValues(
+                getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target']),
+                getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])
+              )
               return {
                 resource, facility, facilities: facilities.length ? facilities : (facility ? [facility] : []),
                 facilityLabel:(resource.match(/\(([^)]+)\)/)?.[1]||'').trim(), descriptionTokens:targetDescriptionTokens(resource),
@@ -1773,8 +1788,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
                 station:normalize(getField(r,['Station','Work Center','תחנה']))||facility, lineName:resource,
                 month:parseMonth(getField(r,['Month','חודש','Target Month','Plan Month']),fallbackMonth)||fallbackMonth,
                 activity:normalize(getField(r,['Activity','Type','סוג פעילות','Production/Packaging']))||'ייצור / אריזה',
-                capacity:parseTargetNumber(getField(r,['Capacity','קיבולת','Monthly Capacity','קיבולת חודשית'])) * 1000,
-                target:parseTargetNumber(getField(r,['Plan','Monthly Target','Monthly Plan','יעד חודשי','תוכנית חודשית','Target'])) * 1000,
+                capacity,
+                target,
                 fileProduction:parseTargetNumber(getField(r,['Production','ייצור'])), fileAchievement:parseTargetNumber(getField(r,['% Achievement','Achievement'])),
                 requiredPerDay:parseTargetNumber(getField(r,['Req. t/d','Required t/d'])), lastDay:parseTargetNumber(getField(r,['Last day'])),
                 adjustedRequiredPerDay:parseTargetNumber(getField(r,['Adjusted Req. t/d'])), actualPerDay:parseTargetNumber(getField(r,['Actual t/d'])),
@@ -1793,7 +1808,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
               ]
             }
             return [makeTarget(sourceResource)]
-          }).filter(r => r.resource && (r.target > 0 || r.capacity > 0))
+          }).filter(r => r.resource && isApprovedTargetResource(r.resource) && (r.target > 0 || r.capacity > 0))
             .map(targetRow => {
               // Dynamic Targets v1: the monthly workbook is the source of truth.
               // New rows are never blocked by a hard-coded resource whitelist.
@@ -1853,6 +1868,10 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
           setUploadProgress({ fileName:displayName, kind, ...progress })
           setStatus(`${displayName}: ${progress.message} (${progress.percent}%)`)
         }
+        if (tracked) {
+          const auditKey = kind === 'production' ? productionRowKey : kind === 'quality' ? qualityRowKey : deviationRawRowKey
+          nextMeta.uploadStats = calculateUploadStats(baseline.rows, rowsForCloud, auditKey, baseline.meta?.uploadStats)
+        }
         const savedMeta = await uploadCloudDataset(kind, rowsForCloud, nextMeta, currentUser, progressHandler)
         if (kind === 'production') setProduction(rowsForCloud)
         else if (kind === 'quality') setQuality(rowsForCloud)
@@ -1908,7 +1927,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const handleFiles = (files) => loadFiles(files)
 
 
-  const prod = useMemo(() => production.map(r => {
+  const prod = useMemo(() => productionDailyQuantities(production.map(r => {
     if (r?.__compactProduction) {
       const assignment = productionAssignment(r.facility, r.routingGroup, r.routingDescription, r.prodLine)
       return {
@@ -1918,6 +1937,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
         prodLineTool: normalize(r.prodLineTool || assignment.mapping?.tool),
         productionDay: normalize(r.productionDay) || iso(r.finishDate),
         date: productionDateFromDay(r.productionDay) || (r.finishDate ? new Date(r.finishDate) : null),
+        snapshotTime: r.finishDate || r.date || '',
         qty: num(r.qty),
         plannedQty: num(r.plannedQty),
         order: normalize(r.order),
@@ -1947,7 +1967,8 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       prodLineTool: assignment.mapping?.tool || '',
       productionDay: localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date'])),
       date: productionDateFromDay(localDateOnlyString(getField(r, ['Actual finish date', 'Actual Finish Date']))) || finish,
-      qty: num(getField(r, ['Delivered quantity (GMEIN)', 'Confirmed Yield Quantity (GMEIN)', 'Delivered quantity'])),
+      snapshotTime: localDateTimeString(finish),
+      qty: num(getField(r, ['Delivered quantity (GMEIN)'])),
       plannedQty: num(getField(r, ['Order quantity (GMEIN)', 'Order Quantity (GMEIN)', 'Order quantity', 'Planned quantity', 'Planned Quantity'])),
       order: normalize(getField(r, ['Order', 'Process Order', 'Work Order'])),
       batch: normalize(getField(r, ['Batch', 'Batch Number'])),
@@ -1967,7 +1988,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
       hour: finish ? finish.getHours() : null,
       shift: shiftInfo(finish),
     }
-  }).filter(r => r.facility), [production])
+  }).filter(r => r.facility)), [production])
 const materialByBatchDescription = useMemo(() => {
   const map = new Map()
 
@@ -1997,13 +2018,13 @@ const materialByBatchDescription = useMemo(() => {
   }
 
   return ({
-    facility: canonicalFacility(getField(r, ['Inspection Lot Storage Location', 'Process Order Storage Location', 'Storage Location', 'Facility', 'Production Line'])),
+    facility: qualityFacility(r),
     date: combineExcelDateTime(
       getField(r, ['Sample Date', 'Sampling Date', 'Date of Sample', 'Date of Sampling', 'תאריך דגימה', 'Start Date of Inspection', 'Date of Lot Creation', 'Process Order Confirmed Release Date', 'End Date of Inspection', 'Inspection Lot UD Date', 'Process Order Delivered Date']),
       getField(r, ['Sample Time', 'Sampling Time', 'Time of Sample', 'Time of Sampling', 'שעת דגימה', 'Inspection Time', 'Start Time of Inspection', 'Time']),
       getField(r, ['Sample Date Time', 'Sampling Date Time', 'Sample Datetime', 'Sampling Datetime', 'תאריך ושעת דגימה'])
     ),
-    batch: normalize(getField(r, ['Batch', 'Batch Number'])), material: normalize(getField(r, [
+    batch: normalize(getField(r, ['Batch', 'Batch Number', 'Batch No.', 'Batch No', 'Batch ID'])), material: normalize(getField(r, [
   'Material #',
   'Material Number',
   'Material No.',
@@ -2012,7 +2033,7 @@ const materialByBatchDescription = useMemo(() => {
   'מק״ט',
   'Material'
 ])),
- order: normalize(getField(r, ['Process Order', 'Process Order #', 'Order'])),
+ order: normalize(getField(r, ['Process Order', 'Process Order #', 'Process Order Number', 'Process Order No.', 'Process Order No', 'Order'])),
 status: normalize(getField(r, ['Result Status', 'QA Approval', 'Status'])),
 inspectionLot: normalize(getField(r, ['Inspection Lot', 'Inspection Lot #'])),
 udCode: normalize(getField(r, ['UD Code', 'Usage Decision', 'Usage decision', 'החלטת שימוש']))
@@ -2070,11 +2091,11 @@ material: normalize(getField(r, [
   // dataset can exceed 800K result rows, so building full arrays for every Batch during
   // initial render is unnecessary and can make Chrome report "Page Unresponsive".
   const selectedQualityKey = useMemo(() => {
-    const batch = normalize(selectedBatch)
+    const batch = normalizeSapId(selectedBatch)
     if (!batch) return ''
-    const requestedMaterial = normalize(selectedBatchMaterial)
+    const requestedMaterial = normalizeSapId(selectedBatchMaterial)
     if (requestedMaterial) return batchMaterialKey(batch, requestedMaterial)
-    const materials = [...new Set(dashboardProd.filter(row => normalize(row.batch) === batch).map(row => normalize(row.material)).filter(Boolean))]
+    const materials = [...new Set(dashboardProd.filter(row => normalizeSapId(row.batch) === batch).map(row => normalizeSapId(row.material)).filter(Boolean))]
     return materials.length === 1 ? batchMaterialKey(batch, materials[0]) : ''
   }, [selectedBatch, selectedBatchMaterial, dashboardProd])
 
@@ -2167,22 +2188,22 @@ material: normalize(getField(r, [
   // Plant rule: a quality record is uniquely identified by exact Batch + Material.
   // Order, facility, routing group and inspection lot remain display fields only.
   const selectedBatchData = useMemo(() => {
-    const batch = normalize(selectedBatch)
-    const requestedMaterial = normalize(selectedBatchMaterial)
+    const batch = normalizeSapId(selectedBatch)
+    const requestedMaterial = normalizeSapId(selectedBatchMaterial)
     if (!batch) return null
 
-    const batchProductionRows = dashboardProd.filter(row => normalize(row.batch) === batch)
-    const batchMaterials = [...new Set(batchProductionRows.map(row => normalize(row.material)).filter(Boolean))]
+    const batchProductionRows = dashboardProd.filter(row => normalizeSapId(row.batch) === batch)
+    const batchMaterials = [...new Set(batchProductionRows.map(row => normalizeSapId(row.material)).filter(Boolean))]
     const material = requestedMaterial || (batchMaterials.length === 1 ? batchMaterials[0] : '')
     const key = batchMaterialKey(batch, material)
     const productionRows = material
-      ? batchProductionRows.filter(row => normalize(row.material) === material)
+      ? batchProductionRows.filter(row => normalizeSapId(row.material) === material)
       : batchProductionRows
 
-    const indexedQuality = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
-    const qualityForBatchMaterial = indexedQuality.length
-      ? indexedQuality
-      : (key ? qualityRows.filter(row => batchMaterialKey(row.batch, row.material) === key) : [])
+    // The business key is strictly Batch + Material. The source workbooks
+    // confirm that this composite is unique and directly shared by production
+    // and laboratory results; never fall back to Batch alone.
+    const qualityForBatchMaterial = key ? (qualityIndex.byBatchMaterial.get(key) || []) : []
     const deviationForBatchMaterial = key
       ? enrichedDeviationRows.filter(row => batchMaterialKey(row.batch, row.material) === key)
       : []
@@ -2791,10 +2812,8 @@ material: normalize(getField(r, [
     const allHistoryMonths=Object.keys(managementHistory.planActual||{}).sort()
     const inRange=allHistoryMonths.filter(key=>(!fromMonth||key>=fromMonth)&&(!toMonth||key<=toMonth))
     const scopeMonths=inRange.length?inRange:(toMonth?[toMonth]:[])
-    // FMS target comes from the historical/audited target source, but execution must
-    // always come from the live IML production rows currently loaded in the app.
-    // This avoids stale Plan-vs-Actual snapshots showing 0 execution while IML already
-    // contains production for the selected month (e.g. July 2026).
+    // Targets come from the audited FMS source. Every quantity, output and actual
+    // shown in management views comes exclusively from the loaded quantities file.
     const liveActualByMonth=new Map()
     const liveGroupActualByMonth=new Map()
     filtered.forEach(row=>{
@@ -2825,16 +2844,15 @@ material: normalize(getField(r, [
       const baseGroups = uniqueLogical.length===1 ? managementPlanForFacility(managementHistory,key,uniqueLogical[0]).groups : {}
       const groups = Object.fromEntries(Object.entries(baseGroups||{}).map(([group,vals])=>[
         group,
-        { ...vals, actual: uniqueLogical[0]==='42' ? num(liveGroupActualByMonth.get(`${key}|${group}`)) : num(vals.actual) }
+        { ...vals, actual: uniqueLogical[0]==='42' ? num(liveGroupActualByMonth.get(`${key}|${group}`)) : 0 }
       ]))
-      return { key,label:monthLabelHe(key),plan,actual,pct:plan?actual/plan*100:0,cost:costRec?.cost||0,packaged:costRec?.packaged||0,costPerUnit:costRec?.costPerUnit||0,groups }
+      const contractorCost=num(costRec?.cost)
+      return { key,label:monthLabelHe(key),plan,actual,pct:plan?actual/plan*100:0,cost:contractorCost,packaged:costRec?.packaged||0,costPerUnit:actual?contractorCost/actual:0,groups }
     })
     const currentYear=Number((toMonth||fromMonth||String(new Date().getFullYear())).slice(0,4))
     const selectedMonthNums=scopeMonths.filter(k=>Number(k.slice(0,4))===currentYear).map(k=>k.slice(5,7))
     let previousActual=0, previousPlan=0
-    selectedMonthNums.forEach(mm=>uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(managementHistory,`${currentYear-1}-${mm}`,facility); previousPlan+=rec.plan; previousActual+=rec.actual }))
-    // Prefer live IML production for the previous-year comparison whenever those rows
-    // are loaded. This makes YoY consistent with the current-period execution source.
+    selectedMonthNums.forEach(mm=>uniqueLogical.forEach(facility=>{ const rec=managementPlanForFacility(managementHistory,`${currentYear-1}-${mm}`,facility); previousPlan+=rec.plan }))
     const previousFrom = from ? `${currentYear-1}${from.slice(4)}` : ''
     const previousTo = to ? `${currentYear-1}${to.slice(4)}` : ''
     const previousLiveRows = dashboardProd.filter(row=>{
@@ -2844,45 +2862,45 @@ material: normalize(getField(r, [
       return !uniqueLogical.length || uniqueLogical.includes(logical)
     })
     const previousLiveActual=previousLiveRows.reduce((sum,row)=>sum+num(row.qty),0)
-    if(previousLiveActual>0) previousActual=previousLiveActual
+    previousActual=previousLiveActual
     const yoyPct=previousActual?((fmsActual-previousActual)/previousActual*100):0
     const dailyPlanRate=days.length&&fmsPlan?fmsPlan/days.length:0
     const dailyPacePct=dailyPlanRate?avgDaily/dailyPlanRate*100:0
     const contractorRows=monthlyTrend.filter(r=>r.cost>0)
     const contractorCost=contractorRows.reduce((s,r)=>s+r.cost,0)
     const contractorPackaged=contractorRows.reduce((s,r)=>s+r.packaged,0)
-    const contractorCostPerUnit=contractorPackaged?contractorCost/contractorPackaged:0
+    const contractorCostPerUnit=total?contractorCost/total:0
     const previousContractorRows=selectedMonthNums.map(mm=>managementHistory.contractor42?.[`${currentYear-1}-${mm}`]).filter(Boolean)
     const previousContractorCost=previousContractorRows.reduce((s,r)=>s+num(r.cost),0)
     const previousContractorPackaged=previousContractorRows.reduce((s,r)=>s+num(r.packaged),0)
-    const previousContractorCostPerUnit=previousContractorPackaged?previousContractorCost/previousContractorPackaged:0
+    const previousContractorCostPerUnit=previousLiveActual?previousContractorCost/previousLiveActual:0
     const contractorYoyPct=previousContractorCostPerUnit&&contractorCostPerUnit?((contractorCostPerUnit-previousContractorCostPerUnit)/previousContractorCostPerUnit*100):0
     const yoyRows=selectedMonthNums.map(mm=>{
       const key=`${currentYear}-${mm}`
       const current=monthlyTrend.find(r=>r.key===key)
       const prevKey=`${currentYear-1}-${mm}`
       let prev=0, prevPlan=0
-      uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(managementHistory,prevKey,facility); prev+=num(rec.actual); prevPlan+=num(rec.plan)})
+      uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(managementHistory,prevKey,facility); prevPlan+=num(rec.plan)})
       const livePrev=dashboardProd.filter(row=>{
         const day=row.productionDay||iso(row.date); if(!day||day.slice(0,7)!==prevKey) return false
         const logical=managementFacilityId(row.facility); return !uniqueLogical.length||uniqueLogical.includes(logical)
       }).reduce((sum,row)=>sum+num(row.qty),0)
-      if(livePrev>0) prev=livePrev
+      prev=livePrev
       const actual=num(current?.actual)
       return {key,month:mm,current:actual,previous:prev,delta:actual-prev,pct:prev?(actual-prev)/prev*100:0,previousPlan:prevPlan}
     })
     const annualRows=[2024,2025,2026].map(year=>{
       const months=selectedMonthNums.length?selectedMonthNums:Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0'))
-      let plan=0, historicalActual=0
-      months.forEach(mm=>uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(managementHistory,`${year}-${mm}`,facility); plan+=num(rec.plan); historicalActual+=num(rec.actual)}))
+      let plan=0
+      months.forEach(mm=>uniqueLogical.forEach(facility=>{const rec=managementPlanForFacility(managementHistory,`${year}-${mm}`,facility); plan+=num(rec.plan)}))
       const liveActual=dashboardProd.filter(row=>{
         const day=row.productionDay||iso(row.date); if(!day||Number(day.slice(0,4))!==year||!months.includes(day.slice(5,7))) return false
         const logical=managementFacilityId(row.facility); return !uniqueLogical.length||uniqueLogical.includes(logical)
       }).reduce((sum,row)=>sum+num(row.qty),0)
-      const actual=liveActual>0?liveActual:historicalActual
+      const actual=liveActual
       const costRows=uniqueLogical.length===1&&uniqueLogical[0]==='42'?months.map(mm=>managementHistory.contractor42?.[`${year}-${mm}`]).filter(Boolean):[]
       const cost=costRows.reduce((sum,row)=>sum+num(row.cost),0), packaged=costRows.reduce((sum,row)=>sum+num(row.packaged),0)
-      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:packaged?cost/packaged:0,source:liveActual>0?'IML':'Historical'}
+      return {year,plan,actual,pct:plan?actual/plan*100:0,cost,costPerUnit:liveActual?cost/liveActual:0,source:liveActual>0?'Quantities':'No quantities'}
     })
     const comparableMonths=monthlyTrend.filter(r=>num(r.plan)>0||num(r.actual)>0)
     const peakMonth=comparableMonths.length?[...comparableMonths].sort((a,b)=>num(b.actual)-num(a.actual))[0]:null
@@ -2918,8 +2936,8 @@ material: normalize(getField(r, [
     const forecastPct=targetTotal>0?targetForecast/targetTotal*100:0
     const insights=[]
     if (fmsPlan>0) insights.push({state:targetPct>=100?'good':targetPct>=90?'warning':'risk',title:`FMS: ${targetPct.toFixed(1)}% מהתכנון`,text:`ביצוע ${fmt(fmsActual)} מול תכנון ${fmt(fmsPlan)} בתקופה שנבחרה.`})
-    if (previousActual>0) insights.push({state:yoyPct>=0?'good':'warning',title:`שינוי שנתי ${yoyPct>=0?'+':''}${yoyPct.toFixed(1)}%`,text:`לעומת אותה תקופה ב-${currentYear-1}: ${fmt(previousActual)} ביצוע IML.`})
-    if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`₪${fmt(contractorCost)} על ${fmt(contractorPackaged)} ליטר/יחידות מדווחות. מקור: חשבונות קבלן מתקן 42.`})
+    if (previousActual>0) insights.push({state:yoyPct>=0?'good':'warning',title:`שינוי שנתי ${yoyPct>=0?'+':''}${yoyPct.toFixed(1)}%`,text:`לעומת אותה תקופה ב-${currentYear-1}: ${fmt(previousActual)} לפי קובץ הכמויות.`})
+    if (contractorRows.length) insights.push({state:contractorCostPerUnit<=0.55?'good':contractorCostPerUnit<=0.7?'warning':'risk',title:`עלות קבלן ממוצעת ₪${contractorCostPerUnit.toFixed(3)}`,text:`עלות הקבלן חלקי ${fmt(total)} יחידות תפוקה מקובץ הכמויות. כמות החשבון אינה משמשת לחישוב התפוקה.`})
     else if (uniqueLogical.includes('42')) insights.push({state:'warning',title:'אין עלות קבלן בתקופה',text:`נתוני הקבלן שהועלו זמינים עד ${managementHistory.meta?.contractor2026Through || 'החודש האחרון בקובץ'}.`})
     if (!hasReliableRft && qualityLots.size) insights.push({state:'warning',title:'RFT ממתין למקור מאומת',text:`קיימים ${qualityLots.size.toLocaleString()} לוטים/רשומות איכות עם החלטות או חריגות, אך אין מכנה מלא ואמין לחישוב RFT.`})
     const latestContractorMonth=contractorRows.at(-1)?.key||''
@@ -2929,6 +2947,10 @@ material: normalize(getField(r, [
 
   const parseManagementWorkbook = async (file, kind) => {
     const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type:'array', cellDates:true })
+    if (kind === 'contractor') {
+      const contractorRows = parseContractorWorkbook(wb, file.name, XLSX)
+      if (contractorRows !== null) return contractorRows
+    }
     const rows=[]
     const keyOf=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ')
     const val=(obj,names)=>{const entries=Object.entries(obj||{});for(const name of names){const hit=entries.find(([k])=>keyOf(k).includes(keyOf(name)));if(hit&&hit[1]!==''&&hit[1]!=null)return hit[1]}return ''}
@@ -2990,13 +3012,19 @@ material: normalize(getField(r, [
     const peakMonth = managementSummary.peakMonth?.label ? `${managementSummary.peakMonth.label} · ${fmt(managementSummary.peakMonth.actual)}` : 'אין נתון'
     const weakMonth = managementSummary.weakMonth?.label ? `${managementSummary.weakMonth.label} · ${fmt(managementSummary.weakMonth.actual)}` : 'אין נתון'
     return [
-      {title:'שער', bullets:[`תקציר מנהלים · ${facilityLabel}`, periodLabel, `תפוקה בפועל: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
-      {title:'תמונת מצב', bullets:[`ימי פעילות: ${managementSummary.days}`, `ממוצע ליום: ${fmt(managementSummary.avgDaily)}`, `שיא יומי: ${fmt(managementSummary.peakDaily)}`, `שנה מול שנה: ${yoyText}`]},
-      {title:'תכנון מול ביצוע', bullets:[`תכנון לתקופה: ${fmt(managementSummary.fmsPlan)}`, `ביצוע IML: ${fmt(managementSummary.fmsActual)}`, `פער: ${managementSummary.fmsPlan ? `${managementSummary.fmsActual - managementSummary.fmsPlan >= 0 ? '+' : ''}${fmt(managementSummary.fmsActual - managementSummary.fmsPlan)}` : '—'}`, `חודש עמידה טוב ביותר: ${bestMonth}`]},
-      {title:'מגמות 2024–2026', bullets:[`חודש שיא: ${peakMonth}`, `חודש חלש: ${weakMonth}`, `השוואה לאותה תקופה: ${yoyText}`, `מקור היסטורי: ${managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}`]},
-      {title:'עלויות ויעילות', bullets:[`עלות קבלן משוקללת: ${costText}`, `חודשי קבלן בטווח: ${managementSummary.contractorMonths || 0}`, `תוצרת בחשבונות קבלן: ${managementSummary.contractorPackaged ? fmt(managementSummary.contractorPackaged) : '—'}`, `תשלום לקבלן: ${managementSummary.contractorCost ? `₪${fmt(managementSummary.contractorCost)}` : '—'}`]},
-      {title:'איכות ומגמות', bullets:[`RFT: ${managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : 'ממתין למקור RFT מאומת'}`, `לוטים עם החלטה/חריגה: ${managementSummary.qualityLots || 0}`, `לוטים עם דחייה/Restricted: ${managementSummary.qualityBadLots || 0}`, `חריגות פתוחות: ${openDeviations.length}`]},
-      {title:'תובנות והמלצות', bullets:managementSummary.insights.slice(0,4).map(item => `${item.title}: ${item.text}`)}
+      {title:'שער', bullets:[`סיכום מתקן 42 · ${facilityLabel}`, periodLabel]},
+      {title:'בטיחות — משולש האירועים', bullets:['שדות פתוחים להשלמה ידנית', 'מסר מנהל היחידה']},
+      {title:'תמונת מצב ניהולית', bullets:[`תפוקה מקובץ כמויות: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
+      {title:'תכנון מול ביצוע', bullets:[`תכנון: ${fmt(managementSummary.fmsPlan)}`, `ביצוע מקובץ כמויות: ${fmt(managementSummary.fmsActual)}`]},
+      {title:'מגמה רב־שנתית', bullets:[`חודש שיא: ${peakMonth}`, `שנה מול שנה: ${yoyText}`]},
+      {title:'תמהיל תפוקה', bullets:['לפי מתקן ומוצר', 'מקור: קובץ הכמויות']},
+      {title:'מתקן 42 כיחידה עסקית', bullets:['בטיחות · לקוחות · תפעול', 'כלכלה · איכות · אנשים']},
+      {title:'תפוקת אריזה ועלות', bullets:[`תפוקה: ${fmt(managementSummary.total)}`, `עלות ליחידת תפוקה: ${costText}`]},
+      {title:'עלויות ויעילות', bullets:[`תשלום לקבלן: ${managementSummary.contractorCost ? `₪${fmt(managementSummary.contractorCost)}` : '—'}`, 'המכנה נלקח מקובץ הכמויות']},
+      {title:'איכות ומגמות', bullets:[`RFT: ${managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : 'ממתין למקור מאומת'}`, `חריגות פתוחות: ${openDeviations.length}`]},
+      {title:'ממשל נתונים', bullets:['מקור יחיד לכמויות ולתפוקות', 'חשבון קבלן משמש לעלות בלבד']},
+      {title:'תוכנית פעולה ניהולית', bullets:['פעולה · בעל אחריות · יעד', 'תאריך וסטטוס']},
+      {title:'תובנות והמלצות', bullets:managementSummary.insights.slice(0,2).map(item => `${item.title}: ${item.text}`)}
     ]
   }
 
@@ -3004,6 +3032,10 @@ material: normalize(getField(r, [
     setManagementPresentationBusy(true)
     setManagementPresentationMessage('מכין קובץ PowerPoint אמיתי (.pptx)...')
     try {
+      await exportManagementPresentation({ summary: managementSummary, from, to })
+      const exportedFileName = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.pptx`
+      setManagementPresentationMessage(`המצגת הבהירה נוצרה בהצלחה: ${exportedFileName}`)
+      return
       const slides = buildManagementPresentationSlides()
       const PptxGenJS = await ensurePptxGenJS()
       const pptx = new PptxGenJS()
@@ -3011,7 +3043,7 @@ material: normalize(getField(r, [
       pptx.author = 'IML CONTROL'
       pptx.company = 'ADAMA'
       pptx.subject = 'Management Summary'
-      pptx.title = 'תקציר מנהלים — IML CONTROL'
+      pptx.title = 'סיכום מתקן 42 — IML CONTROL'
       pptx.lang = 'he-IL'
       pptx.theme = {
         headFontFace: 'Arial',
@@ -3042,7 +3074,7 @@ material: normalize(getField(r, [
           const slide = pptx.addSlide()
           slide.background = { color: '0B2239' }
           addRtlText(slide, 'IML CONTROL', 0.65, 0.42, 2.4, 0.35, { fontSize: 15, bold: true, color: 'FFFFFF', align: 'left', rtlMode: false })
-          addRtlText(slide, 'תקציר מנהלים', 6.2, 1.25, 6.2, 0.8, { fontSize: 34, bold: true, color: 'FFFFFF' })
+          addRtlText(slide, 'סיכום מתקן 42', 3.2, 2.55, 6.9, 0.8, { fontSize: 38, bold: true, color: 'FFFFFF', align: 'center' })
           addRtlText(slide, `${facilityLabel} · ${periodLabel}`, 5.0, 2.05, 7.4, 0.45, { fontSize: 17, color: 'D6E8EE' })
           ;(data.bullets || []).slice(2, 6).forEach((bullet, i) => {
             addRtlText(slide, bullet, 6.4, 3.0 + i * 0.72, 5.8, 0.55, {
@@ -3736,8 +3768,8 @@ material: normalize(getField(r, [
     const weighingSummary = `סה״כ כמות: ${fmt(totalQty)}${stationTotals.length ? ' · ' + stationTotals.map(([station, qty]) => `${station}: ${fmt(qty)}`).join(' · ') : ''}`
     openPrintReport('רשומות תפוקה אחרונות', `מתקנים: ${selectedFacilityLabel()} · ${from || '—'} עד ${to || '—'} · ${weighingSummary}`, [
       {key:'date',label:'תאריך'},{key:'ud',label:'החלטת שימוש (UD)'},{key:'facility',label:'משאב יעד'},{key:'routing',label:'מתקן / תחנה'},
-      {key:'order',label:'הזמנה'},{key:'batch',label:'Batch'},{key:'material',label:'מק״ט חומר'},{key:'desc',label:'תיאור חומר'},{key:'planned',label:'כמות מתוכננת'},{key:'qty',label:'כמות בפועל'},{key:'gap',label:'פער'}
-    ], rows.map(r => ({_facility:r.facility,_qtyRaw:num(r.qty),date:iso(r.date),ud:productionUsageDecision(r),facility:r.facility,routing:r.routingGroup||'—',order:r.order||'—',batch:r.batch||'—',material:r.material||'—',desc:r.desc||'—',planned:r.plannedQty?fmt(r.plannedQty):'—',qty:fmt(r.qty),gap:r.plannedQty?fmt(num(r.qty)-num(r.plannedQty)):'—'})))
+      {key:'order',label:'הזמנה'},{key:'batch',label:'Batch'},{key:'material',label:'מק״ט חומר'},{key:'desc',label:'תיאור חומר'},{key:'planned',label:'כמות מתוכננת'},{key:'qty',label:'תוספת בתאריך'},{key:'cumulative',label:'מצטבר עד הדיווח'},{key:'gap',label:'מצטבר פחות תכנון'}
+    ], rows.map(r => ({_facility:r.facility,_qtyRaw:num(r.qty),date:iso(r.date),ud:productionUsageDecision(r),facility:r.facility,routing:r.routingGroup||'—',order:r.order||'—',batch:r.batch||'—',material:r.material||'—',desc:r.desc||'—',planned:r.plannedQty?fmt(r.plannedQty):'—',qty:fmt(r.qty),cumulative:fmt(cumulativeQuantity(r)),gap:r.plannedQty?fmt(cumulativeQuantity(r)-num(r.plannedQty)):'—'})))
   }
 
   const printMonthlyTargets = () => {
@@ -4001,6 +4033,31 @@ material: normalize(getField(r, [
   </div>
 
   return <div className={`dashboard ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${managementMode ? 'management-mode' : ''} ${IS_MOBILE_DEVICE && activeTab === 'quality' ? 'mobile-quality-landscape' : ''}`} dir="rtl">
+    <style>{`
+      /* Stable Hebrew rendering on large Windows displays and non-integer DPI scaling. */
+      .management-summary,
+      .management-summary button,
+      .management-summary input,
+      .management-summary select {
+        font-family: "Segoe UI", Arial, "Noto Sans Hebrew", sans-serif !important;
+        font-optical-sizing: none;
+        font-kerning: normal;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+      }
+      .management-summary h1,
+      .management-summary h2,
+      .management-summary h3,
+      .management-summary h4,
+      .management-summary b,
+      .management-summary strong {
+        font-family: "Segoe UI", Arial, "Noto Sans Hebrew", sans-serif !important;
+        letter-spacing: 0 !important;
+      }
+      .management-summary-hero h2 { font-weight: 800; line-height: 1.2; }
+      .management-view-tabs button,
+      .management-period-presets button { line-height: 1.35; }
+    `}</style>
     <aside className="side filter-side">
       <button type="button" className="side-collapse-button" onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'פתיחת מסננים' : 'כיווץ מסננים'}>{sidebarCollapsed ? <PanelRightOpen size={18}/> : <PanelRightClose size={18}/>}</button>
       <div className="brand branded"><img src="/iml-logo.png" alt="IML" onError={(e)=>{e.currentTarget.style.display="none"}}/><div>IML<span>CONTROL</span></div></div>
@@ -4138,9 +4195,9 @@ material: normalize(getField(r, [
         <div className="panel-head"><div><ShieldCheck/><h2>מרכז נתונים</h2></div><span>4 מקורות מידע</span></div>
         <p className="data-center-help">כל קובץ נבדק בדפדפן ולאחר מכן נשמר ב־Supabase. מרגע שהטעינה מסתיימת, אותו מידע זמין לכל המשתמשים המחוברים.</p>
         <div className="data-source-grid">
-          <DataSource title="תפוקות" icon={<Factory/>} meta={dataMeta.production} count={production.length} acceptLabel="טען קובץ תפוקות" busy={busy} onFiles={files => loadFiles(files, 'production')} canManage={canManageData}/>
-          <DataSource title="תוצאות איכות" icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} rows={quality} showYearBreakdown acceptLabel="הוסף תוצאות איכות חדשות" busy={busy} onFiles={files => loadFiles(files, 'quality')} canManage={canManageData}/>
-          <DataSource title="חריגות איכות" icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
+          <DataSource title="תפוקות" datasetKind="production" showUploadStats icon={<Factory/>} meta={dataMeta.production} count={production.length} acceptLabel="טען קובץ תפוקות" busy={busy} onFiles={files => loadFiles(files, 'production')} canManage={canManageData}/>
+          <DataSource title="תוצאות איכות" datasetKind="quality" showUploadStats icon={<FlaskConical/>} meta={dataMeta.quality} count={quality.length} rows={quality} showYearBreakdown acceptLabel="הוסף תוצאות איכות חדשות" busy={busy} onFiles={files => loadFiles(files, 'quality')} canManage={canManageData}/>
+          <DataSource title="חריגות איכות" datasetKind="deviations" showUploadStats icon={<AlertTriangle/>} meta={dataMeta.deviations} count={deviations.length} acceptLabel="טען קובץ חריגות" busy={busy} onFiles={files => loadFiles(files, 'deviations')} canManage={canManageData}/>
           <DataSource title="יעדים חודשיים" icon={<Target/>} meta={dataMeta.targets} count={targets.length} acceptLabel="טען קובץ יעדים" busy={busy} onFiles={files => loadFiles(files, 'targets')} canManage={canManageData}/>
         </div>
       </section>}
@@ -4304,7 +4361,7 @@ material: normalize(getField(r, [
         <div className="management-period-presets"><span><CalendarDays size={17}/> תקופה מהירה</span><button onClick={()=>setManagementPeriodPreset('month')}>החודש הנבחר</button><button onClick={()=>setManagementPeriodPreset('previous-month')}>חודש קודם</button><button onClick={()=>setManagementPeriodPreset('two-months')}>דו־חודשי</button><button onClick={()=>setManagementPeriodPreset('ytd')}>מתחילת השנה</button></div>
         {canManageData && <section className="management-data-center"><div className="management-section-title"><div><Database/><span><b>מרכז נתונים — תקציר מנהלים</b><small>טעינה ישירה ל-Supabase · עדכון חודש קיים מחליף את הרשומה ולא יוצר כפילות</small></span></div><button type="button" onClick={refreshManagementHistory}><RefreshCw size={16}/> רענון</button></div><div className="management-cloud-stats"><article><span>Plan Vs Actual בענן</span><b>{managementCloudStatus.planRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עלויות קבלן בענן</span><b>{managementCloudStatus.contractorRows.toLocaleString()}</b><small>רשומות</small></article><article><span>עודכן לאחרונה</span><b>{managementCloudStatus.lastUpdated?new Date(managementCloudStatus.lastUpdated).toLocaleDateString('he-IL'):'—'}</b><small>{managementHistorySource==='supabase'?'Supabase פעיל':'גיבוי מקומי'}</small></article></div><div className="management-upload-actions"><label className={managementUploadBusy?'disabled':''}><FileSpreadsheet size={20}/><span><b>טעינת Plan Vs Actual</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'plan');e.target.value=''}}/></label><label className={managementUploadBusy?'disabled':''}><Upload size={20}/><span><b>טעינת עלויות קבלן</b><small>אפשר לבחור כמה קובצי Excel יחד</small></span><input type="file" multiple accept=".xlsx,.xls" disabled={managementUploadBusy} onChange={e=>{handleManagementUpload([...e.target.files],'contractor');e.target.value=''}}/></label></div>{managementUploadProgress&&<div className="management-batch-progress"><b>{managementUploadProgress.current}/{managementUploadProgress.total}</b><span>{managementUploadProgress.fileName}</span></div>}{managementUploadMessage&&<p className="management-upload-message">{managementUploadMessage}</p>}{managementUploadHistory.length>0&&<div className="management-upload-history"><h4>היסטוריית טעינות אחרונות</h4><div className="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>קובץ</th><th>רשומות</th><th>סטטוס</th></tr></thead><tbody>{managementUploadHistory.slice(0,10).map((h,i)=><tr key={h.id||i}><td>{h.uploaded_at?new Date(h.uploaded_at).toLocaleString('he-IL'):'—'}</td><td>{h.data_kind==='plan'?'Plan Vs Actual':'עלויות קבלן'}</td><td>{h.file_name}</td><td>{Number(h.rows_written||0).toLocaleString()}</td><td><span className={`upload-status ${h.status}`}>{h.status==='success'?'נקלט':'שגיאה'}</span></td></tr>)}</tbody></table></div></div>}{managementCloudStatus.error&&<p className="management-upload-message error">{managementCloudStatus.error}</p>}</section>}
         <div className="management-kpi-grid management-kpi-grid-six">
-          <article><span>תפוקה בפועל IML</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
+          <article><span>תפוקה מקובץ הכמויות</span><b>{fmt(managementSummary.total)}</b><small>{managementSummary.days} ימי פעילות</small></article>
           <article><span>ממוצע ליום</span><b>{fmt(managementSummary.avgDaily)}</b><small>שיא {fmt(managementSummary.peakDaily)}</small></article>
           <article className={managementSummary.targetPct>=100?'good':managementSummary.targetPct>=90?'warning':'risk'}><span>FMS מול תכנון</span><b>{managementSummary.fmsPlan ? `${managementSummary.targetPct.toFixed(1)}%` : '—'}</b><small>{managementSummary.fmsPlan ? `${fmt(managementSummary.fmsActual)} / ${fmt(managementSummary.fmsPlan)}` : 'אין FMS לטווח'}</small></article>
           <article className={managementSummary.previousActual?(managementSummary.yoyPct>=0?'good':'warning'):''}><span>שנה מול שנה</span><b>{managementSummary.previousActual ? `${managementSummary.yoyPct>=0?'+':''}${managementSummary.yoyPct.toFixed(1)}%` : '—'}</b><small>{managementSummary.previousActual ? `מול ${managementSummary.currentYear-1}` : 'אין תקופת השוואה'}</small></article>
@@ -4312,7 +4369,7 @@ material: normalize(getField(r, [
           <article className={managementSummary.hasReliableRft?'good':managementSummary.qualityLots?'warning':''}><span>RFT</span><b>{managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : '—'}</b><small>{managementSummary.hasReliableRft ? 'מקור RFT מאומת' : 'נדרש מקור RFT/UD מלא'}</small></article>
         </div>
         {(managementView==='overview'||managementView==='plan') && <div className="management-history-card">
-          <div className="management-section-title"><div><BarChart3/><span><b>מגמה חודשית — FMS</b><small>תכנון מה-FMS מול ביצוע חי מנתוני IML הטעונים באפליקציה</small></span></div><span>{managementSummary.monthlyTrend.length} חודשים</span></div>
+          <div className="management-section-title"><div><BarChart3/><span><b>מגמה חודשית — FMS</b><small>תכנון מה-FMS מול ביצוע מקובץ הכמויות הטעון באפליקציה</small></span></div><span>{managementSummary.monthlyTrend.length} חודשים</span></div>
           <div className="management-month-chart">{managementSummary.monthlyTrend.slice(-12).map(row=>{const max=Math.max(1,...managementSummary.monthlyTrend.slice(-12).flatMap(x=>[x.plan,x.actual]));return <div className="management-month-col" key={row.key}><div className="management-bars"><i className="plan" style={{height:`${Math.max(3,row.plan/max*100)}%`}} title={`תכנון ${fmt(row.plan)}`}/><i className="actual" style={{height:`${Math.max(3,row.actual/max*100)}%`}} title={`ביצוע ${fmt(row.actual)}`}/></div><b>{row.pct?`${row.pct.toFixed(0)}%`:'—'}</b><small>{row.key.slice(5)}</small></div>})}{!managementSummary.monthlyTrend.length&&<div className="empty">אין נתוני FMS לתקופה שנבחרה.</div>}</div>
           <div className="management-legend"><span><i className="plan"/>תכנון</span><span><i className="actual"/>ביצוע</span></div>
         </div>}
@@ -4322,29 +4379,28 @@ material: normalize(getField(r, [
             <article className="management-panel"><h3>מוצרים מובילים</h3>{managementSummary.topMaterials.map((row,i)=><div className="management-rank-row management-material-row" key={`${row.material}-${i}`}><span><b>#{i+1} · {row.desc || row.material}</b><small>{row.material}</small></span><strong>{fmt(row.qty)}</strong></div>)}{!managementSummary.topMaterials.length&&<p className="empty">אין נתוני מוצרים בטווח.</p>}</article>
           </div>
           <div className="management-trend-highlights"><article><span>חודש שיא</span><b>{managementSummary.peakMonth?.label||'—'}</b><small>{managementSummary.peakMonth?fmt(managementSummary.peakMonth.actual):'אין נתונים'}</small></article><article><span>חודש חלש</span><b>{managementSummary.weakMonth?.label||'—'}</b><small>{managementSummary.weakMonth?fmt(managementSummary.weakMonth.actual):'אין נתונים'}</small></article><article><span>עמידה מיטבית בתכנון</span><b>{managementSummary.bestPlanMonth?.label||'—'}</b><small>{managementSummary.bestPlanMonth?.plan?`${managementSummary.bestPlanMonth.pct.toFixed(1)}%`:'אין תכנון'}</small></article></div>
-          <article className="management-panel management-wide-panel management-annual-panel"><h3>מגמה רב־שנתית 2024–2026</h3><p className="management-explain">אותם חודשי בחירה מושווים בין שלוש השנים. ביצוע חי מ-IML מקבל עדיפות; כשאינו טעון נעשה שימוש בהיסטוריה.</p><div className="management-annual-grid">{managementSummary.annualRows.map(row=><div className="management-annual-card" key={row.year}><div><strong>{row.year}</strong><small>{row.source==='IML'?'ביצוע IML':'היסטוריה'}</small></div><b>{fmt(row.actual)}</b><span>תכנון {fmt(row.plan)}</span><em className={row.pct>=100?'good':row.pct>=90?'warning':'risk'}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</em>{row.costPerUnit>0&&<small>עלות/ליטר ₪{row.costPerUnit.toFixed(3)}</small>}</div>)}</div><div className="management-year-bars">{managementSummary.annualRows.map(row=><div className="management-year-bar" key={`annual-bar-${row.year}`}><div className="management-year-track"><i style={{height:`${Math.max(4,row.actual/managementSummary.annualActualMax*100)}%`}}/></div><b>{row.year}</b><small>{fmt(row.actual)}</small></div>)}</div></article>
+          <article className="management-panel management-wide-panel management-annual-panel"><h3>מגמה רב־שנתית 2024–2026</h3><p className="management-explain">אותם חודשי בחירה מושווים בין שלוש השנים. הביצוע מוצג רק כאשר קיימים נתונים מקובץ הכמויות; לא נעשה שימוש בביצוע היסטורי ממקור אחר.</p><div className="management-annual-grid">{managementSummary.annualRows.map(row=><div className="management-annual-card" key={row.year}><div><strong>{row.year}</strong><small>{row.source==='Quantities'?'קובץ כמויות':'אין נתוני כמויות'}</small></div><b>{fmt(row.actual)}</b><span>תכנון {fmt(row.plan)}</span><em className={row.pct>=100?'good':row.pct>=90?'warning':'risk'}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</em>{row.costPerUnit>0&&<small>עלות/יחידת תפוקה ₪{row.costPerUnit.toFixed(3)}</small>}</div>)}</div><div className="management-year-bars">{managementSummary.annualRows.map(row=><div className="management-year-bar" key={`annual-bar-${row.year}`}><div className="management-year-track"><i style={{height:`${Math.max(4,row.actual/managementSummary.annualActualMax*100)}%`}}/></div><b>{row.year}</b><small>{fmt(row.actual)}</small></div>)}</div></article>
           {managementSummary.logicalFacilities.length===1&&managementSummary.logicalFacilities[0]==='42'&&<article className="management-panel management-wide-panel"><h3>מגמת עלות קבלן 2024–2026</h3><p className="management-explain">עלות משוקללת לליטר באותם חודשים שנבחרו. שנים ללא חשבון קבלן זמין מוצגות ללא ערך.</p><div className="management-cost-year-grid">{managementSummary.annualRows.map(row=><div key={`cost-year-${row.year}`}><span>{row.year}</span><b>{row.costPerUnit?`₪${row.costPerUnit.toFixed(3)}`:'—'}</b><div><i style={{width:`${row.costPerUnit?Math.max(4,row.costPerUnit/managementSummary.annualCostMax*100):0}%`}}/></div></div>)}</div></article>}
-          <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע של השנה הנוכחית והקודמת נלקח מנתוני IML כאשר הם טעונים; אחרת נעשה שימוש ב-Plan Vs Actual ההיסטורי.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{fmt(row.previous)}</td><td className={row.delta>=0?'positive-text':'negative-text'}>{row.delta>=0?'+':''}{fmt(row.delta)}</td><td><span className={`management-pct-chip ${row.pct>=0?'good':'warning'}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
+          <article className="management-panel management-wide-panel"><h3>השוואה לאותה תקופה בשנה הקודמת</h3><p className="management-explain">הביצוע בשתי השנים נלקח אך ורק מקובצי הכמויות הטעונים. שנה ללא קובץ כמויות אינה מושלמת ממקור היסטורי אחר.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>{managementSummary.currentYear}</th><th>{managementSummary.currentYear-1}</th><th>שינוי</th><th>% שינוי</th></tr></thead><tbody>{managementSummary.yoyRows.map(row=><tr key={`yoy-${row.key}`}><td><b>{monthLabelHe(row.key)}</b></td><td>{fmt(row.current)}</td><td>{fmt(row.previous)}</td><td className={row.delta>=0?'positive-text':'negative-text'}>{row.delta>=0?'+':''}{fmt(row.delta)}</td><td><span className={`management-pct-chip ${row.pct>=0?'good':'warning'}`}>{row.previous?`${row.pct>=0?'+':''}${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.yoyRows.length&&<tr><td colSpan="5" className="empty">אין תקופת השוואה זמינה.</td></tr>}</tbody></table></div></article>
         </>}
         {managementView==='plan' && <>
-          <div className="management-cost-strip"><article><span>תכנון לתקופה</span><b>{fmt(managementSummary.fmsPlan)}</b></article><article><span>ביצוע IML</span><b>{fmt(managementSummary.fmsActual)}</b></article><article><span>פער מול תכנון</span><b>{managementSummary.fmsPlan?`${managementSummary.fmsActual-managementSummary.fmsPlan>=0?'+':''}${fmt(managementSummary.fmsActual-managementSummary.fmsPlan)}`:'—'}</b></article></div>
+          <div className="management-cost-strip"><article><span>תכנון לתקופה</span><b>{fmt(managementSummary.fmsPlan)}</b></article><article><span>ביצוע מקובץ הכמויות</span><b>{fmt(managementSummary.fmsActual)}</b></article><article><span>פער מול תכנון</span><b>{managementSummary.fmsPlan?`${managementSummary.fmsActual-managementSummary.fmsPlan>=0?'+':''}${fmt(managementSummary.fmsActual-managementSummary.fmsPlan)}`:'—'}</b></article></div>
           <div className="management-cost-strip"><article><span>ממוצע ביצוע ליום פעילות</span><b>{fmt(managementSummary.avgDaily)}</b></article><article><span>תכנון ממוצע ליום פעילות</span><b>{managementSummary.dailyPlanRate?fmt(managementSummary.dailyPlanRate):'—'}</b></article><article><span>קצב יומי מול תכנון</span><b>{managementSummary.dailyPlanRate?`${managementSummary.dailyPacePct.toFixed(1)}%`:'—'}</b></article></div>
-          <article className="management-panel management-wide-panel"><h3>תכנון מול ביצוע לפי חודש</h3><p className="management-explain">אין צורך לחפש בטבלה: התקופה והמתקן נקבעים מהמסננים הראשיים של IML CONTROL. כאן מוצגים אוטומטית התכנון, הביצוע, הפער ואחוז העמידה.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תכנון FMS</th><th>ביצוע IML</th><th>פער</th><th>עמידה</th></tr></thead><tbody>{managementSummary.monthlyTrend.map(row=><tr key={row.key}><td><b>{row.label}</b></td><td>{fmt(row.plan)}</td><td>{fmt(row.actual)}</td><td className={row.actual-row.plan>=0?'positive-text':'negative-text'}>{row.actual-row.plan>=0?'+':''}{fmt(row.actual-row.plan)}</td><td><span className={`management-pct-chip ${row.pct>=100?'good':row.pct>=90?'warning':'risk'}`}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.monthlyTrend.length&&<tr><td colSpan="5" className="empty">אין נתונים לתקופה.</td></tr>}</tbody></table></div></article>
+          <article className="management-panel management-wide-panel"><h3>תכנון מול ביצוע לפי חודש</h3><p className="management-explain">אין צורך לחפש בטבלה: התקופה והמתקן נקבעים מהמסננים הראשיים של IML CONTROL. כל הביצוע המוצג מגיע מקובץ הכמויות בלבד.</p><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תכנון FMS</th><th>ביצוע מקובץ כמויות</th><th>פער</th><th>עמידה</th></tr></thead><tbody>{managementSummary.monthlyTrend.map(row=><tr key={row.key}><td><b>{row.label}</b></td><td>{fmt(row.plan)}</td><td>{fmt(row.actual)}</td><td className={row.actual-row.plan>=0?'positive-text':'negative-text'}>{row.actual-row.plan>=0?'+':''}{fmt(row.actual-row.plan)}</td><td><span className={`management-pct-chip ${row.pct>=100?'good':row.pct>=90?'warning':'risk'}`}>{row.plan?`${row.pct.toFixed(1)}%`:'—'}</span></td></tr>)}{!managementSummary.monthlyTrend.length&&<tr><td colSpan="5" className="empty">אין נתונים לתקופה.</td></tr>}</tbody></table></div></article>
           {managementSummary.monthlyTrend.length===1 && <article className="management-panel management-wide-panel"><h3>פירוט FMS לפי קו / קבוצת משאב</h3><div className="management-line-grid">{Object.entries(managementSummary.monthlyTrend[0].groups||{}).filter(([,v])=>num(v.plan)||num(v.actual)).map(([group,v])=><div className="management-line-card" key={group}><b>{group==='GALIGAN-ISO-42'?'Galigan ISO (42)':group}</b><span>תכנון {fmt(v.plan)}</span><span>ביצוע {fmt(v.actual)}</span><strong>{num(v.plan)?`${(num(v.actual)/num(v.plan)*100).toFixed(1)}%`:'—'}</strong></div>)}</div></article>}
         </>}
         {managementView==='costs' && <>
-          <div className="management-cost-strip"><article><span>סה״כ תשלום לקבלן</span><b>{managementSummary.contractorCost?`₪${fmt(managementSummary.contractorCost)}`:'—'}</b></article><article><span>תוצרת בחשבונות קבלן</span><b>{managementSummary.contractorPackaged?fmt(managementSummary.contractorPackaged):'—'}</b></article><article><span>עלות משוקללת</span><b>{managementSummary.contractorCostPerUnit?`₪${managementSummary.contractorCostPerUnit.toFixed(3)}`:'—'}</b></article></div>
+          <div className="management-cost-strip"><article><span>סה״כ תשלום לקבלן</span><b>{managementSummary.contractorCost?`₪${fmt(managementSummary.contractorCost)}`:'—'}</b></article><article><span>תפוקה מקובץ הכמויות</span><b>{fmt(managementSummary.total)}</b></article><article><span>עלות ליחידת תפוקה</span><b>{managementSummary.contractorCostPerUnit?`₪${managementSummary.contractorCostPerUnit.toFixed(3)}`:'—'}</b></article></div>
           {managementSummary.previousContractorCostPerUnit>0&&managementSummary.contractorCostPerUnit>0&&<div className="management-cost-strip"><article><span>עלות/ליטר {managementSummary.currentYear}</span><b>₪{managementSummary.contractorCostPerUnit.toFixed(3)}</b></article><article><span>אותם חודשים {managementSummary.currentYear-1}</span><b>₪{managementSummary.previousContractorCostPerUnit.toFixed(3)}</b></article><article><span>שינוי בעלות לליטר</span><b>{managementSummary.contractorYoyPct>=0?'+':''}{managementSummary.contractorYoyPct.toFixed(1)}%</b></article></div>}
-          <article className="management-panel management-wide-panel"><h3>עלות קבלן מתקן 42 — היסטוריה</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תוצרת</th><th>תשלום לקבלן</th><th>עלות / ליטר</th></tr></thead><tbody>{managementSummary.monthlyTrend.filter(r=>r.cost).map(row=><tr key={`cost-${row.key}`}><td>{row.label}</td><td>{fmt(row.packaged)}</td><td>₪{fmt(row.cost)}</td><td><b>₪{row.costPerUnit.toFixed(3)}</b></td></tr>)}{!managementSummary.monthlyTrend.some(r=>r.cost)&&<tr><td colSpan="4" className="empty">אין נתוני קבלן בטווח שנבחר. ב-2026 הנתונים שהועלו מגיעים עד אוגוסט.</td></tr>}</tbody></table></div></article>
-          <div className="management-summary-grid"><article className="management-panel"><h3>מה מודדים כאן?</h3><p className="management-explain">המסך מחבר תשלום לקבלן לתוצרת הארוזה ומציג עלות משוקללת לליטר. בתקופה של חודש בודד מוצג גם תמהיל 1L / 5L / 10L / 20L וחלוקת תפוקה ועלות לפי משמרת, כאשר הנתונים קיימים בחשבון הקבלן.</p></article><article className="management-panel"><h3>זמינות נתוני עלות</h3><p className="management-explain">לשנת 2026 חשבונות הקבלן שהועלו זמינים עד <b>אוגוסט 2026</b>. בחירת אוגוסט בלבד תציג את החשבון הסופי; בחירת ינואר–אוגוסט תציג YTD מלא עד אוגוסט.</p></article></div>
-          {managementSummary.monthlyTrend.filter(r=>r.cost).slice(-1).map(row=>{const rec=managementHistory.contractor42?.[row.key];return <div className="management-summary-grid" key={`mix-${row.key}`}><article className="management-panel"><h3>תמהיל אריזה — {row.label}</h3>{Object.entries(rec?.lines||{}).map(([line,qty])=><div className="management-rank-row" key={line}><span><b>{line}</b></span><strong>{fmt(qty)}</strong></div>)}</article><article className="management-panel"><h3>יעילות לפי משמרת — {row.label}</h3>{(rec?.shiftQty||[]).map((qty,i)=><div className="management-rank-row" key={i}><span><b>משמרת {i+1}</b><small>{rec?.shiftCost?.[i]?`עלות ₪${fmt(rec.shiftCost[i])}`:''}</small></span><strong>{rec?.shiftCost?.[i]&&qty?`₪${(rec.shiftCost[i]/qty).toFixed(3)} / ל׳`:'—'}</strong></div>)}</article></div>})}
+          <article className="management-panel management-wide-panel"><h3>עלות קבלן מתקן 42 — היסטוריה</h3><div className="table-wrap"><table><thead><tr><th>חודש</th><th>תפוקה מקובץ כמויות</th><th>תשלום לקבלן</th><th>עלות / יחידת תפוקה</th></tr></thead><tbody>{managementSummary.monthlyTrend.filter(r=>r.cost).map(row=><tr key={`cost-${row.key}`}><td>{row.label}</td><td>{fmt(row.actual)}</td><td>₪{fmt(row.cost)}</td><td><b>{row.actual?`₪${row.costPerUnit.toFixed(3)}`:'—'}</b></td></tr>)}{!managementSummary.monthlyTrend.some(r=>r.cost)&&<tr><td colSpan="4" className="empty">אין נתוני קבלן בטווח שנבחר. ב-2026 הנתונים שהועלו מגיעים עד אוגוסט.</td></tr>}</tbody></table></div></article>
+          <div className="management-summary-grid"><article className="management-panel"><h3>מה מודדים כאן?</h3><p className="management-explain">המסך מחבר את סכום התשלום מחשבון הקבלן לתפוקת האריזה מקובץ הכמויות. כל תמהיל, תפוקה וביצוע מחושבים רק מקובץ הכמויות.</p></article><article className="management-panel"><h3>זמינות נתוני עלות</h3><p className="management-explain">לשנת 2026 חשבונות הקבלן שהועלו זמינים עד <b>אוגוסט 2026</b>. ללא קובץ כמויות לא תחושב עלות ליחידת תפוקה.</p></article></div>
         </>}
         {managementView==='quality' && <div className="management-summary-grid"><article className="management-panel"><h3>איכות בתקופה</h3><div className="management-quality-big"><b>{managementSummary.hasReliableRft?`${managementSummary.rft.toFixed(1)}%`:'—'}</b><span>RFT</span><small>{managementSummary.hasReliableRft?'יעד ייחוס: 98%':'ממתין למקור RFT מאומת'}</small></div><div className="management-rank-row"><span><b>לוטים עם החלטה/חריגה שנמצאו</b></span><strong>{managementSummary.qualityLots||0}</strong></div><div className="management-rank-row"><span><b>לוטים עם דחייה / Restricted</b></span><strong>{managementSummary.qualityBadLots||0}</strong></div><div className="management-rank-row"><span><b>חריגות פתוחות</b></span><strong>{openDeviations.length}</strong></div></article><article className="management-panel"><h3>מה נדרש כדי לחשב RFT נכון?</h3><p className="management-explain">צריך מקור שבו קיימת אוכלוסיית כל ה-Inspection Lots בתקופה, לא רק לוטים חריגים: Inspection Lot, חומר, אצווה, מתקן/תחנה, תאריך, והחלטת שימוש או סטטוס First Pass לכל לוט.</p><p className="management-explain">אם קיים דוח RFT חודשי מוכן, מספיקים גם: חודש, מתקן, מספר לוטים שנבדקו, מספר שעברו בפעם הראשונה ו-RFT%. ל-COPQ נדרש דוח עלות אי-איכות לפי חודש ומתקן.</p></article></div>}
         {managementView==='presentation' && <div className="management-summary-grid presentation-builder-grid"><article className="management-panel management-presentation-card"><h3>מצגת הנהלה אוטומטית</h3><p className="management-explain">המצגת נוצרת לפי התקופה והמתקנים שנבחרו בתקציר המנהלים, ומשתמשת באותם נתוני Supabase/IML: תפוקה, FMS, מגמות, עלויות, איכות ותובנות.</p><button type="button" className="management-ppt-button" onClick={downloadManagementPresentation} disabled={managementPresentationBusy}>{managementPresentationBusy ? <RefreshCw size={18}/> : <Download size={18}/>}<span>{managementPresentationBusy ? 'מכין מצגת...' : 'הפק PowerPoint'}</span></button>{managementPresentationMessage&&<p className="management-upload-message">{managementPresentationMessage}</p>}</article><article className="management-panel"><h3>שקופיות שייכנסו למצגת</h3><div className="presentation-slide-list">{buildManagementPresentationSlides().map((slide,i)=><div key={`${slide.title}-${i}`}><b>{String(i+1).padStart(2,'0')}</b><span>{slide.title}</span><small>{(slide.bullets||[]).slice(0,2).join(' · ')}</small></div>)}</div></article></div>}
         <article className="management-panel management-insights"><h3>תובנות אוטומטיות מהנתונים</h3><div className="management-insight-grid">{managementSummary.insights.map((item,i)=><div className={`management-insight ${item.state}`} key={`${item.title}-${i}`}><strong>{item.title}</strong><p>{item.text}</p></div>)}{!managementSummary.insights.length&&<div className="management-insight good"><strong>אין מספיק נתונים להשוואה</strong><p>בחר תקופה הכוללת חודשים 2024–2026 ומתקן ניהולי כדי לקבל השוואות.</p></div>}</div></article>
-        <div className="management-source-note"><Database size={18}/><div><b>מקורות מחוברים</b><span>כמות ואיכות מ-IML CONTROL · Plan Vs Actual היסטורי 2024–2026 · חשבונות קבלן מתקן 42 לשנים 2024–2026. הנתונים מחושבים לפי התקופה והמתקנים שנבחרו. מקור היסטורי: <b>{managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}</b>{managementHistoryError ? ` · ${managementHistoryError}` : ''}.</span></div></div>
+        <div className="management-source-note"><Database size={18}/><div><b>מקורות מחוברים</b><span><b>כל הכמויות והתפוקות: קובץ הכמויות בלבד.</b> תכנון: FMS / יעדים מבוקרים · עלות: חשבונות קבלן מתקן 42 · איכות: קובצי האיכות. מקור היסטורי לתכנון ולעלות: <b>{managementHistorySource === 'supabase' ? 'Supabase' : 'גיבוי מקומי'}</b>{managementHistoryError ? ` · ${managementHistoryError}` : ''}.</span></div></div>
       </section>}
-      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">לחיצה על כותרת עמודה ממיינת מקטן לגדול / מהגדול לקטן</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8" data-smart-group-column="3" data-smart-facility-summary="1"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>כמות{productionSortArrow('qty')}</button></th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`} data-facility={r.facility || ''} style={{backgroundColor: new Set(sortedRecentProduction.map(x => x.facility).filter(Boolean)).size > 1 ? facilityColor(r.facility) : undefined}}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td><button type="button" className={`qty-variance-btn ${num(r.plannedQty)>0 && Math.abs(num(r.qty)-num(r.plannedQty))>0.0001 ? 'has-variance' : ''}`} onClick={()=>setQuantityVarianceRow(r)} title={num(r.plannedQty)>0 ? 'לחץ להצגת כמות מתוכננת, בפועל והפער' : 'לא נמצאה כמות מתוכננת לרשומה'}>{fmt(r.qty)}</button></td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="9" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
+      {activeTab === 'production' && <section className="details"><div className="details-title-row"><h2>רשומות תפוקה אחרונות</h2><div className="details-title-actions"><span className="details-note">הסיכום כולל תוספות בטווח בלבד. המצטבר כולל גם דיווחים קודמים ואינו מסוכם בין שורות.</span><button type="button" className="section-print-btn" onClick={printRecentProduction}><Printer size={16}/> הדפסה</button></div></div><div className="table-wrap"><table className="sortable-production-table" data-smart-sum-column="8" data-smart-group-column="3" data-smart-facility-summary="1"><thead><tr><th><button type="button" onClick={()=>toggleProductionSort('date')}>תאריך{productionSortArrow('date')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('ud')}>החלטת שימוש (UD){productionSortArrow('ud')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('facility')}>משאב יעד{productionSortArrow('facility')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('routingGroup')}>מתקן / תחנה{productionSortArrow('routingGroup')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('order')}>הזמנה{productionSortArrow('order')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('batch')}>Batch{productionSortArrow('batch')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('material')}>מק״ט חומר{productionSortArrow('material')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('desc')}>תיאור חומר{productionSortArrow('desc')}</button></th><th><button type="button" onClick={()=>toggleProductionSort('qty')}>תוספת בתאריך{productionSortArrow('qty')}</button></th><th>מצטבר עד הדיווח</th></tr></thead><tbody>{sortedRecentProduction.map((r, i) => <tr key={`${r.order}-${r.batch}-${i}`} data-facility={r.facility || ''} style={{backgroundColor: new Set(sortedRecentProduction.map(x => x.facility).filter(Boolean)).size > 1 ? facilityColor(r.facility) : undefined}}><td>{iso(r.date)}</td><td>{productionUsageDecision(r)}</td><td>{r.facility}</td><td>{r.routingGroup || '—'}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material || '—'}</td><td>{r.desc || '—'}</td><td><button type="button" className={`qty-variance-btn ${num(r.qty)<0 ? 'has-variance' : ''}`} onClick={()=>setQuantityVarianceRow(r)} title="לחץ להצגת התוספת, המצטבר והתכנון לפקודה">{fmt(r.qty)}</button></td><td><b>{fmt(cumulativeQuantity(r))}</b>{num(r.plannedQty)>0 && <small style={{display:'block',color:'#64748b'}}>מתוך {fmt(r.plannedQty)} מתוכנן</small>}</td></tr>)}{!sortedRecentProduction.length && <tr className="smart-empty-row"><td colSpan="10" className="empty">אין רשומות להצגה</td></tr>}</tbody></table></div></section>}
       {activeTab === 'mapping-simulator' && canManageData && <section className="details mapping-simulator">
         <div className="mapping-simulator-head"><div><h2>סימולטור שיוך תפוקה</h2><p className="details-note">המסך מתמקד בחריגים שרלוונטיים ליעדים הפעילים. באלק 1142+999 ובאלק 1119+777 מוחרגים אוטומטית ומטופלים רק במאזני 42 ו-19.</p></div><div className="mapping-simulator-actions"><label><input type="checkbox" checked={simulatorOnlyIssues} onChange={event => setSimulatorOnlyIssues(event.target.checked)}/> הצג רק בעיות</label><button type="button" onClick={exportMappingSimulation}><Download size={16}/> ייצוא סימולציה</button></div></div>
         {mappingMessage && <div className="mapping-message">{mappingMessage}</div>}
@@ -4373,7 +4429,7 @@ material: normalize(getField(r, [
       {activeTab === 'quality' && <section className="details"><h2>תוצאות איכות לא תקינות</h2><div className="table-wrap"><table><thead><tr><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Inspection Lot</th><th>Order</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th></tr></thead><tbody>{qualityBad.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{r.date ? new Date(r.date).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.inspectionLot}</td><td>{r.order}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'ללא סטטוס'}</span></td></tr>)}{!qualityBad.length && <tr><td colSpan="8" className="empty">לא נמצאו תוצאות איכות לא תקינות</td></tr>}</tbody></table></div></section>}
       {activeTab === 'deviations' && <section className="details"><h2>מנות חריגות פתוחות</h2><p className="details-note">לכל מנה מוצגים מאפייני החריגה ולצדם המאפיינים התקינים שנמשכו מקובץ תוצאות האיכות לפי Batch + מק״ט.</p><div className="table-wrap"><table><thead><tr><th>תאריך חריגה</th><th>תאריך דגימה</th><th>שעת דגימה</th><th>מתקן</th><th>Batch</th><th>מק״ט חומר</th><th>סטטוס</th><th>מאפייני החריגה</th><th>מאפיינים תקינים</th><th>הערות</th></tr></thead><tbody>{openDeviations.slice(0,300).map((r,i) => <tr key={i}><td>{iso(r.date)}</td><td>{iso(r.sampleDate) || '—'}</td><td>{r.sampleDate ? new Date(r.sampleDate).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '—'}</td><td>{r.facility}</td><td>{r.batch ? <button type="button" className="batch-link" onClick={() => openBatchCard(r.batch, r.material)}>{r.batch}</button> : '—'}</td><td>{r.material}</td><td><span className="status-bad">{r.status || 'פתוח'}</span>{r.udCode && <small className="ud-code">{r.udCode}</small>}</td><td className="deviation-characteristics"><div className="characteristics-count bad-count">{r.rejectedCharacteristics.length} חריגים</div>{r.rejectedCharacteristics.length ? r.rejectedCharacteristics.map((c,j) => <div className="deviation-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו פרטי מאפיינים חריגים בקובץ האיכות{r.rejectedCount ? ` (בקובץ החריגות מופיע מספר: ${r.rejectedCount})` : ''}</span>}</td><td className="deviation-characteristics valid-characteristics"><div className="characteristics-count good-count">{r.approvedCharacteristics.length} תקינים</div>{r.approvedCharacteristics.length ? r.approvedCharacteristics.map((c,j) => <div className="deviation-characteristic valid-characteristic" key={`${c.characteristic}-${j}`}><strong>{c.characteristic}</strong><span>תוצאה: <b>{c.value || c.qualitative || '—'}{c.unit ? ` ${c.unit}` : ''}</b></span><span>מפרט: {c.lower !== '' || c.upper !== '' ? `${c.lower || '—'} עד ${c.upper || '—'}${c.unit ? ` ${c.unit}` : ''}` : '—'}</span>{c.remarks && c.remarks !== 'N/A' && <small>{c.remarks}</small>}</div>) : <span className="no-characteristics">לא נמצאו מאפיינים תקינים למנה בקובץ האיכות</span>}</td><td>{r.remarks || '—'}</td></tr>)}{!openDeviations.length && <tr><td colSpan="10" className="empty">לא נמצאו מנות חריגות פתוחות</td></tr>}</tbody></table></div></section>}
     </main>
-    {quantityVarianceRow && <div className="quantity-variance-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setQuantityVarianceRow(null)}}><section className="quantity-variance-modal" role="dialog" aria-modal="true"><div className="quantity-variance-head"><div><small>בקרת כמות</small><h3>{quantityVarianceRow.material || 'רשומת תפוקה'}</h3><p>{quantityVarianceRow.desc || ''}</p></div><button type="button" onClick={()=>setQuantityVarianceRow(null)} aria-label="סגירה"><X size={20}/></button></div><div className="quantity-variance-grid"><div><span>כמות מתוכננת</span><b>{num(quantityVarianceRow.plannedQty)>0 ? fmt(quantityVarianceRow.plannedQty) : 'לא זמין'}</b></div><div><span>כמות בפועל</span><b>{fmt(quantityVarianceRow.qty)}</b></div><div className={num(quantityVarianceRow.plannedQty)>0 && Math.abs(num(quantityVarianceRow.qty)-num(quantityVarianceRow.plannedQty))>0.0001 ? 'variance-alert' : 'variance-ok'}><span>פער</span><b>{num(quantityVarianceRow.plannedQty)>0 ? fmt(num(quantityVarianceRow.qty)-num(quantityVarianceRow.plannedQty)) : '—'}</b></div><div><span>סטייה %</span><b>{num(quantityVarianceRow.plannedQty)>0 ? `${((num(quantityVarianceRow.qty)-num(quantityVarianceRow.plannedQty))/num(quantityVarianceRow.plannedQty)*100).toFixed(1)}%` : '—'}</b></div></div><div className="quantity-variance-meta"><span>Order <b>{quantityVarianceRow.order || '—'}</b></span><span>Batch <b>{quantityVarianceRow.batch || '—'}</b></span><span>מתקן <b>{quantityVarianceRow.facility || '—'}</b></span><span>Routing <b>{quantityVarianceRow.routingGroup || '—'}</b></span></div></section></div>}
+    {quantityVarianceRow && <div className="quantity-variance-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setQuantityVarianceRow(null)}}><section className="quantity-variance-modal" role="dialog" aria-modal="true"><div className="quantity-variance-head"><div><small>סיכום תוצרת לפקודה</small><h3>{quantityVarianceRow.material || 'רשומת תפוקה'}</h3><p>{quantityVarianceRow.desc || ''}</p></div><button type="button" onClick={()=>setQuantityVarianceRow(null)} aria-label="סגירה"><X size={20}/></button></div><div className="quantity-variance-grid"><div><span>כמות מתוכננת</span><b>{num(quantityVarianceRow.plannedQty)>0 ? fmt(quantityVarianceRow.plannedQty) : 'לא זמין'}</b></div><div><span>תוספת בתאריך {iso(quantityVarianceRow.date)}</span><b>{fmt(quantityVarianceRow.qty)}</b></div><div><span>מצטבר עד הדיווח</span><b>{fmt(cumulativeQuantity(quantityVarianceRow))}</b></div><div className={num(quantityVarianceRow.plannedQty)>0 && cumulativeQuantity(quantityVarianceRow)>num(quantityVarianceRow.plannedQty)+0.0001 ? 'variance-alert' : 'variance-ok'}><span>מצטבר פחות תכנון</span><b>{num(quantityVarianceRow.plannedQty)>0 ? fmt(cumulativeQuantity(quantityVarianceRow)-num(quantityVarianceRow.plannedQty)) : '—'}</b></div><div><span>פער מצטבר מהתכנון %</span><b>{num(quantityVarianceRow.plannedQty)>0 ? `${((cumulativeQuantity(quantityVarianceRow)-num(quantityVarianceRow.plannedQty))/num(quantityVarianceRow.plannedQty)*100).toFixed(1)}%` : '—'}</b></div></div><p style={{padding:'0 20px',color:'#64748b'}}>יתרה לתכנון עשויה להיות המשך עבודה צפוי ואינה מעידה כשלעצמה על חוסר בדיווח. המצטבר נכון לתאריך הרשומה.</p><div className="quantity-variance-meta"><span>Order <b>{quantityVarianceRow.order || '—'}</b></span><span>Batch <b>{quantityVarianceRow.batch || '—'}</b></span><span>מתקן <b>{quantityVarianceRow.facility || '—'}</b></span><span>Routing <b>{quantityVarianceRow.routingGroup || '—'}</b></span></div></section></div>}
     {selectedResource && <ResourceDetailModal resource={selectedResource} onClose={() => setSelectedResource(null)} onOpenBatch={(batch, material='') => { setSelectedResource(null); openBatchCard(batch, material) }}/>}
     {selectedBatchData && <BatchControlCard data={selectedBatchData} onClose={() => { setSelectedBatch(''); setSelectedBatchMaterial('') }}/>}
   </div>
@@ -4550,9 +4606,24 @@ function BatchControlCard({ data, onClose }) {
 }
 function BatchMetric({label,value}) { return <div className="batch-metric"><span>{label}</span><b>{value}</b></div> }
 
-function DataSource({ title, icon, meta, count, rows = [], showYearBreakdown = false, acceptLabel, busy, onFiles, canManage }) {
+function DataSource({ title, datasetKind, showUploadStats = false, icon, meta, count, rows = [], showYearBreakdown = false, acceptLabel, busy, onFiles, canManage }) {
   const [breakdownOpen, setBreakdownOpen] = useState(false)
   const [selectedYear, setSelectedYear] = useState(null)
+  const [today, setToday] = useState(uploadDay)
+  useEffect(() => { const timer = setInterval(() => setToday(uploadDay()), 30000); return () => clearInterval(timer) }, [])
+  const [cloudSummary, setCloudSummary] = useState(null)
+  const [summaryError, setSummaryError] = useState(false)
+  useEffect(() => {
+    if (!datasetKind) return
+    let active = true
+    const refresh = () => getCloudDatasetMeta(datasetKind).then(value => { if (active) { setCloudSummary(value); setSummaryError(false) } }).catch(() => { if (active) setSummaryError(true) })
+    refresh()
+    const timer = setInterval(refresh, 30000)
+    return () => { active = false; clearInterval(timer) }
+  }, [datasetKind, meta?.versionId, meta?.loadedAt])
+  const stats = cloudSummary?.uploadStats ?? meta?.uploadStats
+  const cloudTotal = cloudSummary?.row_count ?? meta?.rows
+  const summaryLoadedAt = cloudSummary?.loaded_at || cloudSummary?.updated_at || meta?.loadedAt
   const loaded = Boolean(meta || count)
   const loadedAt = meta?.loadedAt ? new Date(meta.loadedAt).toLocaleString('he-IL') : 'טרם נטען'
   const yearBreakdown = useMemo(() => {
@@ -4586,9 +4657,17 @@ function DataSource({ title, icon, meta, count, rows = [], showYearBreakdown = f
   return <>
     <article className={`data-source ${loaded ? 'ready' : ''}`}>
       <div className="data-source-head"><div className="data-source-icon">{icon}</div><div><h3>{title}</h3><span>{loaded ? 'תקין וזמין' : 'ממתין לקובץ'}</span></div></div>
-      <div className="data-source-count"><b>{fmt(count)}</b><span>רשומות ייחודיות במאגר</span></div>{meta?.lastFileRows ? <div className="data-source-last-file"><b>{fmt(meta.lastFileRows)}</b><span>רשומות בקובץ האחרון</span>{meta?.lastFileUniqueRows != null && <small>ייחודיות בקובץ: {fmt(meta.lastFileUniqueRows)}</small>}</div> : null}
+      <div className="data-source-count"><b>{showUploadStats ? (cloudTotal == null ? '—' : fmt(cloudTotal)) : fmt(count)}</b><span>{showUploadStats ? 'רשומות במאגר הפעיל בענן' : 'רשומות ייחודיות במאגר'}</span></div>{meta?.lastFileRows ? <div className="data-source-last-file"><b>{fmt(meta.lastFileRows)}</b><span>רשומות בקובץ האחרון</span>{meta?.lastFileUniqueRows != null && <small>ייחודיות בקובץ: {fmt(meta.lastFileUniqueRows)}</small>}</div> : null}
+      {showUploadStats && <div style={{display:'grid',gap:8,padding:'12px 0',fontSize:14}}>
+        {summaryError && <small>לא ניתן לרענן את נתוני הענן כרגע; מוצגים הנתונים האחרונים שהתקבלו.</small>}
+        {stats ? <>
+          <div>נוספו היום: <b>{fmt(stats.day === today ? stats.addedToday : 0)}</b> · עודכנו היום: <b>{fmt(stats.day === today ? stats.updatedToday : 0)}</b></div>
+          <small>בטעינה האחרונה: {fmt(stats.lastAdded)} חדשות · {fmt(stats.lastUpdated)} עודכנו · {fmt(stats.lastRemoved)} הוסרו</small>
+          <small>סיכום יומי לפי שעון ישראל; כל מזהה נספר פעם אחת בכל קטגוריה.</small>
+        </> : <small>ספירת תוספות ועדכונים תתחיל בטעינה הראשונה לאחר התקנת העדכון.</small>}
+      </div>}
       {showYearBreakdown && loaded && <button type="button" className="source-breakdown-btn" onClick={()=>setBreakdownOpen(true)}>פירוט מאגר לפי שנה</button>}
-      <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
+      <div className="data-source-meta"><small title={meta?.fileName || ''}>{meta?.fileName || 'לא נבחר קובץ'}</small><small>{showUploadStats && summaryLoadedAt ? `טעינה אחרונה: ${new Date(summaryLoadedAt).toLocaleString('he-IL', {timeZone:'Asia/Jerusalem'})}` : loadedAt}</small>{meta?.source === 'cloud' && <small className="cloud-source-label">מקור: Supabase{meta?.loadedBy ? ` · ${meta.loadedBy}` : ''}</small>}{meta?.facilities ? <small>{meta.facilities} מתקנים זוהו במדגם</small> : null}</div>
       {canManage ? <label className={`source-upload ${busy ? 'disabled' : ''}`}><RefreshCw size={16}/>{acceptLabel}<input type="file" accept=".xlsx,.xls" disabled={busy} onChange={e => { const files=[...e.target.files]; e.target.value=''; onFiles(files) }}/></label> : <div className="viewer-lock"><ShieldCheck size={16}/> צפייה בלבד</div>}
     </article>
     {breakdownOpen && <div className="year-breakdown-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setBreakdownOpen(false)}}>
