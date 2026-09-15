@@ -41,18 +41,6 @@ const fmt = value => Math.round(num(value)).toLocaleString('he-IL')
 const money = value => `₪${fmt(value)}`
 const pct = value => Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)}%` : '—'
 
-async function imageUrlToDataUri(url) {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`לא ניתן לטעון לוגו למצגת (${response.status})`)
-  const blob = await response.blob()
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
-}
-
 const rtl = (extra = {}) => ({ fontFace: 'Arial', lang: 'he-IL', rtlMode: true, align: 'right', valign: 'mid', color: DARK, ...extra })
 const centered = (extra = {}) => ({ fontFace: 'Arial', lang: 'he-IL', rtlMode: true, align: 'center', valign: 'mid', color: DARK, ...extra })
 
@@ -134,194 +122,141 @@ function addRankList(slide, title, rows, { x, y, w, valueKey = 'qty', labelFn })
 export async function exportManagementPresentation({ summary, from, to }) {
   const PptxGenJS = await getPptxGenJS()
   const pptx = new PptxGenJS()
-  pptx.layout = 'LAYOUT_WIDE'
-  pptx.author = 'IML CONTROL'
-  pptx.company = 'ADAMA'
-  pptx.subject = 'Management Summary'
-  pptx.title = 'סיכום מתקן 42 — IML CONTROL'
-  pptx.lang = 'he-IL'
-  pptx.theme = {
-    headFontFace: 'Arial', bodyFontFace: 'Arial', lang: 'he-IL'
-  }
-  pptx.defineLayout({ name: 'IML_WIDE', width: 13.333, height: 7.5 })
-  pptx.layout = 'IML_WIDE'
+  pptx.author = 'IML CONTROL'; pptx.company = 'ADAMA'; pptx.subject = 'Facility 42 Management Summary'
+  pptx.title = 'סיכום מתקן 42'; pptx.lang = 'he-IL'
+  pptx.theme = { headFontFace: 'Arial', bodyFontFace: 'Arial', lang: 'he-IL' }
+  pptx.defineLayout({ name: 'IML_WIDE', width: 13.333, height: 7.5 }); pptx.layout = 'IML_WIDE'
 
-  const facilities = summary.logicalFacilities?.length ? summary.logicalFacilities.join(', ') : 'כל המתקנים'
+  const facilities = summary.logicalFacilities?.length ? summary.logicalFacilities.join(', ') : '42'
   const period = `${from || 'תחילת הנתונים'} עד ${to || 'סוף הנתונים'}`
-  let adamaLogoData = null
-  try { adamaLogoData = await imageUrlToDataUri('/icons/adama-mark-rotate.gif') } catch (error) { console.warn('IML PPTX: ADAMA logo was not loaded', error) }
+  const monthly = summary.monthlyTrend || []
+  const total = num(summary.total), days = num(summary.days)
+  const plan = num(summary.fmsPlan), actual = num(summary.fmsActual)
+  const planPct = plan ? actual / plan * 100 : 0
+  const lineGroups = ['42-P-02','42-P-03','42-P-04']
+  const lineLabels = {'42-P-02':'1 ליטר','42-P-03':'5 ליטר','42-P-04':'10/20 ליטר'}
+  const groupTotal = g => monthly.reduce((s,m)=>s+num(m.groups?.[g]?.actual),0)
+  const groupPlan = g => monthly.reduce((s,m)=>s+num(m.groups?.[g]?.plan),0)
+  const activityDays = Math.max(1, days)
+  const dailyTarget = plan / activityDays
+  const avgDaily = num(summary.avgDaily)
+  const addTitleFooter = (slide, title, subtitle='') => { addHeader(slide,title,subtitle); addFooter(slide,`IML CONTROL · מתקן 42 · ${period}`) }
+  const addNoSource = (slide, text, y=3.0) => slide.addText(text,{x:1.0,y,w:11.3,h:0.75,fontSize:18,bold:true,color:MUTED,...centered()})
+  const addTable = (slide, headers, rows, x=0.75, y=2.0, widths=null) => {
+    const ws=widths||headers.map(()=>11.8/headers.length), rh=0.48
+    let xx=x; headers.forEach((h,i)=>{slide.addText(h,{x:xx,y,w:ws[i],h:rh,fontSize:11,bold:true,color:WHITE,fill:{color:TEAL},line:{color:'DCE6EE'},...centered()});xx+=ws[i]})
+    rows.forEach((row,r)=>{xx=x;row.forEach((v,i)=>{slide.addText(String(v),{x:xx,y:y+rh*(r+1),w:ws[i],h:rh,fontSize:10,fill:{color:r%2?'F7FAFC':'FFFFFF'},line:{color:'DCE6EE'},...centered()});xx+=ws[i]})})
+  }
+  const addLineChart = (slide, rows, series, x=0.9, y=2.15, w=11.4, h=3.6) => {
+    if(!rows.length){addNoSource(slide,'אין נתונים חודשיים לתקופה שנבחרה');return}
+    const vals=rows.flatMap(r=>series.map(s=>num(s.value(r)))); const max=Math.max(1,...vals)
+    slide.addShape('line',{x,y:y+h,w,h:0,line:{color:'A9B7C4',width:1}})
+    series.forEach((s,si)=>{let prev=null;rows.forEach((r,i)=>{const px=x+(rows.length===1?w/2:i*w/(rows.length-1));const py=y+h-(num(s.value(r))/max*h);slide.addShape('ellipse',{x:px-0.045,y:py-0.045,w:0.09,h:0.09,fill:{color:s.color},line:{color:s.color}});if(prev)slide.addShape('line',{x:prev.x,y:prev.y,w:px-prev.x,h:py-prev.y,line:{color:s.color,width:2}});prev={x:px,y:py};slide.addText(String(r.label||r.key),{x:px-0.45,y:y+h+0.1,w:0.9,h:0.2,fontSize:8,color:MUTED,align:'center',margin:0})})})
+    series.forEach((s,i)=>{slide.addShape('rect',{x:9.1+i*1.55,y:6.15,w:0.12,h:0.12,fill:{color:s.color},line:{color:s.color}});slide.addText(s.label,{x:9.25+i*1.55,y:6.09,w:1.2,h:0.2,fontSize:9,color:MUTED,...rtl()})})
+  }
+  const tryAddLogo = async slide => {
+    try { const res=await fetch('/icons/adama-mark-rotate.gif'); if(!res.ok) throw new Error('logo'); const blob=await res.blob(); const data=await new Promise((resolve,reject)=>{const fr=new FileReader();fr.onload=()=>resolve(fr.result);fr.onerror=reject;fr.readAsDataURL(blob)}); slide.addImage({data,x:5.25,y:0.38,w:2.85,h:2.85}) } catch { slide.addText('ADAMA',{x:5.2,y:0.9,w:2.9,h:0.7,fontSize:38,bold:true,color:TEAL,align:'center',margin:0}) }
+  }
 
   // 1 — cover
-  let slide = pptx.addSlide()
-  slide.background = { color: LIGHT }
-  slide.addShape('rect', { x: 0, y: 0, w: 13.333, h: 0.16, fill: { color: AQUA }, line: { color: AQUA } })
-  slide.addText('IML CONTROL', { x: 0.65, y: 0.42, w: 2.4, h: 0.35, fontSize: 15, bold: true, color: TEAL, fontFace: 'Arial', margin: 0 })
-  if (adamaLogoData) slide.addImage({ data: adamaLogoData, x: 5.42, y: 0.38, w: 2.5, h: 2.5, transparency: 0 })
-  slide.addText('סיכום מתקן 42', { x: 2.2, y: 2.78, w: 8.93, h: 0.72, fontSize: 38, bold: true, color: NAVY, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
-  slide.addText(`התקופה: ${period}`, { x: 2.2, y: 3.55, w: 8.93, h: 0.38, fontSize: 18, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
-  addKpi(slide, { x: 0.85, y: 4.65, w: 2.75, label: 'תפוקה בפועל', value: fmt(summary.total), note: `${summary.days} ימי פעילות`, accent: AQUA })
-  addKpi(slide, { x: 3.85, y: 4.65, w: 2.75, label: 'FMS מול תכנון', value: summary.fmsPlan ? pct(summary.fmsActual / summary.fmsPlan * 100) : '—', note: `${fmt(summary.fmsActual)} / ${fmt(summary.fmsPlan)}`, accent: GREEN })
-  addKpi(slide, { x: 6.85, y: 4.65, w: 2.75, label: 'שנה מול שנה', value: summary.previousActual ? `${summary.yoyPct >= 0 ? '+' : ''}${pct(summary.yoyPct)}` : '—', note: `מול ${summary.currentYear - 1}`, accent: ORANGE })
-  addKpi(slide, { x: 9.85, y: 4.65, w: 2.75, label: 'עלות קבלן / ליטר', value: summary.contractorCostPerUnit ? `₪${summary.contractorCostPerUnit.toFixed(3)}` : '—', note: summary.contractorCostPerUnit ? `${summary.contractorMonths} חודשים` : 'אין נתון בתקופה', accent: PURPLE })
+  let slide=pptx.addSlide(); slide.background={color:'F7FAFC'}
+  slide.addShape('rect',{x:0,y:0,w:13.333,h:0.14,fill:{color:AQUA},line:{color:AQUA}})
+  await tryAddLogo(slide)
+  slide.addText('סיכום מתקן 42',{x:2.0,y:3.0,w:9.3,h:0.75,fontSize:42,bold:true,color:NAVY,...centered()})
+  slide.addText(`התקופה: ${period}`,{x:2.0,y:3.72,w:9.3,h:0.38,fontSize:18,color:MUTED,...centered()})
+  addKpi(slide,{x:0.7,y:4.65,w:2.8,label:'תפוקה בפועל',value:fmt(total),note:`${days} ימי פעילות`,accent:AQUA})
+  addKpi(slide,{x:3.75,y:4.65,w:2.8,label:'FMS מול תכנון',value:plan?pct(planPct):'—',note:plan?`${fmt(actual)} / ${fmt(plan)}`:'אין תכנון',accent:GREEN})
+  addKpi(slide,{x:6.8,y:4.65,w:2.8,label:'שנה מול שנה',value:summary.previousActual?`${summary.yoyPct>=0?'+':''}${pct(summary.yoyPct)}`:'—',note:`מול ${summary.currentYear-1}`,accent:ORANGE})
+  addKpi(slide,{x:9.85,y:4.65,w:2.8,label:'עלות קבלן / ליטר',value:summary.contractorCostPerUnit?`₪${num(summary.contractorCostPerUnit).toFixed(3)}`:'—',note:summary.contractorCostPerUnit?`${summary.contractorMonths} חודשים`:'אין נתון',accent:PURPLE})
+  addFooter(slide,`IML CONTROL · מתקן 42 · ${period}`)
 
-  // 2 — editable safety pyramid (manual completion by the presenter)
-  slide = pptx.addSlide(); addHeader(slide, 'בטיחות — משולש האירועים', 'שקופית ניהולית לעריכה ידנית לפני ההצגה')
-  const safetyLevels = [
-    { label:'אירוע חמור / אובדן זמן', value:'הזן נתון', color:RED, w:2.2 },
-    { label:'טיפול רפואי', value:'הזן נתון', color:ORANGE, w:3.4 },
-    { label:'עזרה ראשונה', value:'הזן נתון', color:'F4C542', w:4.8 },
-    { label:'כמעט ונפגע', value:'הזן נתון', color:PURPLE, w:6.4 },
-    { label:'דיווחי מפגע / תצפיות', value:'הזן נתון', color:SKY, w:8.2 },
-  ]
-  safetyLevels.forEach((level,i)=>{
-    const y=1.55+i*0.88, x=6.65-level.w/2
-    slide.addShape('trapezoid',{x,y,w:level.w,h:0.72,fill:{color:level.color},line:{color:NAVY,width:1.2}})
-    slide.addText(`${level.label}  |  ${level.value}`,{x:x+0.18,y:y+0.17,w:level.w-0.36,h:0.28,fontSize:12,bold:true,color:WHITE,...centered()})
-  })
-  slide.addShape('roundRect',{x:0.75,y:1.65,w:3.65,h:2.2,fill:{color:WHITE},line:{color:'DCE6EE'}})
-  slide.addText('מיקוד בטיחות לחודש',{x:1.0,y:1.95,w:3.15,h:0.35,fontSize:17,bold:true,...rtl()})
-  slide.addText('• הוסף אירוע מרכזי\n• הוסף פעולה מתקנת\n• הוסף בעל אחריות ותאריך יעד',{x:1.0,y:2.45,w:3.15,h:1.05,fontSize:14,breakLine:false,...rtl()})
-  slide.addShape('roundRect',{x:0.75,y:4.25,w:3.65,h:1.35,fill:{color:'FFF7E6'},line:{color:'F6D58A'}})
-  slide.addText('מסר מנהל היחידה',{x:1.0,y:4.5,w:3.15,h:0.28,fontSize:16,bold:true,color:'9A6700',...rtl()})
-  slide.addText('הזן כאן את מסר הבטיחות והלמידה המרכזית של התקופה.',{x:1.0,y:4.9,w:3.15,h:0.45,fontSize:13,...rtl()})
-  addFooter(slide,'IML CONTROL · מתקן 42 · בטיחות')
+  // 2 — agenda
+  slide=pptx.addSlide(); addTitleFooter(slide,'על סדר היום',`סיכום מתקן 42 · ${period}`)
+  const agenda=['תמונת מצב בטיחות','תפוקות אריזה בתקופה','עמידה ביעד היומי','השוואה ומגמות חודשיות','תמהיל אריזה לפי קווים','ניתוח משמרות ועלויות','מדדי איכות RFT / חריגות','תובנות והמלצות']
+  agenda.forEach((t,i)=>{const col=i%2,row=Math.floor(i/2),x=0.8+col*6.1,y=1.6+row*1.15;slide.addText(String(i+1).padStart(2,'0'),{x,y,w:0.7,h:0.42,fontSize:18,bold:true,color:AQUA,align:'center',margin:0});slide.addText(t,{x:x+0.85,y,w:4.9,h:0.42,fontSize:18,bold:true,...rtl()})})
 
-  // 3 — executive snapshot
-  slide = pptx.addSlide(); addHeader(slide, 'תמונת מצב ניהולית', `${period} · מתקנים ${facilities}`)
-  addSectionTitle(slide, 'מדדי מפתח')
-  addKpi(slide, { x: 0.75, y: 2.05, w: 2.85, label: 'ממוצע ליום פעילות', value: fmt(summary.avgDaily), note: `שיא יומי ${fmt(summary.peakDaily)}`, accent: SKY })
-  addKpi(slide, { x: 3.85, y: 2.05, w: 2.85, label: 'תכנון FMS', value: fmt(summary.fmsPlan), note: `ביצוע ${fmt(summary.fmsActual)}`, accent: TEAL })
-  addKpi(slide, { x: 6.95, y: 2.05, w: 2.85, label: 'פער מול FMS', value: summary.fmsPlan ? `${summary.fmsActual - summary.fmsPlan >= 0 ? '+' : ''}${fmt(summary.fmsActual - summary.fmsPlan)}` : '—', note: summary.fmsPlan ? pct(summary.fmsActual / summary.fmsPlan * 100) : '', accent: summary.fmsActual >= summary.fmsPlan ? GREEN : ORANGE })
-  addKpi(slide, { x: 10.05, y: 2.05, w: 2.55, label: 'RFT', value: summary.hasReliableRft ? pct(summary.rft) : '—', note: summary.hasReliableRft ? 'מקור מאומת' : 'ממתין למקור איכות מאומת', accent: ORANGE })
-  slide.addText('תובנות אוטומטיות', { x: 6.6, y: 3.65, w: 6.0, h: 0.35, fontSize: 20, bold: true, color: NAVY, ...rtl() })
-  summary.insights.slice(0, 4).forEach((ins, i) => {
-    const y = 4.12 + i * 0.62
-    const color = ins.state === 'good' ? GREEN : ins.state === 'risk' ? RED : ORANGE
-    slide.addShape('roundRect', { x: 6.55, y, w: 6.05, h: 0.5, fill: { color: 'F7F9FB' }, line: { color: 'E0E7ED' } })
-    slide.addShape('rect', { x: 12.48, y: y + 0.05, w: 0.055, h: 0.4, fill: { color }, line: { color } })
-    slide.addText(ins.title, { x: 9.35, y: y + 0.08, w: 3.0, h: 0.2, fontSize: 10, bold: true, color: DARK, ...rtl() })
-    slide.addText(ins.text, { x: 6.75, y: y + 0.27, w: 5.6, h: 0.17, fontSize: 7.8, color: MUTED, ...rtl() })
-  })
-  addRankList(slide, 'מוצרים מובילים', summary.topMaterials || [], { x: 0.75, y: 3.65, w: 5.5, labelFn: (r, i) => `#${i + 1} · ${r.desc || r.material}` })
-  addFooter(slide)
+  // 3 — safety
+  slide=pptx.addSlide(); addTitleFooter(slide,'תמונת מצב בטיחות – מתקן 42','הנתונים יוזנו אוטומטית לאחר חיבור מקור בטיחות לאפליקציה')
+  addNoSource(slide,'מקור נתוני בטיחות עדיין לא מחובר ל-IML CONTROL. השקף מוכן לחיבור אוטומטי ללא הזנת מספרים ידנית.',2.5)
 
-  // 3 — monthly plan vs actual
-  slide = pptx.addSlide(); addHeader(slide, 'תכנון FMS מול ביצוע', 'מגמה חודשית לפי התקופה שנבחרה')
-  addMonthlyBars(slide, summary.monthlyTrend || [], { x: 0.75, y: 1.75, w: 11.85, h: 4.55 })
-  addFooter(slide)
+  // 4 — production summary
+  slide=pptx.addSlide(); addTitleFooter(slide,'סיכום תפוקות אריזה',`כמויות לפי קווי אריזה · ${period}`)
+  const prodRows=lineGroups.map(g=>[lineLabels[g],fmt(groupTotal(g)),total?pct(groupTotal(g)/total*100):'—'])
+  prodRows.push(['סה״כ',fmt(total),'100%']); addTable(slide,['קו אריזה','ליטרים','%'],prodRows,2.0,2.0,[3.1,3.1,3.1])
+  slide.addText(`ממוצע ליום פעילות: ${fmt(avgDaily)} ליטר · שיא יומי: ${fmt(summary.peakDaily)}`,{x:1.3,y:5.55,w:10.7,h:0.45,fontSize:17,bold:true,color:NAVY,...centered()})
 
-  // 4 — annual trend
-  slide = pptx.addSlide(); addHeader(slide, 'מגמה רב־שנתית 2024–2026', 'השוואת אותם חודשים בין שלוש השנים')
-  addAnnualCards(slide, summary.annualRows || [], 2.0)
-  if (summary.peakMonth || summary.weakMonth || summary.bestPlanMonth) {
-    addKpi(slide, { x: 1.15, y: 5.05, w: 3.4, label: 'חודש שיא', value: summary.peakMonth?.label || '—', note: summary.peakMonth ? fmt(summary.peakMonth.actual) : '', accent: GREEN })
-    addKpi(slide, { x: 4.95, y: 5.05, w: 3.4, label: 'חודש חלש', value: summary.weakMonth?.label || '—', note: summary.weakMonth ? fmt(summary.weakMonth.actual) : '', accent: ORANGE })
-    addKpi(slide, { x: 8.75, y: 5.05, w: 3.4, label: 'עמידה מיטבית ב-FMS', value: summary.bestPlanMonth?.label || '—', note: summary.bestPlanMonth?.plan ? pct(summary.bestPlanMonth.pct) : '', accent: AQUA })
-  }
-  addFooter(slide)
+  // 5 — FMS by line
+  slide=pptx.addSlide(); addTitleFooter(slide,'תכנון FMS מול ביצוע',`לפי קווי האריזה · ${period}`)
+  const fmsRows=lineGroups.map(g=>{const p=groupPlan(g),a=groupTotal(g);return[lineLabels[g],fmt(p),fmt(a),p?pct(a/p*100):'—']}); fmsRows.push(['סה״כ',fmt(plan),fmt(actual),plan?pct(planPct):'—']); addTable(slide,['קו','תכנון','ביצוע','%'],fmsRows,1.1,2.0,[2.6,2.6,2.6,2.6])
 
-  // 5 — facilities and products
-  slide = pptx.addSlide(); addHeader(slide, 'תמהיל תפוקה', 'מתקנים ומוצרים מובילים בתקופה')
-  addRankList(slide, 'תפוקה לפי מתקן ניהולי', summary.facilityRows || [], { x: 0.75, y: 1.75, w: 5.85, labelFn: r => `מתקן ${r.facility}` })
-  addRankList(slide, 'מוצרים מובילים', summary.topMaterials || [], { x: 6.75, y: 1.75, w: 5.85, labelFn: (r, i) => `#${i + 1} · ${r.desc || r.material}` })
-  addFooter(slide)
+  // 6 — daily target overview
+  slide=pptx.addSlide(); addTitleFooter(slide,'עמידה ביעד היומי',`היעד נגזר מתכנון FMS בתקופה שנבחרה`)
+  addKpi(slide,{x:0.8,y:2.0,w:2.7,label:'יעד יומי נגזר',value:fmt(dailyTarget),note:plan?`${fmt(plan)} ÷ ${days} ימי פעילות`:'אין תכנון',accent:TEAL})
+  addKpi(slide,{x:3.8,y:2.0,w:2.7,label:'ממוצע יומי',value:fmt(avgDaily),note:dailyTarget?pct(avgDaily/dailyTarget*100):'',accent:SKY})
+  addKpi(slide,{x:6.8,y:2.0,w:2.7,label:'שיא יומי',value:fmt(summary.peakDaily),note:'מקובץ הכמויות',accent:GREEN})
+  addKpi(slide,{x:9.8,y:2.0,w:2.7,label:'עמידה מול FMS',value:plan?pct(planPct):'—',note:`ביצוע ${fmt(actual)}`,accent:ORANGE})
+  addLineChart(slide,monthly,[{label:'ממוצע/ביצוע',color:AQUA,value:r=>r.actual},{label:'תכנון',color:'9FB3C4',value:r=>r.plan}],1.0,3.55,11.2,2.0)
 
-  // Business-unit operating model
-  slide = pptx.addSlide(); addHeader(slide, 'מתקן 42 כיחידה עסקית', 'ערך, ביצוע, עלות, איכות ואנשים — תמונה אחת לניהול')
-  const pillars=[
-    ['בטיחות','אפס פגיעה ולמידה מאירועים',RED],
-    ['לקוחות','זמינות, אמינות ועמידה בתוכנית',SKY],
-    ['תפעול','תפוקה, ניצולת ויעילות משמרות',AQUA],
-    ['כלכלה','עלות לליטר ושליטה בגורמי עלות',PURPLE],
-    ['איכות','RFT, חריגות ועלות אי־איכות',GREEN],
-  ]
-  pillars.forEach((p,i)=>{
-    const x=0.65+i*2.52
-    slide.addShape('roundRect',{x,y:2.0,w:2.2,h:2.7,fill:{color:WHITE},line:{color:'DCE6EE'}})
-    slide.addShape('rect',{x:x+0.08,y:2.08,w:2.04,h:0.12,fill:{color:p[2]},line:{color:p[2]}})
-    slide.addText(p[0],{x:x+0.2,y:2.42,w:1.8,h:0.4,fontSize:20,bold:true,color:p[2],...centered()})
-    slide.addText(p[1],{x:x+0.25,y:3.12,w:1.7,h:0.85,fontSize:13,...centered()})
-    slide.addText('הוסף יעד / תוצאה',{x:x+0.25,y:4.18,w:1.7,h:0.28,fontSize:10,bold:true,color:MUTED,...centered()})
-  })
-  slide.addText('מטרת המצגת: לנהל את מתקן 42 כיחידה עסקית בעלת תוצאות, אחריות ותוכנית פעולה.',{x:1.1,y:5.45,w:11.1,h:0.55,fontSize:20,bold:true,color:NAVY,...centered()})
-  addFooter(slide,'IML CONTROL · מתקן 42 · מודל ניהולי')
+  // 7 — monthly comparison table
+  slide=pptx.addSlide(); addTitleFooter(slide,'השוואה לכל חודשי התקופה','תכנון, ביצוע, עמידה ועלות')
+  const monthRows=monthly.slice(-10).map(r=>[r.label||r.key,fmt(r.actual),fmt(r.plan),r.plan?pct(r.pct):'—',r.costPerUnit?`₪${num(r.costPerUnit).toFixed(3)}`:'—']); addTable(slide,['חודש','תפוקה','תכנון FMS','% עמידה','עלות/ליטר'],monthRows,0.75,1.75,[2.0,2.35,2.35,2.0,2.35])
 
-  // Quantity mix is always sourced from the quantities file; contractor data supplies cost only.
-  slide = pptx.addSlide(); addHeader(slide, 'תפוקת אריזה ועלות', 'כל נתוני הכמות והתפוקה מגיעים מקובץ הכמויות בלבד')
-  addKpi(slide,{x:0.75,y:1.9,w:3.7,h:1.3,label:'תפוקת אריזה',value:fmt(summary.total),note:`${summary.days} ימי פעילות · מקור: קובץ כמויות`,accent:AQUA})
-  addKpi(slide,{x:4.8,y:1.9,w:3.7,h:1.3,label:'עלות קבלן',value:summary.contractorCost?money(summary.contractorCost):'—',note:'מקור: חשבון קבלן',accent:PURPLE})
-  addKpi(slide,{x:8.85,y:1.9,w:3.7,h:1.3,label:'עלות ליחידת תפוקה',value:summary.contractorCostPerUnit?`₪${summary.contractorCostPerUnit.toFixed(3)}`:'—',note:'עלות קבלן ÷ תפוקה מקובץ הכמויות',accent:TEAL})
-  addRankList(slide, 'מוצרים מובילים לפי קובץ הכמויות', summary.topMaterials || [], { x: 0.75, y: 3.65, w: 11.8, labelFn: (r, i) => `#${i + 1} · ${r.desc || r.material}` })
-  addFooter(slide,'IML CONTROL · מתקן 42 · תפוקה ועלות')
+  // 8 — key trends
+  slide=pptx.addSlide(); addTitleFooter(slide,'מגמות מרכזיות',`לפי התקופה שנבחרה`)
+  addKpi(slide,{x:0.8,y:1.8,w:2.8,label:'חודש שיא',value:summary.peakMonth?.label||'—',note:summary.peakMonth?fmt(summary.peakMonth.actual):'',accent:GREEN})
+  addKpi(slide,{x:3.85,y:1.8,w:2.8,label:'חודש חלש',value:summary.weakMonth?.label||'—',note:summary.weakMonth?fmt(summary.weakMonth.actual):'',accent:ORANGE})
+  addKpi(slide,{x:6.9,y:1.8,w:2.8,label:'עמידה מיטבית FMS',value:summary.bestPlanMonth?.label||'—',note:summary.bestPlanMonth?.plan?pct(summary.bestPlanMonth.pct):'',accent:AQUA})
+  addKpi(slide,{x:9.95,y:1.8,w:2.6,label:'עלות ממוצעת',value:summary.contractorCostPerUnit?`₪${num(summary.contractorCostPerUnit).toFixed(3)}`:'—',note:'עלות קבלן / תפוקה',accent:PURPLE})
+  addLineChart(slide,monthly,[{label:'ביצוע',color:AQUA,value:r=>r.actual},{label:'תכנון',color:ORANGE,value:r=>r.plan}],1.0,3.45,11.2,2.15)
 
-  // 6 — cost
-  slide = pptx.addSlide(); addHeader(slide, 'עלויות ויעילות', facilities === '42' ? 'חשבונות קבלן מתקן 42' : 'עלות קבלן זמינה למתקן 42 בלבד')
-  addKpi(slide, { x: 0.75, y: 1.8, w: 3.6, label: 'סה״כ תשלום לקבלן', value: summary.contractorCost ? money(summary.contractorCost) : '—', note: summary.contractorCost ? `${summary.contractorMonths} חודשים` : 'אין נתונים בתקופה', accent: TEAL })
-  addKpi(slide, { x: 4.85, y: 1.8, w: 3.6, label: 'תפוקה מקובץ הכמויות', value: fmt(summary.total), note: 'מקור יחיד לכל מדדי הכמות', accent: SKY })
-  addKpi(slide, { x: 8.95, y: 1.8, w: 3.6, label: 'עלות ליחידת תפוקה', value: summary.contractorCostPerUnit ? `₪${summary.contractorCostPerUnit.toFixed(3)}` : '—', note: 'עלות קבלן ÷ תפוקת קובץ כמויות', accent: PURPLE })
-  if (summary.annualRows?.some(r => num(r.costPerUnit))) {
-    slide.addText('עלות ליחידת תפוקה לפי שנה', { x: 6.4, y: 3.25, w: 6.1, h: 0.35, fontSize: 20, bold: true, color: NAVY, ...rtl() })
-    const vals = summary.annualRows.map(r => num(r.costPerUnit))
-    const max = Math.max(0.01, ...vals)
-    summary.annualRows.forEach((r, i) => {
-      const y = 3.85 + i * 0.75
-      slide.addText(String(r.year), { x: 1.1, y, w: 1.0, h: 0.28, fontSize: 12, bold: true, color: NAVY, align: 'left', margin: 0, fontFace: 'Arial' })
-      slide.addShape('roundRect', { x: 2.2, y: y + 0.02, w: 8.2, h: 0.25, fill: { color: '29445C' }, line: { color: '29445C' } })
-      if (num(r.costPerUnit)) slide.addShape('roundRect', { x: 2.2, y: y + 0.02, w: Math.max(0.12, 8.2 * num(r.costPerUnit) / max), h: 0.25, fill: { color: [SKY, PURPLE, AQUA][i] || AQUA }, line: { color: [SKY, PURPLE, AQUA][i] || AQUA } })
-      slide.addText(num(r.costPerUnit) ? `₪${num(r.costPerUnit).toFixed(3)}` : '—', { x: 10.65, y: y - 0.02, w: 1.3, h: 0.3, fontSize: 12, bold: true, color: NAVY, align: 'left', margin: 0, fontFace: 'Arial' })
-    })
-  } else {
-    slide.addText('אין נתוני עלות קבלן זמינים בתקופה שנבחרה', { x: 1.0, y: 4.15, w: 11.2, h: 0.5, fontSize: 20, color: 'C9D6E1', ...centered() })
-  }
-  addFooter(slide)
+  // 9 — plan vs actual chart
+  slide=pptx.addSlide(); addTitleFooter(slide,'תכנון FMS מול ביצוע – מגמה חודשית','תכנון חודשי לפי מקור FMS וביצוע מקובץ הכמויות')
+  addMonthlyBars(slide,monthly,{x:0.75,y:1.7,w:11.85,h:4.7})
 
-  // 7 — quality
-  slide = pptx.addSlide(); addHeader(slide, 'איכות ומגמות', 'RFT, לוטים וחריגות בתקופה')
-  addKpi(slide, { x: 0.85, y: 2.0, w: 3.6, label: 'RFT', value: summary.hasReliableRft ? pct(summary.rft) : '—', note: summary.hasReliableRft ? 'מקור מאומת' : 'נדרש מקור RFT/UD מלא', accent: ORANGE })
-  addKpi(slide, { x: 4.85, y: 2.0, w: 3.6, label: 'לוטים / רשומות איכות', value: fmt(summary.qualityLots), note: 'Inspection Lots / החלטות / חריגות', accent: SKY })
-  addKpi(slide, { x: 8.85, y: 2.0, w: 3.6, label: 'לוטים חריגים', value: fmt(summary.qualityBadLots), note: 'לפי נתוני החריגות הזמינים', accent: RED })
-  slide.addShape('roundRect', { x: 1.0, y: 4.0, w: 11.3, h: 1.55, fill: { color: 'F6F8FA' }, line: { color: 'DFE7ED' } })
-  slide.addText(summary.hasReliableRft ? 'RFT מחושב ממקור מאומת.' : 'RFT אינו מוצג עד לחיבור מקור מלא ואמין של כל Inspection Lots והחלטת השימוש/First Pass. המערכת אינה מייצרת אחוז איכות מנתוני חריגות בלבד.', { x: 1.35, y: 4.4, w: 10.6, h: 0.75, fontSize: 16, color: DARK, bold: !summary.hasReliableRft, ...centered() })
-  addFooter(slide)
+  // 10 — packaging mix
+  slide=pptx.addSlide(); addTitleFooter(slide,'תמהיל אריזה לפי קווים',`ליטרים לפי גודל אריזה · ${period}`)
+  const mixRows=lineGroups.map(g=>[lineLabels[g],fmt(groupTotal(g)),total?pct(groupTotal(g)/total*100):'—',fmt(groupPlan(g)),groupPlan(g)?pct(groupTotal(g)/groupPlan(g)*100):'—']); addTable(slide,['קו','ביצוע','% מהתפוקה','תכנון','% מול תכנון'],mixRows,0.8,2.0,[2.0,2.25,2.25,2.25,2.25])
+  addRankList(slide,'מוצרים מובילים בתקופה',summary.topMaterials||[],{x:1.2,y:4.25,w:10.9,labelFn:(r,i)=>`#${i+1} · ${r.desc||r.material}`})
 
-  // Data governance — one authoritative quantity source.
-  slide = pptx.addSlide(); addHeader(slide, 'ממשל נתונים — מקור יחיד לכמויות', 'תפוקה וביצוע מחושבים רק מקובץ הכמויות')
-  addKpi(slide,{x:0.85,y:1.8,w:5.55,h:1.35,label:'תפוקת אריזה בתקופה',value:fmt(summary.total),note:'מקור: קובץ הכמויות לפי מסנני האפליקציה',accent:AQUA})
-  addKpi(slide,{x:6.9,y:1.8,w:5.55,h:1.35,label:'עלות קבלן בתקופה',value:summary.contractorCost?money(summary.contractorCost):'—',note:'חשבון הקבלן מספק עלות בלבד',accent:PURPLE})
-  slide.addShape('roundRect',{x:0.85,y:3.65,w:11.6,h:1.55,fill:{color:'FFF7E6'},line:{color:'F6D58A'}})
-  slide.addText('כלל ניהולי להצגה',{x:8.6,y:3.95,w:3.2,h:0.3,fontSize:18,bold:true,color:'9A6700',...rtl()})
-  slide.addText('כל כמות המוצגת כתפוקה, ביצוע, תמהיל או מכנה לעלות נלקחת מקובץ הכמויות. חשבון הקבלן משמש אך ורק לסכום העלות.',{x:1.25,y:4.32,w:10.55,h:0.52,fontSize:16,bold:true,...centered()})
-  slide.addText('בקרה חודשית: קובץ כמויות מאושר · חשבון קבלן מאושר · נעילת התקופה',{x:2.0,y:5.75,w:9.3,h:0.35,fontSize:17,color:NAVY,...centered()})
-  addFooter(slide,'IML CONTROL · ממשל נתונים')
+  // 11 — shifts
+  slide=pptx.addSlide(); addTitleFooter(slide,'ניתוח משמרות – תפוקה ועלות','מוכן לחיבור אוטומטי לנתוני משמרות')
+  const shiftSource=summary.latestContractorRecord?.shift_qty||[]
+  if(shiftSource.length){const rows=shiftSource.map((v,i)=>[`משמרת ${i+1}`,fmt(v),summary.latestContractorRecord?.shift_cost?.[i]?money(summary.latestContractorRecord.shift_cost[i]):'—']);addTable(slide,['משמרת','תפוקה','עלות'],rows,2.0,2.1,[3.1,3.1,3.1])}else addNoSource(slide,'אין כרגע נתוני משמרות מובנים בתקופה שנבחרה. השקף יוזן אוטומטית לאחר חיבור מקור המשמרות.',2.7)
 
-  // Editable management action plan
-  slide = pptx.addSlide(); addHeader(slide, 'תוכנית פעולה ניהולית', 'השלמה ידנית: פעולה, בעל אחריות, יעד ותאריך')
-  const headers=['סטטוס','תאריך יעד','בעל אחריות','מדד הצלחה','פעולה נדרשת','נושא']
-  const xs=[0.65,1.75,3.05,4.75,7.0,11.0], widths=[1.0,1.2,1.6,2.15,3.8,1.65]
-  headers.forEach((h,i)=>slide.addText(h,{x:xs[i],y:1.65,w:widths[i],h:0.42,fontSize:12,bold:true,color:WHITE,fill:{color:TEAL},...centered()}))
-  ;['בטיחות','תפוקה','עלות','איכות','אנשים'].forEach((topic,row)=>{
-    const y=2.12+row*0.78
-    headers.forEach((_,i)=>slide.addText(i===5?topic:'השלמה ידנית',{x:xs[i],y,w:widths[i],h:0.68,fontSize:i===5?12:10,bold:i===5,color:i===5?DARK:MUTED,fill:{color:row%2?'F4F7FA':'FFFFFF'},line:{color:'DCE6EE',width:0.6},...centered()}))
-  })
-  addFooter(slide,'IML CONTROL · מתקן 42 · תוכנית פעולה')
+  // 12 — production cost
+  slide=pptx.addSlide(); addTitleFooter(slide,'עלות ייצור לליטר',`עלות קבלן ÷ תפוקה מקובץ הכמויות`)
+  addKpi(slide,{x:1.0,y:1.8,w:3.4,label:'סה״כ עלות קבלן',value:summary.contractorCost?money(summary.contractorCost):'—',note:`${summary.contractorMonths||0} חודשים`,accent:PURPLE})
+  addKpi(slide,{x:4.95,y:1.8,w:3.4,label:'תפוקה בתקופה',value:fmt(total),note:'מקור: קובץ כמויות',accent:AQUA})
+  addKpi(slide,{x:8.9,y:1.8,w:3.4,label:'עלות לליטר',value:summary.contractorCostPerUnit?`₪${num(summary.contractorCostPerUnit).toFixed(3)}`:'—',note:'מחושב אוטומטית',accent:TEAL})
+  addLineChart(slide,monthly.filter(r=>r.costPerUnit),[{label:'₪ לליטר',color:PURPLE,value:r=>r.costPerUnit}],1.0,3.55,11.2,2.0)
 
-  // 8 — insights / close
-  slide = pptx.addSlide(); addHeader(slide, 'תובנות והמלצות', 'סיכום אוטומטי מבוסס נתוני IML CONTROL')
-  const insights = summary.insights || []
-  insights.slice(0, 6).forEach((ins, i) => {
-    const col = i % 2
-    const row = Math.floor(i / 2)
-    const x = col ? 6.7 : 0.75
-    const y = 1.75 + row * 1.45
-    const color = ins.state === 'good' ? GREEN : ins.state === 'risk' ? RED : ORANGE
-    slide.addShape('roundRect', { x, y, w: 5.85, h: 1.1, fill: { color: WHITE }, line: { color: 'DDE6EC' } })
-    slide.addShape('rect', { x: x + 5.72, y: y + 0.08, w: 0.055, h: 0.94, fill: { color }, line: { color } })
-    slide.addText(ins.title, { x: x + 0.3, y: y + 0.16, w: 5.15, h: 0.28, fontSize: 13, bold: true, color: DARK, ...rtl() })
-    slide.addText(ins.text, { x: x + 0.3, y: y + 0.48, w: 5.15, h: 0.42, fontSize: 9, color: MUTED, breakLine: false, ...rtl() })
-  })
-  slide.addText('המצגת הופקה אוטומטית מתוך תקציר המנהלים של IML CONTROL', { x: 1.0, y: 6.35, w: 11.3, h: 0.35, fontSize: 12, color: 'B8C7D4', ...centered() })
-  addFooter(slide)
+  // 13 — RFT
+  slide=pptx.addSlide(); addTitleFooter(slide,'מדד R.F.T – איכות מהפעם הראשונה','היעד והחישוב יוצגו רק ממקור איכות מאומת')
+  if(summary.hasReliableRft){addKpi(slide,{x:4.2,y:2.1,w:4.9,h:1.5,label:'RFT בתקופה',value:pct(summary.rft),note:'מקור מאומת',accent:GREEN})}else{addNoSource(slide,`RFT אינו מחושב מנתוני חריגות בלבד. קיימים ${fmt(summary.qualityLots)} לוטים/רשומות איכות, אך נדרש מקור First Pass מלא.`,2.6)}
 
-  const safePeriod = `${from || 'start'}_${to || 'end'}`.replace(/[^0-9A-Za-z_-]/g, '_')
-  await pptx.writeFile({ fileName: `IML_Management_Summary_${safePeriod}.pptx` })
+  // 14 — COPQ
+  slide=pptx.addSlide(); addTitleFooter(slide,'עלות אי-איכות (COPQ) – מתקן 42','מוכן לחיבור אוטומטי לדוח COPQ')
+  addNoSource(slide,'מקור COPQ עדיין לא מחובר לאפליקציה. לאחר חיבורו יוצגו כאן עלות חודשית, מצטבר, חלק יחסי ומגמה.',2.7)
+
+  // 15 — data governance / deviations
+  slide=pptx.addSlide(); addTitleFooter(slide,'איכות, חריגות וממשל נתונים','מקורות הנתונים המשמשים את המצגת')
+  addKpi(slide,{x:0.8,y:1.9,w:3.6,label:'לוטים / רשומות איכות',value:fmt(summary.qualityLots),note:'Inspection Lots / החלטות / חריגות',accent:SKY})
+  addKpi(slide,{x:4.85,y:1.9,w:3.6,label:'לוטים חריגים',value:fmt(summary.qualityBadLots),note:'לפי הנתונים הזמינים',accent:RED})
+  addKpi(slide,{x:8.9,y:1.9,w:3.6,label:'מקור תפוקה',value:'קובץ כמויות',note:'מקור יחיד לתפוקה וביצוע',accent:AQUA})
+  slide.addText('כלל ניהולי: חשבון הקבלן משמש לעלות בלבד; כל תפוקה, ביצוע, תמהיל ומכנה לעלות נלקחים מקובץ הכמויות.',{x:1.1,y:4.15,w:11.1,h:0.75,fontSize:18,bold:true,color:NAVY,...centered()})
+
+  // 16 — insights
+  slide=pptx.addSlide(); addTitleFooter(slide,'תובנות, חריגים והמלצות','סיכום אוטומטי מבוסס נתוני IML CONTROL')
+  const insights=summary.insights||[]; if(!insights.length)addNoSource(slide,'אין תובנות אוטומטיות זמינות לטווח שנבחר.',2.8)
+  insights.slice(0,6).forEach((ins,i)=>{const col=i%2,row=Math.floor(i/2),x=0.75+col*6.0,y=1.65+row*1.55,color=ins.state==='good'?GREEN:ins.state==='risk'?RED:ORANGE;slide.addShape('roundRect',{x,y,w:5.65,h:1.2,fill:{color:WHITE},line:{color:'DDE6EC'}});slide.addShape('rect',{x:x+5.52,y:y+0.08,w:0.05,h:1.04,fill:{color},line:{color}});slide.addText(ins.title,{x:x+0.25,y:y+0.15,w:5.0,h:0.3,fontSize:14,bold:true,...rtl()});slide.addText(ins.text,{x:x+0.25,y:y+0.5,w:5.0,h:0.48,fontSize:10,color:MUTED,...rtl()})})
+
+  // 17 — closing
+  slide=pptx.addSlide(); slide.background={color:'F7FAFC'}; await tryAddLogo(slide)
+  slide.addText('תודה רבה!',{x:2.0,y:3.0,w:9.3,h:0.7,fontSize:42,bold:true,color:NAVY,...centered()})
+  slide.addText(`מתקן 42 · ${period}`,{x:2.0,y:3.8,w:9.3,h:0.4,fontSize:20,color:TEAL,...centered()})
+  slide.addText('IML CONTROL · נתונים אוטומטיים לקבלת החלטות',{x:2.0,y:5.2,w:9.3,h:0.35,fontSize:15,color:MUTED,...centered()})
+
+  const safePeriod=`${from||'start'}_${to||'end'}`.replace(/[^0-9A-Za-z_-]/g,'_')
+  await pptx.writeFile({fileName:`IML_Facility42_Summary_${safePeriod}.pptx`})
 }
+

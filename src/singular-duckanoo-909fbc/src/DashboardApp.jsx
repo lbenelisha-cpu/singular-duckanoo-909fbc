@@ -3004,27 +3004,24 @@ material: normalize(getField(r, [
 
   const buildManagementPresentationSlides = () => {
     const periodLabel = `${from || 'תחילת הנתונים'} עד ${to || 'סוף הנתונים'}`
-    const facilityLabel = managementSummary.logicalFacilities.length ? `מתקנים ${managementSummary.logicalFacilities.join(', ')}` : 'כל המתקנים'
-    const fmsText = managementSummary.fmsPlan ? `${managementSummary.targetPct.toFixed(1)}% (${fmt(managementSummary.fmsActual)} / ${fmt(managementSummary.fmsPlan)})` : 'אין FMS לטווח'
-    const yoyText = managementSummary.previousActual ? `${managementSummary.yoyPct >= 0 ? '+' : ''}${managementSummary.yoyPct.toFixed(1)}% מול ${managementSummary.currentYear - 1}` : 'אין תקופת השוואה'
-    const costText = managementSummary.contractorCostPerUnit ? `₪${managementSummary.contractorCostPerUnit.toFixed(3)} לליטר` : 'אין נתוני קבלן בטווח'
-    const bestMonth = managementSummary.bestPlanMonth?.label ? `${managementSummary.bestPlanMonth.label} · ${managementSummary.bestPlanMonth.pct.toFixed(1)}%` : 'אין נתון'
-    const peakMonth = managementSummary.peakMonth?.label ? `${managementSummary.peakMonth.label} · ${fmt(managementSummary.peakMonth.actual)}` : 'אין נתון'
-    const weakMonth = managementSummary.weakMonth?.label ? `${managementSummary.weakMonth.label} · ${fmt(managementSummary.weakMonth.actual)}` : 'אין נתון'
     return [
-      {title:'שער', bullets:[`סיכום מתקן 42 · ${facilityLabel}`, periodLabel]},
-      {title:'בטיחות — משולש האירועים', bullets:['שדות פתוחים להשלמה ידנית', 'מסר מנהל היחידה']},
-      {title:'תמונת מצב ניהולית', bullets:[`תפוקה מקובץ כמויות: ${fmt(managementSummary.total)}`, `עמידה מול FMS: ${fmsText}`]},
-      {title:'תכנון מול ביצוע', bullets:[`תכנון: ${fmt(managementSummary.fmsPlan)}`, `ביצוע מקובץ כמויות: ${fmt(managementSummary.fmsActual)}`]},
-      {title:'מגמה רב־שנתית', bullets:[`חודש שיא: ${peakMonth}`, `שנה מול שנה: ${yoyText}`]},
-      {title:'תמהיל תפוקה', bullets:['לפי מתקן ומוצר', 'מקור: קובץ הכמויות']},
-      {title:'מתקן 42 כיחידה עסקית', bullets:['בטיחות · לקוחות · תפעול', 'כלכלה · איכות · אנשים']},
-      {title:'תפוקת אריזה ועלות', bullets:[`תפוקה: ${fmt(managementSummary.total)}`, `עלות ליחידת תפוקה: ${costText}`]},
-      {title:'עלויות ויעילות', bullets:[`תשלום לקבלן: ${managementSummary.contractorCost ? `₪${fmt(managementSummary.contractorCost)}` : '—'}`, 'המכנה נלקח מקובץ הכמויות']},
-      {title:'איכות ומגמות', bullets:[`RFT: ${managementSummary.hasReliableRft ? `${managementSummary.rft.toFixed(1)}%` : 'ממתין למקור מאומת'}`, `חריגות פתוחות: ${openDeviations.length}`]},
-      {title:'ממשל נתונים', bullets:['מקור יחיד לכמויות ולתפוקות', 'חשבון קבלן משמש לעלות בלבד']},
-      {title:'תוכנית פעולה ניהולית', bullets:['פעולה · בעל אחריות · יעד', 'תאריך וסטטוס']},
-      {title:'תובנות והמלצות', bullets:managementSummary.insights.slice(0,2).map(item => `${item.title}: ${item.text}`)}
+      {title:'סיכום מתקן 42', bullets:[periodLabel, 'תפוקה · FMS · עלות · שנה מול שנה']},
+      {title:'על סדר היום', bullets:['8 נושאי הניהול המרכזיים']},
+      {title:'תמונת מצב בטיחות', bullets:['מתוכנן לחיבור אוטומטי למקור בטיחות']},
+      {title:'סיכום תפוקות אריזה', bullets:['1L · 5L · 10/20L', 'מקור: קובץ הכמויות']},
+      {title:'תכנון FMS מול ביצוע', bullets:['לפי קווי האריזה']},
+      {title:'עמידה ביעד היומי', bullets:['יעד נגזר FMS · ממוצע · שיא']},
+      {title:'השוואה לכל חודשי התקופה', bullets:['תפוקה · תכנון · עמידה · עלות']},
+      {title:'מגמות מרכזיות', bullets:['חודש שיא · חודש חלש · FMS · עלות']},
+      {title:'תכנון FMS מול ביצוע – מגמה', bullets:['גרף חודשי אוטומטי']},
+      {title:'תמהיל אריזה לפי קווים', bullets:['ביצוע · תכנון · מוצרים מובילים']},
+      {title:'ניתוח משמרות', bullets:['יוזן אוטומטית כאשר מקור משמרות זמין']},
+      {title:'עלות ייצור לליטר', bullets:['עלות קבלן ÷ תפוקה']},
+      {title:'מדד R.F.T', bullets:['יוצג רק ממקור First Pass מאומת']},
+      {title:'עלות אי-איכות COPQ', bullets:['מוכן לחיבור מקור COPQ']},
+      {title:'איכות וממשל נתונים', bullets:['לוטים · חריגות · מקור יחיד לכמויות']},
+      {title:'תובנות והמלצות', bullets:managementSummary.insights.slice(0,2).map(item=>`${item.title}: ${item.text}`)},
+      {title:'תודה רבה', bullets:[`מתקן 42 · ${periodLabel}`]}
     ]
   }
 
@@ -3033,7 +3030,7 @@ material: normalize(getField(r, [
     setManagementPresentationMessage('מכין קובץ PowerPoint אמיתי (.pptx)...')
     try {
       await exportManagementPresentation({ summary: managementSummary, from, to })
-      const exportedFileName = `IML_Management_Summary_${(to || iso(new Date())).replaceAll('-', '')}.pptx`
+      const exportedFileName = `IML_Facility42_Summary_${(to || iso(new Date())).replaceAll('-', '')}.pptx`
       setManagementPresentationMessage(`המצגת הבהירה נוצרה בהצלחה: ${exportedFileName}`)
       return
       const slides = buildManagementPresentationSlides()
@@ -3043,7 +3040,7 @@ material: normalize(getField(r, [
       pptx.author = 'IML CONTROL'
       pptx.company = 'ADAMA'
       pptx.subject = 'Management Summary'
-      pptx.title = 'סיכום מתקן 42 — IML CONTROL'
+      pptx.title = 'תקציר מנהלים — IML CONTROL'
       pptx.lang = 'he-IL'
       pptx.theme = {
         headFontFace: 'Arial',
@@ -3074,7 +3071,7 @@ material: normalize(getField(r, [
           const slide = pptx.addSlide()
           slide.background = { color: '0B2239' }
           addRtlText(slide, 'IML CONTROL', 0.65, 0.42, 2.4, 0.35, { fontSize: 15, bold: true, color: 'FFFFFF', align: 'left', rtlMode: false })
-          addRtlText(slide, 'סיכום מתקן 42', 3.2, 2.55, 6.9, 0.8, { fontSize: 38, bold: true, color: 'FFFFFF', align: 'center' })
+          addRtlText(slide, 'תקציר מנהלים', 6.2, 1.25, 6.2, 0.8, { fontSize: 34, bold: true, color: 'FFFFFF' })
           addRtlText(slide, `${facilityLabel} · ${periodLabel}`, 5.0, 2.05, 7.4, 0.45, { fontSize: 17, color: 'D6E8EE' })
           ;(data.bullets || []).slice(2, 6).forEach((bullet, i) => {
             addRtlText(slide, bullet, 6.4, 3.0 + i * 0.72, 5.8, 0.55, {
