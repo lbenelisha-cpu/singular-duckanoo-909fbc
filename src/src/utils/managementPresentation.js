@@ -41,22 +41,6 @@ const fmt = value => Math.round(num(value)).toLocaleString('he-IL')
 const money = value => `₪${fmt(value)}`
 const pct = value => Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)}%` : '—'
 
-async function imageUrlToData(url) {
-  try {
-    const response = await fetch(url)
-    if (!response.ok) return null
-    const blob = await response.blob()
-    return await new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result)
-      reader.onerror = reject
-      reader.readAsDataURL(blob)
-    })
-  } catch {
-    return null
-  }
-}
-
 const rtl = (extra = {}) => ({ fontFace: 'Arial', lang: 'he-IL', rtlMode: true, align: 'right', valign: 'mid', color: DARK, ...extra })
 const centered = (extra = {}) => ({ fontFace: 'Arial', lang: 'he-IL', rtlMode: true, align: 'center', valign: 'mid', color: DARK, ...extra })
 
@@ -142,7 +126,7 @@ export async function exportManagementPresentation({ summary, from, to }) {
   pptx.author = 'IML CONTROL'
   pptx.company = 'ADAMA'
   pptx.subject = 'Management Summary'
-  pptx.title = 'סיכום מתקן 42 · IML CONTROL'
+  pptx.title = 'סיכום מתקן 42 IML CONTROL'
   pptx.lang = 'he-IL'
   pptx.theme = {
     headFontFace: 'Arial', bodyFontFace: 'Arial', lang: 'he-IL'
@@ -152,7 +136,6 @@ export async function exportManagementPresentation({ summary, from, to }) {
 
   const facilities = summary.logicalFacilities?.length ? summary.logicalFacilities.join(', ') : 'כל המתקנים'
   const period = `${from || 'תחילת הנתונים'} עד ${to || 'סוף הנתונים'}`
-  const adamaLogoData = await imageUrlToData('/icons/adama-mark-128.png')
 
   // 1 — cover
   let slide = pptx.addSlide()
@@ -160,10 +143,22 @@ export async function exportManagementPresentation({ summary, from, to }) {
   slide.addShape('rect', { x: 0, y: 0, w: 13.333, h: 0.16, fill: { color: AQUA }, line: { color: AQUA } })
   slide.addShape('rect', { x: 0, y: 0.16, w: 3.35, h: 7.34, fill: { color: 'E3F4F2' }, line: { color: 'E3F4F2' } })
   slide.addText('IML CONTROL', { x: 0.75, y: 0.65, w: 2.3, h: 0.4, fontSize: 18, bold: true, color: TEAL, fontFace: 'Arial', margin: 0 })
-  // ADAMA logo — larger and centered on the cover slide.
-  if (adamaLogoData) slide.addImage({ data: adamaLogoData, x: 5.72, y: 0.42, w: 1.9, h: 1.9 })
-  slide.addText('סיכום מתקן 42', { x: 3.65, y: 2.08, w: 6.05, h: 0.82, fontSize: 43, bold: true, color: NAVY, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
-  slide.addText(`התקופה: ${period}`, { x: 3.65, y: 2.92, w: 6.05, h: 0.38, fontSize: 17, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
+  // ADAMA logo — enlarged and centered on the cover. The image is embedded so it also works in exported PPTX files.
+  try {
+    const logoResponse = await fetch('/icons/adama-mark-128.png')
+    const logoBlob = await logoResponse.blob()
+    const logoData = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(logoBlob)
+    })
+    slide.addImage({ data: logoData, x: 5.62, y: 0.48, w: 2.1, h: 2.1 })
+  } catch (error) {
+    console.warn('ADAMA logo could not be embedded in presentation', error)
+  }
+  slide.addText('סיכום מתקן 42', { x: 3.1, y: 2.45, w: 7.15, h: 0.72, fontSize: 38, bold: true, color: NAVY, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
+  slide.addText(`התקופה: ${period}`, { x: 3.1, y: 3.18, w: 7.15, h: 0.38, fontSize: 17, color: MUTED, fontFace: 'Arial', rtlMode: true, lang: 'he-IL', align: 'center', margin: 0 })
   addKpi(slide, { x: 0.85, y: 4.65, w: 2.75, label: 'תפוקה בפועל', value: fmt(summary.total), note: `${summary.days} ימי פעילות`, accent: AQUA })
   addKpi(slide, { x: 3.85, y: 4.65, w: 2.75, label: 'FMS מול תכנון', value: summary.fmsPlan ? pct(summary.fmsActual / summary.fmsPlan * 100) : '—', note: `${fmt(summary.fmsActual)} / ${fmt(summary.fmsPlan)}`, accent: GREEN })
   addKpi(slide, { x: 6.85, y: 4.65, w: 2.75, label: 'שנה מול שנה', value: summary.previousActual ? `${summary.yoyPct >= 0 ? '+' : ''}${pct(summary.yoyPct)}` : '—', note: `מול ${summary.currentYear - 1}`, accent: ORANGE })
