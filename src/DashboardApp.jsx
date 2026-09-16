@@ -1067,10 +1067,11 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const [managementPresentationMessage, setManagementPresentationMessage] = useState('')
   const SAFETY_STORAGE_KEY = 'iml-management-safety-monthly-v1'
   const SAFETY_ANNUAL_STORAGE_KEY = 'iml-management-safety-annual-manual-v1'
+  const SAFETY_ANNUAL_ENABLED_KEY = 'iml-management-safety-annual-enabled-v1'
   const [safetyMonth, setSafetyMonth] = useState(() => (to || iso(new Date())).slice(0,7))
   const [safetyMonthly, setSafetyMonthly] = useState(() => { try { return JSON.parse(localStorage.getItem(SAFETY_STORAGE_KEY) || '{}') } catch { return {} } })
   const [safetyAnnualManual, setSafetyAnnualManual] = useState(() => { try { return JSON.parse(localStorage.getItem(SAFETY_ANNUAL_STORAGE_KEY) || '{}') } catch { return {} } })
-  const [safetyAnnualManualEnabled, setSafetyAnnualManualEnabled] = useState(false)
+  const [safetyAnnualManualEnabled, setSafetyAnnualManualEnabled] = useState(() => { try { return JSON.parse(localStorage.getItem(SAFETY_ANNUAL_ENABLED_KEY) || 'false') } catch { return false } })
   const safetyFields = [
     ['fatal','מוות','#7f1d1d'], ['irreversible','בלתי הפיך','#b91c1c'], ['lostDays','ימי היעדרות','#dc2626'],
     ['medical','טיפול רפואי','#f97316'], ['firstAid','עזרה ראשונה','#eab308'], ['nearMiss','כמעט ונפגע','#8b5cf6'], ['unsafe','מצב לא בטיחותי / מפגעים','#38bdf8']
@@ -1080,6 +1081,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
   const updateSafetyAnnualValue = (key, value) => setSafetyAnnualManual(prev => ({...prev, [safetyYear]: {...(prev[safetyYear]||{}), [key]: Math.max(0, Number(value)||0)}}))
   useEffect(() => { localStorage.setItem(SAFETY_STORAGE_KEY, JSON.stringify(safetyMonthly)) }, [safetyMonthly])
   useEffect(() => { localStorage.setItem(SAFETY_ANNUAL_STORAGE_KEY, JSON.stringify(safetyAnnualManual)) }, [safetyAnnualManual])
+  useEffect(() => { localStorage.setItem(SAFETY_ANNUAL_ENABLED_KEY, JSON.stringify(safetyAnnualManualEnabled)) }, [safetyAnnualManualEnabled])
   const safetySummary = useMemo(() => {
     const start=(from||`${new Date().getFullYear()}-01-01`).slice(0,7), end=(to||iso(new Date())).slice(0,7)
     const keys=Object.keys(safetyMonthly).filter(k=>k>=start&&k<=end)

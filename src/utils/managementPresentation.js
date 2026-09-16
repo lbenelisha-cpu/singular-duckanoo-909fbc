@@ -196,13 +196,14 @@ export async function exportManagementPresentation({ summary, from, to, safety }
   })
   const calcSafetyRatios = vals => { const significant=Number(vals?.lostDays||0)+Number(vals?.medical||0), near=Number(vals?.nearMiss||0)+Number(vals?.unsafe||0); return {firstAid: significant>0&&Number(vals?.firstAid||0)>0 ? Number(vals.firstAid)/significant : null, near: significant>0&&near>0 ? near/significant : null} }
   const periodRatios = calcSafetyRatios(periodSafety)
+  const annualRatios = calcSafetyRatios(annualSafety)
   const ratioText = r => Number.isFinite(Number(r)) && Number(r)>0 ? `1:${Number(r).toFixed(1).replace(/\.0$/,'')}` : '—'
   slide.addShape('roundRect',{x:.75,y:5.95,w:5.7,h:.82,fill:{color:WHITE},line:{color:'DCE6EE'}})
-  slide.addText('יחס אירועים משמעותיים / אירועי עזרה ראשונה',{x:1.0,y:6.08,w:3.8,h:.22,fontSize:11,bold:true,...rtl()})
-  slide.addText(ratioText(periodRatios.firstAid),{x:4.95,y:6.04,w:1.1,h:.30,fontSize:18,bold:true,color:TEAL,...centered()})
+  slide.addText('יחס אירועים משמעותיים / אירועי עזרה ראשונה · שנתי',{x:1.0,y:6.08,w:3.8,h:.22,fontSize:11,bold:true,...rtl()})
+  slide.addText(ratioText(annualRatios.firstAid),{x:4.95,y:6.04,w:1.1,h:.30,fontSize:18,bold:true,color:TEAL,...centered()})
   slide.addShape('roundRect',{x:6.85,y:5.95,w:5.7,h:.82,fill:{color:WHITE},line:{color:'DCE6EE'}})
-  slide.addText('יחס אירועים משמעותיים / כמעט ונפגע ומפגעים',{x:7.1,y:6.08,w:3.9,h:.22,fontSize:11,bold:true,...rtl()})
-  slide.addText(ratioText(periodRatios.near),{x:11.1,y:6.04,w:1.1,h:.30,fontSize:18,bold:true,color:TEAL,...centered()})
+  slide.addText('יחס אירועים משמעותיים / כמעט ונפגע ומפגעים · שנתי',{x:7.1,y:6.08,w:3.9,h:.22,fontSize:11,bold:true,...rtl()})
+  slide.addText(ratioText(annualRatios.near),{x:11.1,y:6.04,w:1.1,h:.30,fontSize:18,bold:true,color:TEAL,...centered()})
   addFooter(slide,'IML CONTROL · מתקן 42 · בטיחות')
 
   // 3 — executive snapshot
