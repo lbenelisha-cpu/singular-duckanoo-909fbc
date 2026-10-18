@@ -1,0 +1,4 @@
+const DB='iml-management-presentations-v1',STORE='settings'
+const open=()=>new Promise((resolve,reject)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})
+export async function readSupplements(key){const db=await open();try{return await new Promise((resolve,reject)=>{const r=db.transaction(STORE).objectStore(STORE).get(key);r.onsuccess=()=>resolve(r.result||{});r.onerror=()=>reject(r.error)})}finally{db.close()}}
+export async function writeSupplements(key,data){const db=await open();try{return await new Promise((resolve,reject)=>{const t=db.transaction(STORE,'readwrite');t.objectStore(STORE).put(data,key);t.oncomplete=()=>resolve();t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error||new Error('השמירה בוטלה'))})}finally{db.close()}}

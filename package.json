@@ -7,16 +7,20 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "verify:september-targets": "node scripts/verify-september-targets.mjs"
+    "verify:september-targets": "node scripts/verify-september-targets.mjs",
+    "verify:presentation": "node scripts/verify-management-presentation.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.49.1",
     "@vitejs/plugin-react": "4.3.4",
-    "vite": "6.0.7",
+    "jszip": "^3.10.1",
+    "lucide-react": "0.468.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "lucide-react": "0.468.0",
-    "xlsx": "0.18.5",
-    "@supabase/supabase-js": "2.49.1"
+    "vite": "6.0.7",
+    "xlsx": "0.18.5"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@xmldom/xmldom": "^0.9.12"
+  }
 }

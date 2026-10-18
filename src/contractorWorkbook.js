@@ -31,7 +31,7 @@ export function parseContractorWorkbook(wb, fileName, XLSX) {
     if (!kind || !match) continue
     const month=Number(match[1]), sheetYear=Number(match[2])
     // The supplied 2026 workbook includes stale September-December 2025 tabs.
-    if (sheetYear!==year || month<1 || month>12 || (year===2026 && month>8)) continue
+    if (sheetYear!==year || month<1 || month>12) continue
     const key=`${year}-${String(month).padStart(2,'0')}`
     if (!months.has(key)) months.set(key,{})
     if (months.get(key)[kind]) throw new Error(`${key}: יותר מגיליון ${kind} אחד`)
@@ -57,12 +57,12 @@ export function parseContractorWorkbook(wb, fileName, XLSX) {
     if(items!==12)throw new Error(`${reg.name}: לא זוהו 12 שורות אריזה בשלוש משמרות`)
     const detailQty=shifts.reduce((a,b)=>a+b,0)
     const summaryQty=sideValue(reg.matrix,'סהכ תוצרת ארוזה',reg.name)
-    const packaged=summaryQty ?? detailQty
+    const packaged=detailQty
     if(packaged<=0)throw new Error(`${reg.name}: כמות האריזה אינה חיובית; לא ניתן לחשב עלות לליטר`)
     const shiftCost=min.matrix.filter(r=>clean(r[0])==='סכום למשמרת').slice(0,3).map(r=>number(r[costCol],min.name))
     const matchingShiftCosts = shiftCost.length===3 && same(shiftCost.reduce((a,b)=>a+b,0),cost)
     // Avoid presenting shift quantities that contradict the authoritative packaging total.
-    result.push({month,facility:'42',packaged,cost,cost_per_unit:cost/packaged,lines:same(packaged,detailQty)?lines:{},shift_qty:same(packaged,detailQty)?shifts:[],shift_cost:matchingShiftCosts?shiftCost:[],source_label:`${fileName} | תשלום: ${min.name} | ליטרים: ${reg.name}${summaryQty!=null?' / סה״כ תוצרת ארוזה':''}`})
+    result.push({month,facility:'42',packaged,cost,cost_per_unit:cost/packaged,lines:same(packaged,detailQty)?lines:{},shift_qty:same(packaged,detailQty)?shifts:[],shift_cost:matchingShiftCosts?shiftCost:[],source_label:`${fileName} | תשלום: ${min.name} | ליטרים: ${reg.name} / סכומי שורות האריזה בשלוש המשמרות${summaryQty!=null&&!same(summaryQty,detailQty)?' / תא סיכום ידני אינו תואם והתעלמנו ממנו':''}`})
   }
   if(!result.length)throw new Error('לא נמצאו זוגות גיליונות חודשיים מתאימים לשנת הקובץ')
   return result
