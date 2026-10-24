@@ -65,7 +65,7 @@ const FACILITY_ALIASES = {
   '1142': ['1142'],
   '1123': ['1123'],
 }
-const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1521', '1528', '1524', '1542', '1543', '1142', '1123']
+const PRIMARY_FACILITIES = ['1519', '1541', '1540', '1525', '1523', '1521', '1528', '1524', '1542', '1543', '1142', '1123', '1125']
 const DEFAULT_FACILITIES = PRIMARY_FACILITIES
 const RESOURCE_LABELS = {
   '1542|LQ-P-1': { station: 'P-02', line: '1 ליטר' },
