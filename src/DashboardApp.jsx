@@ -1726,6 +1726,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
             return {
             __compactProduction: true,
             facility: assignment.facility,
+            sourceStorageLocation: canonicalFacility(getField(r, ['Storage Location', 'Storage location'])),
             prodLine,
             mappedResource: assignment.mapping?.resource || '',
             prodLineTool: assignment.mapping?.tool || '',
@@ -1963,7 +1964,7 @@ export default function DashboardApp({ currentUser, userRole = 'viewer', isGuest
 
   const prod = useMemo(() => productionDailyQuantities(production.map(r => {
     if (r?.__compactProduction) {
-      const assignment = productionAssignment(r.facility, r.routingGroup, r.routingDescription, r.prodLine)
+      const assignment = productionAssignment(r.sourceStorageLocation || r.facility, r.routingGroup, r.routingDescription, r.prodLine)
       return {
         facility: assignment.facility,
         prodLine: normalize(r.prodLine),
