@@ -359,7 +359,11 @@ const productionFacility = (facilityValue, routingGroup, routingDescription = ''
 
 const productionAssignment = (facilityValue, routingGroup, routingDescription = '', prodLineValue = '') => {
   if (isExcludedProdLine(prodLineValue)) return { facility:'', mapping:null }
+  const facility = canonicalFacility(facilityValue)
   const mapping = prodLineInfo(prodLineValue)
+  // Storage location 1125 is an independent production station. 25-S-* lines
+  // may also operate there, so their generic 1525 mapping must not override SAP.
+  if (facility === '1125') return { facility:'1125', mapping:null }
   if (mapping?.facility) return { facility:mapping.facility, mapping }
   return { facility:productionFacility(facilityValue, routingGroup, routingDescription), mapping:null }
 }
